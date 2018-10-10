@@ -423,10 +423,10 @@ pub mod flags {
 
             assert!(flags.get_core(CoreFlags::LELimitedDiscoverableMode).get());
             assert!(flags.get_core(CoreFlags::LEGeneralDiscoverableMode).get());
-            assert!(flags.get_use r(3).get());
-            assert!(flags.get_use r(8).get());
-            assert!(flags.get_use r(9).get());
-            assert!(flags.get_use r(10).get());
+            assert!(flags.get_user(3).get());
+            assert!(flags.get_user(8).get());
+            assert!(flags.get_user(9).get());
+            assert!(flags.get_user(10).get());
         }
     }
 }

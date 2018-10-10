@@ -2668,28 +2668,18 @@ pub mod le {
                 #[test]
                 fn set_advertising_data_test() {
 
-                    // Some ad types (from Generic Access Profile assigned numbers)
-                    let ad_flags_tag = 0x01u8;
-                    let ad_complete_name_tag = 0x08u8;
+                    use gap::advertise::{flags,local_name};
 
-                    let ad_flag_val = 0x00;
-                    let ad_complete_name_val = "hci advertising test";
+                    let mut flags = flags::Flags::new();
 
-                    let test_ad_struct_1 = ADStruct {
-                        ad_type: ad_flags_tag,
-                        data: &[ad_flag_val],
-                    };
+                    flags.get_user(0).enable();
+                    flags.get_user(20).enable();
 
-                    let test_ad_struct_2 = ADStruct {
-                        ad_type: ad_complete_name_tag,
-                        data: ad_complete_name_val.as_ref(),
-                    };
+                    let local_name = local_name::LocalName::new("Test", false);
 
-                    let ad = AdvertisingData::new()
-                    .try_push(test_ad_struct_1)
-                    .unwrap()
-                    .try_push(test_ad_struct_2)
-                    .unwrap();
+                    let mut ad = AdvertisingData::new();
+                    ad.try_push(flags).unwrap();
+                    ad.try_push(local_name).unwrap();
 
                     let result = block_for_command_result(
                         send(&HostInterface::default(), ad).unwrap()
@@ -2702,45 +2692,41 @@ pub mod le {
                 #[test]
                 fn advertising_data_try_from_test () {
 
-                    // Arbitrary "valid" data
-                    let test_fine = ADStruct {
-                        ad_type: 0x32,
-                        data: &[3,1,33,45,81,7],
-                    };
+                    use gap::advertise::{flags,local_name};
 
-                    // Arbitrary "invalid" data
-                    let test_bad = ADStruct {
-                        ad_type: 0x32,
-                        data: &[4u8;PAYLOAD_SIZE],
-                    };
+                    let mut flags = flags::Flags::new();
+
+                    flags.get_user(11).enable();
+                    flags.get_user(8*3).enable();
+
+                    let too_long_name = local_name::LocalName::new("Supercalifragilisticexpialidocious", true);
 
                     AdvertisingData::new()
-                    .try_push(test_fine)
+                    .try_push(flags)
                     .unwrap();
 
                     AdvertisingData::new()
-                    .try_push(test_bad)
+                    .try_push(too_long_name)
                     .unwrap_err();
                 }
 
                 #[test]
                 fn advertising_data_try_push_test () {
+                    use gap::advertise::local_name::LocalName;
+                    use std::str::from_utf8;
+
+                    let local_name_1 = LocalName::new("abcdefghijklm", true);
+                    let local_name_2 = LocalName::new("012345678901234", false);
+                    let local_name_too_long = LocalName::new(from_utf8(&[102u8;31]).unwrap(), false);
 
                     let mut test_ad_1 = AdvertisingData::early_terminate();
                     let mut test_ad_2 = AdvertisingData::early_terminate();
-                    let mut test_ad_3 = AdvertisingData::new()
-                    .try_push( ADStruct{
-                        ad_type: 3,
-                        data: &[3;15],
-                    }).unwrap();
 
-                    test_ad_1.try_push( ADStruct{ ad_type: 1, data: &[0;15]}).unwrap();
+                    assert!(test_ad_1.try_push( local_name_1 ).is_ok());
 
-                    test_ad_1.try_push( ADStruct{ ad_type: 1, data: &[1;15]}).unwrap_err();
+                    assert!(test_ad_1.try_push( local_name_2 ).is_err());
 
-                    test_ad_2.try_push( ADStruct{ ad_type: 2, data: &[2;PAYLOAD_SIZE]}).unwrap_err();
-
-                    test_ad_3.try_push( ADStruct{ ad_type: 3, data: &[3;15]}).unwrap_err();
+                    assert!(test_ad_2.try_push( local_name_too_long ).is_err());
                 }
             }
         }
@@ -2783,17 +2769,13 @@ pub mod le {
 
                 #[test]
                 fn set_advertising_enable_test() {
+                    use gap::advertise::local_name::LocalName;
 
                     let hci = HostInterface::default();
 
-                    let payload = set_advertising_data::AdvertisingData::new()
-                    .try_push(
-                        set_advertising_data::ADStruct {
-                            ad_type: 0x9, // complete local name
-                            data: "ENABLE BLE TEST".as_ref()
-                        }
-                    )
-                    .unwrap();
+                    let mut payload = set_advertising_data::AdvertisingData::new();
+
+                    payload.try_push(LocalName::new("ENABLE BLE TEST", true)).unwrap();
 
                     block_for_command_result(
                         set_advertising_data::send(&hci, payload).unwrap()

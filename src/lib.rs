@@ -8,6 +8,8 @@
 
 #[cfg(unix)]
 extern crate nix;
+
+#[cfg(test)]
 extern crate test;
 #[cfg(test)]
 #[macro_use]
