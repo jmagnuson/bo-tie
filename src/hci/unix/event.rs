@@ -5,7 +5,7 @@ use std::cmp::{PartialEq,PartialOrd,Ordering};
 use std::collections::{BTreeSet};
 use std::convert::From;
 use std::future;
-use std::mem::PinMut;
+use std::pin::Pin;
 use std::sync::{mpsc, Arc, Mutex};
 use std::task;
 use std::vec::Vec;
@@ -212,7 +212,7 @@ impl super::OnTimeout for TimeoutCallback {
             .remove_event_flag(self.event);
 
         lock!(self.waker_token).trigger();
-        
+
         Ok(())
     }
 }
@@ -252,7 +252,7 @@ impl EventExpecter {
         impl future::Future for EventFuture {
             type Output = EventResponse;
 
-            fn poll (self: PinMut<Self>, cx: &mut task::Context) ->
+            fn poll (self: Pin<&mut Self>, lw: &task::LocalWaker) ->
                 task::Poll<Self::Output>
             {
                 use self::task::Poll;
@@ -262,7 +262,7 @@ impl EventExpecter {
                     Err(e) => return task::Poll::Ready(Err(Error::Other(e.to_string()))),
                 };
 
-                waker.set_waker(cx.waker().clone());
+                waker.set_waker(lw.clone().into_waker());
 
                 if waker.triggered() {
                     match self.events_response.try_recv() {

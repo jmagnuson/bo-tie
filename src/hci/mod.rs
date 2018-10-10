@@ -80,11 +80,12 @@ impl HostInterface {
         self.interface.send_command(cmd_data, event, timeout ).or_else(|e| { Err(CommandError::from(e)) })
     }
 
+    // TODO
     // /// Specify events to wait for
     // ///
     // /// This will return a future for waiting on one or more events from the controller. There is
     // /// no timeout for waiting for the events
-    // fn wait_for_events(&self, events: &[events::Events], timeout: Duration) ->
+    // fn wait_for_event(&self, events: events::Events, timeout: Duration) ->
     //     impl ::std::future::Future <Output= hci_future_output!() >
     // {
     //     self.interface.wait_for_events(events, timeout)
@@ -134,11 +135,9 @@ mod test_util {
     }
 
     pub fn block_for_result<T> ( mut cmd_future: impl Future <Output=T> + Unpin ) -> T {
-        use std::future::FutureObj;
-        use std::mem::PinMut;
+        use std::pin::Pin;
         use std::sync::Arc;
-        use std::task::{LocalWaker, local_waker_from_nonlocal, Context, Spawn, Poll,
-            SpawnObjError, Wake};
+        use std::task::{LocalWaker, local_waker_from_nonlocal, Poll, Wake};
         use std::thread;
 
         struct SelfWaker {
@@ -159,21 +158,12 @@ mod test_util {
             }
         }
 
-        /// This does nothing.
-        struct NonSpawner;
-
-        impl Spawn for NonSpawner {
-            fn spawn_obj(&mut self, _: FutureObj<'static, ()>) -> Result<(), SpawnObjError> { Ok(()) }
-        }
-
         let waker = SelfWaker::new_local_waker();
-        let mut executor = NonSpawner;
-        let mut context = Context::new(&waker, &mut executor);
 
         'async: loop {
-            let pinned_future = PinMut::new(&mut cmd_future);
+            let pinned_future = Pin::new(&mut cmd_future);
 
-            match pinned_future.poll(&mut context) {
+            match pinned_future.poll(&waker) {
                 Poll::Pending => thread::park(),
                 Poll::Ready(rslt) => break 'async rslt,
             };
@@ -2563,21 +2553,9 @@ pub mod le {
                 OGF_LE_CTL,
             };
             use hci::*;
-            use std::mem::size_of;
+            use gap::advertise::{ConvertRawData,DataTooLargeError};
 
             type Payload = [u8;31];
-            type ADType = u8;
-
-            /// AD structure
-            ///
-            /// Contains an AD Type and AD data.
-            ///
-            /// From Vol3 Part C, section 11
-            #[derive(Clone,Copy,PartialEq)]
-            pub struct ADStruct<'a> {
-                pub ad_type: ADType,
-                pub data: &'a [u8],
-            }
 
             /// Advertising data
             ///
@@ -2589,12 +2567,9 @@ pub mod le {
             /// early termination is desired).
             #[derive(Debug,Clone,Copy)]
             pub struct AdvertisingData {
-                length: u8,
+                length: usize,
                 payload: Payload,
             }
-
-            const PAYLOAD_SIZE: usize = size_of::<Payload>();
-            const AD_TYPE_SIZE: usize = size_of::<ADType>();
 
             impl AdvertisingData {
 
@@ -2623,33 +2598,37 @@ pub mod le {
                 pub fn early_terminate() -> Self {
                     AdvertisingData{
                         length: 0,
-                        payload: [0;PAYLOAD_SIZE],
+                        payload: Payload::default(),
                     }
                 }
 
                 /// Add an ADStruct to the advertising data
                 ///
-                /// Returns self if the ADStruct was added to the advertising data
+                /// Returns self if the data was added to the advertising data
                 ///
                 /// # Error
-                /// The ADStruct size is greater then the amount of left in the payload; the
-                /// error value is difference between the number of bytes remaining in the
-                /// pyload buffer and the size of the passed ad_struct.
-                pub fn try_push(&mut self, ad_struct: ADStruct ) -> Result<Self, usize> {
-                    let length = AD_TYPE_SIZE + ad_struct.data.len() + self.length as usize;
+                /// 'data' in its transmission form was too large for remaining free space in
+                /// the advertising data.
+                pub fn try_push<T>(&mut self, data: T )
+                    -> Result<(), DataTooLargeError>
+                    where T: ConvertRawData
+                {
+                    let raw_data = data.into_raw();
 
-                    if PAYLOAD_SIZE > length {
+                    if raw_data.len() + self.length <= self.payload.len() {
+                        let old_len = self.length;
 
-                        for indx in 0..ad_struct.data.len() {
-                            self.payload[(self.length as usize) + indx] = ad_struct.data[indx];
-                        }
+                        self.length += raw_data.len();
 
-                        self.length = length as u8;
+                        self.payload[old_len..self.length].copy_from_slice(&raw_data);
 
-                        Ok(*self)
+                        Ok(())
                     }
                     else {
-                        Err(length - PAYLOAD_SIZE)
+                        Err(DataTooLargeError {
+                            overflow: raw_data.len() + self.length - self.payload.len(),
+                            remaining: self.payload.len() - self.length,
+                        })
                     }
                 }
 
@@ -2658,7 +2637,7 @@ pub mod le {
                 /// Use this to get the remaining space that can be sent in an advertising
                 /// packet.
                 pub fn remaining_space(&self) -> usize {
-                    PAYLOAD_SIZE - self.length as usize
+                    self.payload.len() - self.length as usize
                 }
             }
 
@@ -2668,7 +2647,7 @@ pub mod le {
                 const OCF: u16 = OCF_LE_SET_ADVERTISING_DATA as u16;
                 fn get_parameter(&self) -> Self::Parameter {
                     le_set_advertising_data_cp {
-                        length: self.length,
+                        length: self.length as u8,
                         data: self.payload,
                     }
                 }
@@ -3003,7 +2982,7 @@ pub mod le {
 
                 /// Create the default parameters except use the specified bluetooth device
                 /// address for the peer_address member
-                pub fn default_with_address( addr: &'a ::BluetoothDeviceAddress) ->
+                pub fn default_with_peer_address( addr: &'a ::BluetoothDeviceAddress) ->
                         AdvertisingParameters
                 {
                     let mut ap = AdvertisingParameters::default();
@@ -3076,7 +3055,7 @@ pub mod le {
 
                 #[test]
                 fn set_advertising_parameters_test() {
-                    let params = AdvertisingParameters::default_with_address(&[0x12;6]);
+                    let params = AdvertisingParameters::default_with_peer_address(&[0x12;6]);
 
                     let result = block_for_command_result (
                         send( &HostInterface::default(), params).unwrap()

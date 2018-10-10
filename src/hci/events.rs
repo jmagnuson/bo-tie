@@ -351,7 +351,7 @@ impl_from_for_raw_packet!{
             {
                 // The size of a single Inquiry Result in the event packet is 14 bytes
                 // Also the first byte (which would give the total )
-                let mut vec = packet[1..].exact_chunks( 14 )
+                let mut vec = packet[1..].chunks_exact( 14 )
                 .map(|mut chunk| {
 
                     InquiryResultData {
@@ -945,7 +945,7 @@ impl_from_for_raw_packet! {
             data: {
                 // The size of a single "Number of Completed Packets" is 4 bytes.
                 // The first byte is the number of handles, which is not needed
-                let mut vec = packet[1..].exact_chunks( 4 )
+                let mut vec = packet[1..].chunks_exact( 4 )
                 .map(|mut chunk| {
                     NumberOfCompletedPacketsData {
                         connection_handle: chew_handle!(chunk),
@@ -1051,7 +1051,7 @@ impl_from_for_raw_packet! {
             data: {
                 // The size of a single Returned Link Keys is 22 bytes.
                 // The first byte is the number of handles, which is not needed
-                let mut vec = packet[1..].exact_chunks( 22 )
+                let mut vec = packet[1..].chunks_exact( 22 )
                 .map(|mut chunk| {
                     ReturnLinkKeysData {
                         bluetooth_address: chew_baddr!(chunk),
@@ -1450,7 +1450,7 @@ impl_from_for_raw_packet! {
         Multiple {
             data: {
 
-                let mut vec = packet[1..].exact_chunks( 14 )
+                let mut vec = packet[1..].chunks_exact( 14 )
                 .map( |mut chunk| {
                     InquiryResultWithRSSIData {
                         bluetooth_address: chew_baddr!(chunk),
@@ -2134,7 +2134,7 @@ impl_from_for_raw_packet! {
             total_data_blocks: ControllerBlocks::from(chew_u16!(packet)),
             completed_packets_and_blocks: {
                 let handle_cnt = chew!(packet) as usize;
-                let mut vec = packet.exact_chunks(6)
+                let mut vec = packet.chunks_exact(6)
                 .map(|mut chunk| {
                     CompletedDataPacketsAndBlocks {
                         handle: chew_handle!(chunk),
@@ -2757,7 +2757,7 @@ impl LEDirectedAdvertisingReportData {
 
         let report_count = chew!(packet) as usize;
 
-        let mut vec = packet.exact_chunks(16)
+        let mut vec = packet.chunks_exact(16)
         .map( |mut chunk| {
             LEDirectedAdvertisingReportData {
                 event_type: LEAdvertisingEventType::from( chew!(chunk) ),
@@ -3435,13 +3435,14 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
+                let hci_msg_type = chew!(packet);
+                let event_code = ::hci::events::$EnumName::from_raw(chew!(packet));
+                let event_len  = chew!(packet);
+
                 // The first byte indicates what HCI packet the HCI message is. A value of 4
                 // indicates that the packet is an Event from the controller (Vol4, Part A, Sec 2
                 // of spec)
-                debug_assert_eq!( 4, chew!(packet));
-
-                let event_code = ::hci::events::$EnumName::from_raw(chew!(packet));
-                let event_len  = chew!(packet);
+                debug_assert_eq!( 4, hci_msg_type);
 
                 // This is needed to check that the packet parameter length matches. This should
                 // always be correct if the packet came from a bluetooth controller.

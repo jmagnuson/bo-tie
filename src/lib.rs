@@ -1,5 +1,5 @@
 #![feature(test)]
-#![feature(exact_chunks)]
+#![feature(chunks_exact)]
 #![feature(futures_api)]
 #![feature(pin)]
 #![feature(arbitrary_self_types)]
