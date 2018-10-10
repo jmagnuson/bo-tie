@@ -3,8 +3,7 @@
 //!
 //! This contains the advertising data types use d for the advertising packet. See Vol 3, Part C
 //! section 11 for more details on this.
-use std::fmt;
-use std::error;
+use core::fmt;
 
 pub enum AssignedTypes {
     Flags,
@@ -112,7 +111,7 @@ impl AssignedTypes {
 pub enum Error {
     IncorrectDataType,
     RawTooSmall,
-    UTF8Error(::std::str::Utf8Error),
+    UTF8Error(::alloc::str::Utf8Error),
 }
 
 impl fmt::Display for Error where {
@@ -121,15 +120,6 @@ impl fmt::Display for Error where {
             Error::IncorrectDataType => write!(f, "Incorrect Data Type Field"),
             Error::RawTooSmall => write!(f, "Raw data length is too small"),
             Error::UTF8Error(_) => write!(f, "UTF-8 conversion error"),
-        }
-    }
-}
-
-impl error::Error for Error where {
-    fn cause (&self) -> Option<&error::Error> {
-        match *self {
-            Error::UTF8Error(ref cause ) => Some(cause ),
-            _ => None,
         }
     }
 }
@@ -150,7 +140,7 @@ fn set_len( buf: &mut [u8] ) {
 /// This trait is use d for converting a Advertising or Extended Inquiry data structure into or
 /// from the raw data that is transferred to or from a controller during Advertising or an
 /// Extended Inquiry.
-pub trait ConvertRawData where Self:std::marker::Sized{
+pub trait ConvertRawData where Self: core::marker::Sized{
     fn into_raw(&self) -> Vec<u8>;
     fn try_from_raw(raw: &[u8]) -> Result<Self, Error>;
 }
@@ -174,10 +164,9 @@ macro_rules! from_raw {
 
 pub mod flags {
 
-    use std::cell::Cell;
-    use std::collections::HashSet;
-    use std::collections::hash_set;
-    use std::rc::Rc;
+    use core::cell::Cell;
+    use alloc::collections::BTreeSet;
+    use alloc::rc::Rc;
     use super::*;
 
     pub enum CoreFlags {
@@ -282,9 +271,15 @@ pub mod flags {
         }
     }
 
-    impl ::std::hash::Hash for Flag {
-        fn hash<H>(&self, state: &mut H) where H:std::hash::Hasher {
-            self.position.hash(state);
+    impl Ord for Flag {
+        fn cmp(&self, other: &Flag) -> ::core::cmp::Ordering {
+            self.position.cmp(&other.position)
+        }
+    }
+
+    impl PartialOrd for Flag {
+        fn partial_cmp(&self, other: &Flag) -> Option<::core::cmp::Ordering> {
+            Some(self.cmp(other))
         }
     }
 
@@ -296,7 +291,7 @@ pub mod flags {
 
     #[derive(Debug)]
     pub struct Flags {
-        set: HashSet<Rc<Flag>>,
+        set: BTreeSet<Rc<Flag>>,
     }
 
     impl Flags {
@@ -305,7 +300,7 @@ pub mod flags {
         /// Creates a flags object with no enabled flag
         pub fn new() -> Self {
             Flags {
-                set: HashSet::new(),
+                set: BTreeSet::new(),
             }
         }
 
@@ -346,7 +341,7 @@ pub mod flags {
         }
 
         /// Get an iterator over the flags in Flags
-        pub fn iter(&self) -> hash_set::Iter<Rc<Flag>> {
+        pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<Rc<Flag>> {
             self.set.iter()
         }
     }
@@ -378,7 +373,7 @@ pub mod flags {
         }
 
         fn try_from_raw(raw: &[u8]) -> Result<Flags,Error> {
-            let mut set = HashSet::new();
+            let mut set = BTreeSet::new();
 
             from_raw!{ raw, AssignedTypes::Flags, {
                 // first byte of raw is the length, sencond is the type, so data starts at 3rd byte
@@ -438,9 +433,8 @@ pub mod service_class_uuid {
     //! implemented for the three types of UUIDs (16, 32, and 128 bit) and to create an instance
     //! of it use the functions `use _16`, `use _32`, or `use _128` at the module level.
 
-    use std::collections::HashSet;
-    use std::convert::{AsRef,AsMut};
-    use std::hash::Hash;
+    use alloc::collections::BTreeSet;
+    use core::convert::{AsRef,AsMut};
     use super::*;
 
     /// Internal trait for specifying the Data Type Value
@@ -487,18 +481,18 @@ pub mod service_class_uuid {
     /// `Services` is a set of uuids, so duplicate uuids cannot exist within an instance of
     /// `Services`
     ///
-    /// Services implements `AsRef` for `HashSet` so use the methods of `HashSet` for editing
+    /// Services implements `AsRef` for `BTreeSet` so use the methods of `BTreeSet` for editing
     /// the UUIDs in the instance
-    pub struct Services<T> where T: Hash + Eq {
-        set: HashSet<T>,
+    pub struct Services<T> where T: Ord {
+        set: BTreeSet<T>,
         complete: bool,
     }
 
-    impl<T> Services<T> where T: Hash + Eq {
+    impl<T> Services<T> where T: Ord {
 
         fn new( complete: bool ) -> Self {
             Self {
-                set: HashSet::new(),
+                set: BTreeSet::new(),
                 complete: complete
             }
         }
@@ -508,16 +502,16 @@ pub mod service_class_uuid {
         }
     }
 
-    impl<T> AsRef<HashSet<T>> for Services<T> where T: Hash + Eq
+    impl<T> AsRef<BTreeSet<T>> for Services<T> where T: Ord
     {
-        fn as_ref(&self) -> &HashSet<T> {
+        fn as_ref(&self) -> &BTreeSet<T> {
             &self.set
         }
     }
 
-    impl<T> AsMut<HashSet<T>> for Services<T> where T: Hash + Eq
+    impl<T> AsMut<BTreeSet<T>> for Services<T> where T: Ord
     {
-        fn as_mut(&mut self) -> &mut HashSet<T> {
+        fn as_mut(&mut self) -> &mut BTreeSet<T> {
             &mut self.set
         }
     }
@@ -552,7 +546,7 @@ pub mod service_class_uuid {
             impl ConvertRawData for Services<$type> {
 
                 fn into_raw(&self) -> Vec<u8> {
-                    use std::mem::{size_of, forget};
+                    use core::mem::{size_of, forget};
 
                     let data_type = if self.set.is_empty() || self.complete {
                         Self::COMPLETE
@@ -585,7 +579,7 @@ pub mod service_class_uuid {
 
                 fn try_from_raw( raw: &[u8] ) -> Result<Services<$type>,Error> {
                     from_raw!{raw, Self::COMPLETE, Self::INCOMPLETE, {
-                        use std::mem::size_of;
+                        use core::mem::size_of;
 
                         Services::<$type> {
                             set: raw[2..raw.len()]
@@ -593,7 +587,7 @@ pub mod service_class_uuid {
                                 .map( |raw_uuid| {
                                     unsafe{ $type::from_le(*(raw_uuid.as_ptr() as *const $type)) }
                                 })
-                                .collect::<HashSet<$type>>(),
+                                .collect::<BTreeSet<$type>>(),
                             // from_raw does the check to see if the data is Self::COMPLETE or
                             // Self::INCOMPLETE. All that needs to be done here is to check
                             // if this is the complete one or not.
@@ -661,7 +655,7 @@ pub mod local_name {
 
         fn try_from_raw(raw: &[u8]) -> Result<Self,Error> {
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
-                use std::str::from_utf8;
+                use core::str::from_utf8;
 
                 let ref_name = from_utf8(raw).map_err(|e| super::Error::UTF8Error(e) )?;
 
@@ -693,14 +687,8 @@ impl DataTooLargeError {
     }
 }
 
-impl ::std::fmt::Display for DataTooLargeError {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) ->std::fmt::Result {
+impl ::core::fmt::Display for DataTooLargeError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) ->core::fmt::Result {
         write!(f, "Advertising Data Too Large")
-    }
-}
-
-impl ::std::error::Error for DataTooLargeError {
-    fn cause (&self) -> Option<&::std::error::Error> {
-        None
     }
 }

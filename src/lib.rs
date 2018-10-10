@@ -5,22 +5,22 @@
 #![feature(arbitrary_self_types)]
 #![feature(async_await)]
 #![feature(await_macro)]
+#![feature(alloc)]
 
-#[cfg(unix)]
-extern crate nix;
+#[cfg_attr(not(any(test,unix)),no_std)]
 
-#[cfg(test)]
-extern crate test;
-#[cfg(test)]
-#[macro_use]
-extern crate lazy_static;
+extern crate core;
+extern crate alloc;
+#[cfg(unix)] extern crate nix;
+#[cfg(test)] extern crate test;
+#[cfg(test)] #[macro_use] extern crate lazy_static;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
 #[allow(dead_code)]
 mod bluez {
-    use std::convert::{From, Into};
+    use core::convert::From;
 
     #[link(name = "bluetooth", kind = "dylib")]
     extern "C" {}
@@ -30,31 +30,6 @@ mod bluez {
     impl From<[u8; 6]> for bdaddr_t {
         fn from(arr: [u8; 6]) -> Self {
             bdaddr_t { b: arr }
-        }
-    }
-
-    /// Convert a bluetooth address to its string notation
-    ///
-    /// # Panics
-    /// Should not panic
-    pub fn bluetooth_address_to_string<'a, T>(addr: T) -> ::std::string::String
-    where
-        T: Into<bdaddr_t> + Clone,
-    {
-        use std::boxed::Box;
-        use std::ffi::CString;
-        use std::os::raw::c_char;
-
-        let buffer_ptr = Box::into_raw(Box::new([0 as c_char; 256])) as *mut c_char;
-
-        let addr_ref: &bdaddr_t = &addr.into();
-
-        unsafe {
-            if ba2str(addr_ref as *const bdaddr_t, buffer_ptr) < 0 {
-                panic!("API has a bug");
-            }
-
-            CString::from_raw(buffer_ptr).into_string().unwrap()
         }
     }
 

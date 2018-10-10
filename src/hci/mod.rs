@@ -5,7 +5,7 @@
 //! group field(s)).
 
 macro_rules! hci_future_output {
-    () => { ::std::result::Result<::hci::events::EventsData,impl ::std::fmt::Display + ::std::fmt::Debug> }
+    () => { ::core::result::Result<::hci::events::EventsData,impl ::core::fmt::Display + ::core::fmt::Debug> }
 }
 
 pub mod common;
@@ -14,13 +14,13 @@ pub mod error;
 
 #[cfg(unix)] mod unix;
 
-use std::time::Duration;
+use core::time::Duration;
 
 /// Error type for hci commands/events
 #[derive(Debug,PartialEq)]
 pub enum CommandError<SysErr,SpecErr>
-    where SysErr  : ::std::fmt::Debug,
-          SpecErr : ::std::fmt::Debug
+    where SysErr  : ::core::fmt::Debug,
+          SpecErr : ::core::fmt::Debug
 {
     /// System specific error
     SystemError(SysErr),
@@ -55,8 +55,8 @@ pub struct HostInterface {
 /// Return type for hci commands
 macro_rules! hci_return {
     () => {
-        ::std::result::Result< impl ::std::future::Future <Output= hci_future_output!() >,
-            CommandError < impl ::std::fmt::Debug, impl ::std::fmt::Debug> >
+        ::core::result::Result< impl ::core::future::Future <Output= hci_future_output!() >,
+            CommandError < impl ::core::fmt::Debug, impl ::core::fmt::Debug> >
     }
 }
 
@@ -86,13 +86,13 @@ impl HostInterface {
     // /// This will return a future for waiting on one or more events from the controller. There is
     // /// no timeout for waiting for the events
     // fn wait_for_event(&self, events: events::Events, timeout: Duration) ->
-    //     impl ::std::future::Future <Output= hci_future_output!() >
+    //     impl ::core::future::Future <Output= hci_future_output!() >
     // {
     //     self.interface.wait_for_events(events, timeout)
     // }
 }
 
-impl ::std::default::Default for HostInterface {
+impl ::core::default::Default for HostInterface {
 
     #[cfg(unix)]
     fn default() -> Self {
@@ -220,8 +220,8 @@ pub mod le {
     #[macro_use]
     mod common {
 
-        use std::convert::From;
-        use std::time::Duration;
+        use core::convert::From;
+        use core::time::Duration;
 
         /// The valid address types for this HCI command
         ///
@@ -388,9 +388,9 @@ pub mod le {
                     ///
                     /// # Error
                     /// the value is out of bounds.
-                    pub fn try_from_duration( duration: ::std::time::Duration ) -> Result<Self, &'static str>
+                    pub fn try_from_duration( duration: ::core::time::Duration ) -> Result<Self, &'static str>
                     {
-                        let duration_range = ::hci::le::common::AdvIntRng::<::std::time::Duration>::from($name::RAW_RANGE);
+                        let duration_range = ::hci::le::common::AdvIntRng::<::core::time::Duration>::from($name::RAW_RANGE);
 
                         if duration_range.contains(&duration) {
                             Ok( $name {
@@ -409,8 +409,8 @@ pub mod le {
 
                     pub fn get_raw_val(&self) -> u16 { self.interval }
 
-                    pub fn get_duration(&self) -> ::std::time::Duration {
-                        ::std::time::Duration::from_micros(
+                    pub fn get_duration(&self) -> ::core::time::Duration {
+                        ::core::time::Duration::from_micros(
                             (self.interval as u64) * $micro_sec_conv
                         )
                     }
@@ -449,7 +449,7 @@ pub mod le {
                 };
                 use hci::*;
                 use hci::events::Events;
-                use std::option::Option;
+                use core::option::Option;
                 pub use hci::le::common::AddressType;
 
                 /// Command parameter data for both add and remove whitelist commands.
@@ -533,7 +533,7 @@ pub mod le {
 
                 use super::*;
                 use bluez;
-                use std::process::Command;
+                use core::process::Command;
                 use BluetoothDeviceAddress;
                 use hci::test_util::block_for_command_result;
 
@@ -824,9 +824,9 @@ pub mod le {
                 OCF_LE_READ_SUPPORTED_STATES
             };
             use hci::*;
-            use std::collections::BTreeSet;
-            use std::vec::Vec;
-            use std::mem::size_of_val;
+            use alloc::collections::BTreeSet;
+            use alloc::vec::Vec;
+            use core::mem::size_of_val;
 
 
             /// All possible states/roles a controller can be in
@@ -1181,7 +1181,7 @@ pub mod le {
                 OCF_LE_SET_EVENT_MASK,
             };
             use hci::*;
-            use std::vec::Vec;
+            use alloc::vec::Vec;
 
             #[cfg_attr(test, derive(Debug))]
             pub enum Events {
@@ -1684,8 +1684,8 @@ pub mod le {
                 OGF_INFO_PARAM,
             };
             use hci::*;
-            use std::option::Option;
-            use std::vec::Vec;
+            use core::option::Option;
+            use alloc::vec::Vec;
 
             #[cfg_attr(test,derive(Debug))]
             #[derive(PartialEq)]
@@ -2384,7 +2384,7 @@ pub mod le {
                 }
 
                 pub fn into_milli_watts(&self) -> f32 {
-                    use std::f32;
+                    use core::f32;
                     10f32.powf( self.0 as f32 / 10f32 )
                 }
             }
@@ -2806,7 +2806,7 @@ pub mod le {
             };
             use hci::*;
             pub use hci::le::common::OwnAddressType;
-            use std::default::Default;
+            use core::default::Default;
 
             interval!( AdvertisingInterval, 0x0020, 0x4000, 0x0800, 625);
 
@@ -3400,7 +3400,7 @@ pub mod le {
             }
         }
 
-        impl ::std::default::Default for ConnectionEventLength {
+        impl ::core::default::Default for ConnectionEventLength {
             fn default() -> Self {
                 Self {
                     minimum: 0,
@@ -3716,7 +3716,7 @@ pub mod le {
                 BoundsErr,
             };
             pub use hci::le::common::OwnAddressType;
-            use std::time::Duration;
+            use core::time::Duration;
 
             pub enum InitiatorFilterPolicy {
                 DoNotUseWhiteList,
@@ -3925,12 +3925,12 @@ pub mod le {
             pub struct ChannelMapInfo {
                 pub handle: ConnectionHandle,
                 /// This is the list of channels (from 0 through 36)
-                pub channel_map: ::std::boxed::Box<[usize]>,
+                pub channel_map: ::alloc::boxed::Box<[usize]>,
             }
 
             impl ChannelMapInfo {
                 fn try_from(packed: le_read_channel_map_rp) -> Result<Self, error::Error> {
-                    use std::vec::Vec;
+                    use alloc::vec::Vec;
 
                     let status = error::Error::from(packed.status);
 
@@ -4508,10 +4508,6 @@ mod tests {
 
     #[test]
     fn host_interface_default_test() {
-        use std::panic::catch_unwind;
-
-        // Effectively a test to see if an adapter exists
-        assert!( catch_unwind( || { HostInterface::default(); }).is_ok(),
-            "Couldn't establish a host interface to a bluetooth controller (Host Controller Interface could not be established or no bluetooth controller exist)");
+        HostInterface::default();
     }
 }

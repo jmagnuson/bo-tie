@@ -14,8 +14,8 @@ use hci::common::{
 };
 use hci::error::Error;
 use BluetoothDeviceAddress;
-use std::convert::From;
-use std::time::Duration;
+use core::convert::From;
+use core::time::Duration;
 
 macro_rules! make_u16 {
     ( $packet:ident, $start:expr ) => {
@@ -73,7 +73,7 @@ macro_rules! impl_from_for_raw_packet {
 
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
-        impl<'a> ::std::convert::From<&'a [u8]> for $name {
+        impl<'a> ::core::convert::From<&'a [u8]> for $name {
             fn from( param: &'a [u8] ) -> Self {
                 let mut $param = param;
                 $inner
@@ -160,7 +160,7 @@ macro_rules! chew_handle {
     ($packet:ident) => { chew_handle!($packet,0)};
 }
 
-type BufferType<T> = ::std::boxed::Box<T>;
+type BufferType<T> = ::alloc::boxed::Box<T>;
 
 #[derive(Clone)]
 pub struct Multiple<T: ?Sized> {
@@ -462,19 +462,23 @@ impl_from_for_raw_packet! {
 pub struct RemoteNameRequestCompleteData {
     pub status: Error,
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub remote_name: Result<::std::ffi::CString, ::std::ffi::NulError>,
+    pub remote_name: Result<::alloc::string::String, ::alloc::sync::Arc<::alloc::string::FromUtf8Error>>,
 }
 
 impl_from_for_raw_packet! {
     RemoteNameRequestCompleteData,
     packet,
     {
-        use std::ffi::CString;
+        use alloc::string::String;
 
         RemoteNameRequestCompleteData {
             status: Error::from(chew!(packet)),
             bluetooth_address: chew_baddr!(packet),
-            remote_name: CString::new(packet.to_vec()),
+            remote_name: {
+                let raw_msg = packet.iter().take_while(|v| **v != 0).map(|v| *v).collect::<Vec<u8>>();
+
+                String::from_utf8(raw_msg).map_err(|e| ::alloc::sync::Arc::new(e))
+            }
         }
     }
 }
@@ -617,7 +621,7 @@ impl_from_for_raw_packet! {
 
 #[derive(Clone,Copy,PartialEq)]
 pub enum CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::std::fmt::Debug
+    where UnpackErrorType: ::core::fmt::Debug
 {
     /// If the api doesn't have a bug in it, then the controller is faulty if this error occurs
     RawDataLenTooSmall,
@@ -626,10 +630,10 @@ pub enum CommandDataErr<UnpackErrorType>
     UnpackError(UnpackErrorType),
 }
 
-impl<UnpackErrorType> ::std::fmt::Display for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::std::fmt::Debug
+impl<UnpackErrorType> ::core::fmt::Display for CommandDataErr<UnpackErrorType>
+    where UnpackErrorType: ::core::fmt::Debug
 {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         match *self {
             CommandDataErr::RawDataLenTooSmall => {
                 write!(f, "Command complete data error, the size of the data was too small for type")
@@ -644,16 +648,16 @@ impl<UnpackErrorType> ::std::fmt::Display for CommandDataErr<UnpackErrorType>
     }
 }
 
-impl<UnpackErrorType> ::std::fmt::Debug for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::std::fmt::Debug
+impl<UnpackErrorType> ::core::fmt::Debug for CommandDataErr<UnpackErrorType>
+    where UnpackErrorType: ::core::fmt::Debug
 {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
-        (self as &::std::fmt::Display).fmt(f)
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
+        (self as &::core::fmt::Display).fmt(f)
     }
 }
 
 pub(crate) trait DataResult
-where <Self as ::hci::events::DataResult>::UnpackErrorType: ::std::fmt::Debug
+where <Self as ::hci::events::DataResult>::UnpackErrorType: ::core::fmt::Debug
 {
     type ReturnData;
     type UnpackErrorType;
@@ -767,8 +771,8 @@ macro_rules! impl_get_data_for_command {
 
         impl ::hci::events::GetDataForCommand<$data> for ::hci::events::CommandCompleteData {
             unsafe fn get_return(&self) ->
-                ::std::result::Result<
-                    ::std::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
+                ::core::result::Result<
+                    ::core::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
                     ::hci::events::CommandDataErr< <$data as ::hci::events::DataResult>::UnpackErrorType >
                 >
             {
@@ -786,19 +790,19 @@ macro_rules! impl_get_data_for_command {
             }
 
             unsafe fn get_return_unchecked(&self) ->
-                ::std::result::Result<
-                    ::std::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
+                ::core::result::Result<
+                    ::core::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
                     ::hci::events::CommandDataErr< <$data as ::hci::events::DataResult>::UnpackErrorType >
                 >
             {
-                use std::mem::size_of;
+                use core::mem::size_of;
 
-                if self.raw_data.len() >= ::std::mem::size_of::<$packed_data>() {
+                if self.raw_data.len() >= ::core::mem::size_of::<$packed_data>() {
                     let mut buffer = [0u8;size_of::<$packed_data>()];
 
                     buffer.copy_from_slice(&(*self.raw_data));
 
-                    let p_data: $packed_data = ::std::mem::transmute(buffer);
+                    let p_data: $packed_data = ::core::mem::transmute(buffer);
 
                     match <$data>::try_from(p_data) {
                         Ok(val) => Ok(Some(val)),
@@ -3466,7 +3470,7 @@ macro_rules! events_markup {
                     $( ::hci::events::$EnumName::$name =>
                         ::hci::events::$EnumDataName::$name(
                             ::hci::events::$data::<$( $type ),*>::from(packet),
-                            ::std::vec::Vec::from(data).into_boxed_slice()
+                            ::core::vec::Vec::from(data).into_boxed_slice()
                         ),
                     )*
                 }

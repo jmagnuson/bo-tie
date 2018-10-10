@@ -1,5 +1,5 @@
-use std::iter::Iterator;
-use std::time::Duration;
+use core::iter::Iterator;
+use core::time::Duration;
 
 #[derive(Clone,Copy,PartialEq,PartialOrd)]
 pub struct ConnectionHandle {
@@ -474,8 +474,8 @@ impl EnabledFeaturesIter {
 impl Iterator for EnabledFeaturesIter {
     type Item = Features;
 
-    fn next(&mut self) -> ::std::option::Option<Self::Item> {
-        for indx in self.bit_index.0..(::std::mem::size_of_val(&self.raw) as u8) {
+    fn next(&mut self) -> ::core::option::Option<Self::Item> {
+        for indx in self.bit_index.0..(::core::mem::size_of_val(&self.raw) as u8) {
             for bit in self.bit_index.1..8 {
                 let feature_option = Features::from_bit( (indx,bit), &self.raw );
 
@@ -493,8 +493,8 @@ impl Iterator for EnabledFeaturesIter {
     }
 }
 
-impl ::std::fmt::Debug for EnabledFeaturesIter {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+impl ::core::fmt::Debug for EnabledFeaturesIter {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [");
 
         let mut features = self.clone();
@@ -547,7 +547,7 @@ impl EnabledExtendedFeaturesItr {
 impl Iterator for EnabledExtendedFeaturesItr {
     type Item = ExtendedFeatures;
 
-    fn next(&mut self) -> ::std::option::Option<Self::Item> {
+    fn next(&mut self) -> ::core::option::Option<Self::Item> {
 
         // Yea the match here is stupid as of v5 bluetooth. In the future page 1 or page 2 may
         // contain enought features to have a byte count different from the page number.
@@ -573,8 +573,8 @@ impl Iterator for EnabledExtendedFeaturesItr {
     }
 }
 
-impl ::std::fmt::Debug for EnabledExtendedFeaturesItr {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+impl ::core::fmt::Debug for EnabledExtendedFeaturesItr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [");
 
         let mut features = self.clone();
@@ -613,7 +613,7 @@ impl ExtendedInquiryResponseDataItr {
 
 impl Iterator for ExtendedInquiryResponseDataItr {
 
-    type Item = ::std::boxed::Box<[u8]>; // TODO convert to data types (from CSSv7)
+    type Item = ::alloc::boxed::Box<[u8]>; // TODO convert to data types (from CSSv7)
 
     /// This will panic if somehow the EIR Data lengths are incorrect within the entire Extended
     /// Inquiry Response Data Message processed by this iterator
@@ -653,7 +653,7 @@ impl ExtendedAdvertisingAndScanResponseDataItr {
 
 impl Iterator for ExtendedAdvertisingAndScanResponseDataItr {
 
-    type Item = ::std::boxed::Box<[u8]>; // TODO convert to data types (from CSSv7)
+    type Item = ::alloc::boxed::Box<[u8]>; // TODO convert to data types (from CSSv7)
 
     /// This will panic if somehow the EIR Data lengths are incorrect within the entire Extended
     /// Inquiry Response Data Message processed by this iterator
@@ -750,11 +750,11 @@ impl EnabledLEFeaturesItr {
 impl Iterator for EnabledLEFeaturesItr {
     type Item = LEFeatures;
 
-    fn next(&mut self) -> ::std::option::Option<Self::Item> {
+    fn next(&mut self) -> ::core::option::Option<Self::Item> {
 
         // Yea the match here is stupid as of v5 bluetooth. In the future page 1 or page 2 may
         // contain enought features to have a byte count different from the page number.
-        for indx in self.bit_index.0..(::std::mem::size_of_val(&self.raw) as u8){
+        for indx in self.bit_index.0..(::core::mem::size_of_val(&self.raw) as u8){
             for bit in self.bit_index.1..8 {
                 if let Some(feature_option) = LEFeatures::from_bit( (indx,bit), &self.raw ) {
                     self.bit_index = (
@@ -770,8 +770,8 @@ impl Iterator for EnabledLEFeaturesItr {
     }
 }
 
-impl ::std::fmt::Debug for EnabledLEFeaturesItr {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+impl ::core::fmt::Debug for EnabledLEFeaturesItr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [");
 
         let mut features = self.clone();
