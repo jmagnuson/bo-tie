@@ -80,16 +80,37 @@ impl HostInterface {
         self.interface.send_command(cmd_data, event, timeout ).or_else(|e| { Err(CommandError::from(e)) })
     }
 
-    // TODO
-    // /// Specify events to wait for
-    // ///
-    // /// This will return a future for waiting on one or more events from the controller. There is
-    // /// no timeout for waiting for the events
-    // fn wait_for_event(&self, events: events::Events, timeout: Duration) ->
-    //     impl ::core::future::Future <Output= hci_future_output!() >
-    // {
-    //     self.interface.wait_for_events(events, timeout)
-    // }
+    /// Specify an event to wait for
+    ///
+    /// This will return a future for waiting on an events from the controller. A timeout is needed
+    /// to specify how long to wait for for the event.
+    ///
+    /// This should be used for any events that are not directly caused by sending a command from
+    /// the host to the controller. Events like CommandStatus and CommandComplete are handled by
+    /// the future returned when sending a command to the controller. However later events that are
+    /// not directly the result of a command from the host should be waited on by using this method.
+    /// No error will return (except for an eventual timeout) if an event
+    ///
+    /// ```rust
+    /// # use bo_tie::hci::HostInterface;
+    /// # use bo_tie::hci::le::transmitter::{set_advertising_parameters, set_advertising_enable};
+    /// let host_interface = HostInterface::default();
+    ///
+    /// // This will set advertising to be connectable and scannable undirected advertising
+    /// let adv_prams = set_advertising_parameters::AdvertisingParameters::default();
+    ///
+    /// // The future returned by the send method is actually waiting on the CommandComplete event.
+    /// await!(set_advertising_parameters::send(&host_interface, adv_prams).unwrap()).unwrap();
+    ///
+    /// // Again, the CommandComplete event is what the returned future is waiting on, but the
+    /// // LEConnectionComplete event is not handled handled here.
+    /// await!(set_advertising_enable::send(&host_interface, true).unwrap()).unwrap();
+    ///
+    /// // To have a future handle this event, wait_for_event must be called for the
+    pub fn wait_for_event(&self, events: events::Events, timeout: Duration) -> hci_return!()
+    {
+        self.interface.wait_for_event(events, timeout).or_else(|e| { Err(CommandError::from(e)) })
+    }
 }
 
 impl ::core::default::Default for HostInterface {
@@ -218,7 +239,7 @@ mod test_util {
 pub mod le {
 
     #[macro_use]
-    mod common {
+    pub mod common {
 
         use core::convert::From;
         use core::time::Duration;
@@ -320,22 +341,22 @@ pub mod le {
             pub(in super::super) fn get_val(&self) -> u8 { self.val }
         }
 
-        pub struct AdvIntRng<T> where T: PartialEq + PartialOrd {
+        pub struct IntervalRange<T> where T: PartialEq + PartialOrd {
             pub low: T,
             pub hi: T,
             pub micro_sec_conv: u64,
         }
 
-        impl<T> AdvIntRng<T> where T: PartialEq + PartialOrd {
+        impl<T> IntervalRange<T> where T: PartialEq + PartialOrd {
 
             pub fn contains(&self, val: &T ) -> bool {
                 self.low <= *val && *val <= self.hi
             }
         }
 
-        impl From<AdvIntRng<u16>> for AdvIntRng<Duration> {
-            fn from( raw: AdvIntRng<u16> ) -> Self {
-                AdvIntRng {
+        impl From<IntervalRange<u16>> for IntervalRange<Duration> {
+            fn from( raw: IntervalRange<u16> ) -> Self {
+                IntervalRange {
                     low: Duration::from_micros( raw.low as u64 * raw.micro_sec_conv  ),
                     hi:  Duration::from_micros( raw.hi as u64 * raw.micro_sec_conv  ),
                     micro_sec_conv: raw.micro_sec_conv,
@@ -344,12 +365,45 @@ pub mod le {
         }
 
         macro_rules! interval {
-            ( $name:tt,
-              $raw_low:expr,
-              $raw_hi:expr,
-              $raw_default:expr,
-              $micro_sec_conv:expr
-            ) => {
+            ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
+                SpecDef, $raw_default:expr, $micro_sec_conv:expr ) =>
+            {
+                make_interval!(
+                    $(#[ $expl ])*
+                    $name,
+                    $raw_low,
+                    $raw_hi,
+                    #[doc("This is a Bluetooth Specification defined default value")],
+                    $raw_default,
+                    $micro_sec_conv
+                );
+            };
+            ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
+                ApiDef, $raw_default:expr, $micro_sec_conv:expr ) =>
+            {
+                make_interval!(
+                    $(#[ $expl ])*
+                    $name,
+                    $raw_low,
+                    $raw_hi,
+                    #[doc("This is a default value defined by the API, the Bluetooth Specification")]
+                    #[doc("does not specify a default for this interval")],
+                    $raw_default,
+                    $micro_sec_conv
+                );
+            }
+        }
+
+        macro_rules! make_interval {
+            ( $(#[ $expl:meta ])*
+                $name:ident,
+                $raw_low:expr,
+                $raw_hi:expr,
+                $(#[ $raw_default_note:meta ])*,
+                $raw_default:expr,
+                $micro_sec_conv:expr) =>
+            {
+                $(#[ $expl ])*
                 #[cfg_attr(test,derive(Debug))]
                 pub struct $name {
                     interval: u16,
@@ -357,17 +411,13 @@ pub mod le {
 
                 impl $name {
 
-                    const RAW_RANGE: ::hci::le::common::AdvIntRng<u16> = ::hci::le::common::AdvIntRng{
+                    const RAW_RANGE: ::hci::le::common::IntervalRange<u16> = ::hci::le::common::IntervalRange{
                         low: $raw_low,
                         hi: $raw_hi,
                         micro_sec_conv: $micro_sec_conv,
                     };
 
-                    /// Create an advertising interval from a raw value
-                    ///
-                    /// A raw value is the value given to the Bluetooth Adapter for the advertising
-                    /// interval. raw cannot be less than 0x0020 or more than 0x4000 per the 5.0
-                    /// specification.
+                    /// Create an interval from a raw value
                     ///
                     /// # Error
                     /// The value is out of bounds.
@@ -384,13 +434,11 @@ pub mod le {
 
                     /// Create an advertising interval from a Duration
                     ///
-                    /// The duration value must not be less then 20ms or more then 10.24 seconds
-                    ///
                     /// # Error
                     /// the value is out of bounds.
                     pub fn try_from_duration( duration: ::core::time::Duration ) -> Result<Self, &'static str>
                     {
-                        let duration_range = ::hci::le::common::AdvIntRng::<::core::time::Duration>::from($name::RAW_RANGE);
+                        let duration_range = ::hci::le::common::IntervalRange::<::core::time::Duration>::from($name::RAW_RANGE);
 
                         if duration_range.contains(&duration) {
                             Ok( $name {
@@ -407,8 +455,10 @@ pub mod le {
                         }
                     }
 
+                    /// Get the raw value of the interval
                     pub fn get_raw_val(&self) -> u16 { self.interval }
 
+                    /// Get the value of the interval as a `Duration`
                     pub fn get_duration(&self) -> ::core::time::Duration {
                         ::core::time::Duration::from_micros(
                             (self.interval as u64) * $micro_sec_conv
@@ -420,8 +470,7 @@ pub mod le {
 
                     /// Creates an Interval with the default value for the interval
                     ///
-                    /// Both the minimum and maximum advertising interval have the same default
-                    /// value.
+                    $(#[ $raw_default_note ])*
                     fn default() -> Self {
                         $name{
                             interval: $raw_default,
@@ -449,8 +498,7 @@ pub mod le {
                 };
                 use hci::*;
                 use hci::events::Events;
-                use core::option::Option;
-                pub use hci::le::common::AddressType;
+                use hci::le::common::AddressType;
 
                 /// Command parameter data for both add and remove whitelist commands.
                 ///
@@ -463,57 +511,20 @@ pub mod le {
                     address: [u8;6],
                 }
 
-                pub struct CommandBuilder {
-                    addr_type: AddressType,
-                    addr: Option<::BluetoothDeviceAddress>,
-                }
 
                 impl_status_return!( $ocf, OGF_LE_CTL);
 
-                impl CommandBuilder {
 
-                    /// Create a new builder of the command
-                    pub fn new( at: AddressType ) -> CommandBuilder {
-                        CommandBuilder {
-                            addr_type: at,
-                            addr: None,
-                        }
-                    }
+                pub fn send( hci: &HostInterface,
+                    at: AddressType,
+                    addr: ::BluetoothDeviceAddress ) -> hci_return!()
+                {
+                    let parameter = CommandPrameter {
+                        address_type: at.to_value(),
+                        address: addr,
+                    };
 
-                    /// Bluetooth address of the device
-                    ///
-                    /// This is only required to be set if the AddressType set in the call to new
-                    /// is one of the following:
-                    ///     - PublicDeviceAddress
-                    ///     - RandomDeviceAddress
-                    pub fn address( mut self, addr: ::BluetoothDeviceAddress ) -> Self {
-                        self.addr = Some(addr);
-                        self
-                    }
-
-                    fn address_ok(&self) -> bool {
-                        match self.addr_type {
-                            AddressType::PublicDeviceAddress |
-                            AddressType::RandomDeviceAddress => {
-                                self.addr.is_some()
-                            },
-                            #[cfg(bluetooth_5_0)] _ => true,
-                        }
-                    }
-
-                    pub fn send(self, hci: &HostInterface ) -> Result<hci_return!(), &str> {
-
-                        if ! self.address_ok() {
-                            return Err("Address must be set for address type");
-                        }
-
-                        let parameter = CommandPrameter {
-                            address_type: self.addr_type.to_value(),
-                            address: self.addr.unwrap_or([0u8;6].into()),
-                        };
-
-                        Ok(hci.send_command(parameter, Events::CommandComplete, Duration::from_secs(1) ))
-                    }
+                    hci.send_command(parameter, Events::CommandComplete, Duration::from_secs(1) )
                 }
 
                 impl CommandParameters for CommandPrameter {
@@ -532,8 +543,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use bluez;
-                use core::process::Command;
+                use std::process::Command;
                 use BluetoothDeviceAddress;
                 use hci::test_util::block_for_command_result;
 
@@ -544,17 +554,28 @@ pub mod le {
                     let test_address_1 = BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
                     let test_address_2 = BluetoothDeviceAddress::from([0x12,0x34,0x56,0x78,0x9A,0xBC]);
 
-                    let test_address_1_str = bluez::bluetooth_address_to_string(test_address_1.clone());
-                    let test_address_2_str = bluez::bluetooth_address_to_string(test_address_2.clone());
+                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_1[5],
+                        test_address_1[4],
+                        test_address_1[3],
+                        test_address_1[2],
+                        test_address_1[1],
+                        test_address_1[0]
+                    );
+
+                    let test_address_2_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_2[5],
+                        test_address_2[4],
+                        test_address_2[3],
+                        test_address_2[2],
+                        test_address_2[1],
+                        test_address_2[0],
+                    );
 
                     let adapter = HostInterface::default();
 
                     let result_1 = block_for_command_result(
-                        CommandBuilder::new(AddressType::PublicDeviceAddress)
-                        .address(test_address_1)
-                        .send(&adapter)
-                        .unwrap()  // Result from CommandBuilder::send
-                        .unwrap() // Result from HostInterface::send_command
+                        send(&adapter, AddressType::PublicDeviceAddress, test_address_1).unwrap()
                     ).unwrap();
 
                     command_complete_test!(result_1, Return);
@@ -567,11 +588,7 @@ pub mod le {
                         .expect("Failed to execute hcitool command");
 
                     let result_2 = block_for_command_result(
-                        CommandBuilder::new(AddressType::RandomDeviceAddress)
-                        .address(test_address_2)
-                        .send(&adapter)
-                        .unwrap()  // Result from CommandBuilder::send
-                        .unwrap() // Result from HostInterface::send_command
+                        send(&adapter, AddressType::RandomDeviceAddress, test_address_2).unwrap()
                     ).unwrap();
 
                     command_complete_test!(result_2, Return);
@@ -584,10 +601,8 @@ pub mod le {
                     #[cfg(bluetooth_5_0)]
                     {
                         let result = block_for_command_result(
-                            CommandBuilder::new(AddressType::DevicesSendingAnonymousAdvertisements)
-                            .send(&adapter)
-                            .unwrap()  // Result from CommandBuilder::send
-                            .unwrap() // Result from HostInterface::send_command
+                            send(&adapter, AddressType::DevicesSendingAnonymousAdvertisements, [0;6])
+                            .unwrap()
                         ).unwrap();
 
                         assert_eq!(1, result.len() );
@@ -637,8 +652,22 @@ pub mod le {
                     let test_address_1 = ::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
                     let test_address_2 = ::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
 
-                    let test_address_1_str = bluez::bluetooth_address_to_string(test_address_1.clone());
-                    let test_address_2_str = bluez::bluetooth_address_to_string(test_address_2.clone());
+                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_1[5],
+                        test_address_1[4],
+                        test_address_1[3],
+                        test_address_1[2],
+                        test_address_1[1],
+                        test_address_1[0],
+                    );
+                    let test_address_2_str =format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_2[5],
+                        test_address_2[4],
+                        test_address_2[3],
+                        test_address_2[2],
+                        test_address_2[1],
+                        test_address_2[0],
+                    );
 
                     let host_interface = HostInterface::default();
 
@@ -1125,8 +1154,22 @@ pub mod le {
                     let test_address_2 = ::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
                     let test_address_3 = ::BluetoothDeviceAddress::from([0xff,0xee,0xdd,0xcc,0xbb,0xaa]);
 
-                    let test_address_1_str = bluez::bluetooth_address_to_string(test_address_1.clone());
-                    let test_address_2_str = bluez::bluetooth_address_to_string(test_address_2.clone());
+                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_1[5],
+                        test_address_1[4],
+                        test_address_1[3],
+                        test_address_1[2],
+                        test_address_1[1],
+                        test_address_1[0],
+                    );
+                    let test_address_2_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        test_address_2[5],
+                        test_address_2[4],
+                        test_address_2[3],
+                        test_address_2[2],
+                        test_address_2[1],
+                        test_address_2[0],
+                    );
 
                     let hi = HostInterface::default();
 
@@ -1141,29 +1184,17 @@ pub mod le {
                         .expect("Failed to execute hcitool command");
 
                     let result_l = block_for_command_result(
-                        CommandBuilder::new(AddressType::PublicDeviceAddress)
-                            .address(test_address_1)
-                            .send(&hi)
-                            .unwrap()
-                            .unwrap()
+                        send(&hi, AddressType::PublicDeviceAddress, test_address_1).unwrap()
                     )
                     .unwrap();
 
                     let result_2 = block_for_command_result(
-                        CommandBuilder::new(AddressType::PublicDeviceAddress)
-                            .address(test_address_2)
-                            .send(&hi)
-                            .unwrap()
-                            .unwrap()
+                        send(&hi, AddressType::PublicDeviceAddress, test_address_2).unwrap()
                     )
                     .unwrap();
 
                     let result_3 = block_for_command_result(
-                        CommandBuilder::new(AddressType::PublicDeviceAddress)
-                            .address(test_address_3)
-                            .send(&hi)
-                            .unwrap()
-                            .unwrap()
+                        send(&hi, AddressType::PublicDeviceAddress, test_address_3).unwrap()
                     )
                     .unwrap();
 
@@ -1182,55 +1213,32 @@ pub mod le {
             };
             use hci::*;
             use alloc::vec::Vec;
+            use hci::events::LEMeta;
 
-            #[cfg_attr(test, derive(Debug))]
-            pub enum Events {
-                LEConnectionComplete,
-                LEAdvertisingReport,
-                LEConnectionUpdateComplete,
-                LEReadRemoteFeaturesComplete,
-                LELongTermKeyRequest,
-                LERemoteConnectionParameterRequest,
-                LEDataLengthChange,
-                LEReadLocalP256PublicKeyComplete,
-                LEGenerateDHKeyComplete,
-                LEEnhancedConnectionComplete,
-                LEDirectedAdvertisingReport,
-                LEPHYUpdateComplete,
-                LEExtendedAdvertisingReport,
-                LEPeriodicAdvertisingSyncEstablished,
-                LEPeriodicAdvertisingReport,
-                LEPeriodicAdvertisingSyncLost,
-                LEExtendedScanTimeout,
-                LEExtendedAdvertisingSetTerminated,
-                LEScanRequestReceived,
-                LEChannelSelectionAlgorithm,
-            }
-
-            impl Events {
+            impl LEMeta {
 
                 fn bit_offset(&self) -> usize{
                     match *self {
-                        Events::LEConnectionComplete => 0,
-                        Events::LEAdvertisingReport => 1,
-                        Events::LEConnectionUpdateComplete => 2,
-                        Events::LEReadRemoteFeaturesComplete => 3,
-                        Events::LELongTermKeyRequest => 4,
-                        Events::LERemoteConnectionParameterRequest => 5,
-                        Events::LEDataLengthChange => 6,
-                        Events::LEReadLocalP256PublicKeyComplete => 7,
-                        Events::LEGenerateDHKeyComplete => 8,
-                        Events::LEEnhancedConnectionComplete => 9,
-                        Events::LEDirectedAdvertisingReport => 10,
-                        Events::LEPHYUpdateComplete => 11,
-                        Events::LEExtendedAdvertisingReport => 12,
-                        Events::LEPeriodicAdvertisingSyncEstablished => 13,
-                        Events::LEPeriodicAdvertisingReport => 14,
-                        Events::LEPeriodicAdvertisingSyncLost => 15,
-                        Events::LEExtendedScanTimeout => 16,
-                        Events::LEExtendedAdvertisingSetTerminated => 17,
-                        Events::LEScanRequestReceived => 18,
-                        Events::LEChannelSelectionAlgorithm => 19,
+                        LEMeta::ConnectionComplete => 0,
+                        LEMeta::AdvertisingReport => 1,
+                        LEMeta::ConnectionUpdateComplete => 2,
+                        LEMeta::ReadRemoteFeaturesComplete => 3,
+                        LEMeta::LongTermKeyRequest => 4,
+                        LEMeta::RemoteConnectionParameterRequest => 5,
+                        LEMeta::DataLengthChange => 6,
+                        LEMeta::ReadLocalP256PublicKeyComplete => 7,
+                        LEMeta::GenerateDHKeyComplete => 8,
+                        LEMeta::EnhancedConnectionComplete => 9,
+                        LEMeta::DirectedAdvertisingReport => 10,
+                        LEMeta::PHYUpdateComplete => 11,
+                        LEMeta::ExtendedAdvertisingReport => 12,
+                        LEMeta::PeriodicAdvertisingSyncEstablished => 13,
+                        LEMeta::PeriodicAdvertisingReport => 14,
+                        LEMeta::PeriodicAdvertisingSyncLost => 15,
+                        LEMeta::ScanTimeout => 16,
+                        LEMeta::AdvertisingSetTerminated => 17,
+                        LEMeta::ScanRequestReceived => 18,
+                        LEMeta::ChannelSelectionAlgorithm => 19,
                     }
                 }
 
@@ -1241,7 +1249,7 @@ pub mod le {
                         let bit = event.bit_offset();
                         let byte = bit/8;
 
-                        mask[byte] |= 1 << bit;
+                        mask[byte] |= 1 << (bit % 8);
                     }
 
                     mask
@@ -1268,10 +1276,10 @@ pub mod le {
             /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
             /// send(&host_interface, events);
             /// ```
-            pub fn send( hi: &HostInterface, enabled_events: Vec<Events>) -> hci_return!() {
+            pub fn send( hi: &HostInterface, enabled_events: Vec<LEMeta>) -> hci_return!() {
 
                 let command_pram = le_set_event_mask_cp {
-                    mask: Events::build_mask(enabled_events),
+                    mask: LEMeta::build_mask(enabled_events),
                 };
 
                 hi.send_command(command_pram, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -1282,6 +1290,7 @@ pub mod le {
 
                 use super::*;
                 use hci::test_util::block_for_command_result;
+                use hci::events::Events;
 
                 #[test]
                 fn set_event_mask_test() {
@@ -2457,7 +2466,7 @@ pub mod le {
                 OGF_LE_CTL,
             };
             use hci::*;
-            pub use hci::le::common::Frequency;
+            use hci::le::common::Frequency;
 
             #[cfg_attr(test,derive(Debug))]
             pub enum TestPayload {
@@ -2805,10 +2814,10 @@ pub mod le {
                 OGF_LE_CTL,
             };
             use hci::*;
-            pub use hci::le::common::OwnAddressType;
+            use hci::le::common::OwnAddressType;
             use core::default::Default;
 
-            interval!( AdvertisingInterval, 0x0020, 0x4000, 0x0800, 625);
+            interval!( AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
 
             /// Advertising Type
             ///
@@ -3115,7 +3124,7 @@ pub mod le {
                 OGF_LE_CTL,
             };
             use hci::*;
-            pub use hci::le::common::Frequency;
+            use hci::le::common::Frequency;
 
             impl_status_return!(OCF_LE_RECEIVER_TEST, OGF_LE_CTL);
 
@@ -3249,12 +3258,17 @@ pub mod le {
                 OGF_LE_CTL,
             };
             use hci::*;
-            pub use hci::le::common::OwnAddressType;
+            use hci::le::common::OwnAddressType;
 
-            interval!( ScanningInterval, 0x0004, 0x4000, 0x0010, 625);
+            interval!( ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+            interval!( ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
 
             pub enum LEScanType {
+                /// Under passive scanning, the link layer will not respond to any advertising
+                /// packets. This is usefull when listening to a device in the broadcast role.
                 PassiveScanning,
+                /// With Active scanning, the link layer will send packets to the advertisier. These
+                /// packets can be for quering for more data.
                 ActiveScanning,
             }
 
@@ -3306,11 +3320,11 @@ pub mod le {
             }
 
             pub struct ScanningParameters {
-                scan_type: LEScanType,
-                scan_interval: ScanningInterval,
-                scan_window: ScanningInterval,
-                own_address_type: OwnAddressType,
-                scanning_filter_policy: ScanningFilterPolicy,
+                pub scan_type: LEScanType,
+                pub scan_interval: ScanningInterval,
+                pub scan_window: ScanningWindow,
+                pub own_address_type: OwnAddressType,
+                pub scanning_filter_policy: ScanningFilterPolicy,
             }
 
             impl Default for ScanningParameters {
@@ -3318,7 +3332,7 @@ pub mod le {
                     ScanningParameters {
                         scan_type: LEScanType::default(),
                         scan_interval: ScanningInterval::default(),
-                        scan_window: ScanningInterval::default(),
+                        scan_window: ScanningWindow::default(),
                         own_address_type: OwnAddressType::default(),
                         scanning_filter_policy: ScanningFilterPolicy::default(),
                     }
@@ -3384,8 +3398,6 @@ pub mod le {
 
     pub mod connection {
 
-        use hci::common::LEConnectionInterval;
-
         pub struct ConnectionEventLength {
             minimum: u16,
             maximum: u16,
@@ -3409,29 +3421,31 @@ pub mod le {
             }
         }
 
+        interval!( #[derive(Clone, Copy)] ConnectionInterval, 0x0006, 0x0C80, ApiDef, 0x0006, 1250);
+
         /// ConnectionUpdateInterval contaings the minimum and maximum connection intervals for
         /// the le connection update
-        pub struct ConnectionInterval {
-            min: LEConnectionInterval,
-            max: LEConnectionInterval,
+        pub struct ConnectionIntervalBounds {
+            min: ConnectionInterval,
+            max: ConnectionInterval,
         }
 
-        impl ConnectionInterval {
+        impl ConnectionIntervalBounds {
             /// Create a ConnectionUpdateInterval
             ///
             /// # Errors
             /// An error is returned if the minimum is greater then the maximum
-            pub fn try_from(min: LEConnectionInterval, max: LEConnectionInterval)
+            pub fn try_from(min: ConnectionInterval, max: ConnectionInterval)
                 -> Result<Self,&'static str>
             {
-                if min.get_interval() <= max.get_interval() {
+                if min.get_raw_val() <= max.get_raw_val() {
                     Ok( Self {
                         min: min,
                         max: max,
                     })
                 }
                 else {
-                    Err("Connection interval min > max")
+                    Err("'min' is greater than 'max'")
                 }
             }
         }
@@ -3575,16 +3589,15 @@ pub mod le {
                 OCF_LE_CONN_UPDATE,
             };
             use hci::*;
-            pub use hci::common::{
+            use hci::common::{
                 ConnectionHandle,
-                LEConnectionInterval,
                 SupervisionTimeout,
             };
-            use super::{ConnectionEventLength, ConnectionInterval};
+            use super::{ ConnectionEventLength, ConnectionIntervalBounds };
 
             pub struct ConnectionUpdate {
                 pub handle: ConnectionHandle,
-                pub interval: ConnectionInterval,
+                pub interval: ConnectionIntervalBounds,
                 pub latency: u16,
                 pub supervision_timeout: SupervisionTimeout,
                 pub connection_event_len: ConnectionEventLength,
@@ -3598,8 +3611,8 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {
                     le_connection_update_cp {
                         handle:              self.handle.get_raw_handle(),
-                        min_interval:        self.interval.min.get_interval(),
-                        max_interval:        self.interval.max.get_interval(),
+                        min_interval:        self.interval.min.get_raw_val(),
+                        max_interval:        self.interval.max.get_raw_val(),
                         latency:             self.latency,
                         supervision_timeout: self.supervision_timeout.get_timeout(),
                         min_ce_length:       self.connection_event_len.minimum,
@@ -3611,7 +3624,7 @@ pub mod le {
             /// The event expected to be returned is the LEMeta event carrying a Connection Update
             /// Complete lE event
             pub fn send( hci: &HostInterface, cu: ConnectionUpdate, timeout: Duration) -> hci_return!() {
-                hci.send_command( cu, events::Events::LEMeta, timeout )
+                hci.send_command( cu, events::Events::LEMeta( events::LEMeta::ConnectionUpdateComplete ), timeout )
             }
 
             #[cfg(test)]
@@ -3629,9 +3642,9 @@ pub mod le {
 
                     let parameter = ConnectionUpdate {
                         handle: ConnectionHandle::try_from(0x0033).unwrap(),
-                        interval: ConnectionInterval::try_from(
-                            LEConnectionInterval::try_from(0x100).unwrap(),
-                            LEConnectionInterval::try_from(0x100).unwrap()
+                        interval: ConnectionIntervalBounds::try_from(
+                            ConnectionInterval::try_from(0x100).unwrap(),
+                            ConnectionInterval::try_from(0x100).unwrap()
                         ).unwrap(),
                         latency: 0x1000,
                         supervision_timeout: SupervisionTimeout::try_from(0x234).unwrap(),
@@ -3707,16 +3720,18 @@ pub mod le {
                 OCF_LE_CREATE_CONN,
                 OGF_LE_CTL,
             };
-            use super::{ConnectionEventLength, ConnectionInterval};
+            use super::{ConnectionEventLength, ConnectionIntervalBounds};
             use hci::*;
             use hci::common::{
                 ConnectionLatency,
                 LEAddressType,
                 SupervisionTimeout,
-                BoundsErr,
             };
-            pub use hci::le::common::OwnAddressType;
+            use hci::le::common::OwnAddressType;
             use core::time::Duration;
+
+            interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+            interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
 
             pub enum InitiatorFilterPolicy {
                 DoNotUseWhiteList,
@@ -3732,92 +3747,14 @@ pub mod le {
                 }
             }
 
-            pub struct LEScanInterval {
-                interval: u16,
-            }
-
-            impl LEScanInterval {
-                const CNV: u64 = 625; // unit: microseconds
-                pub const MIN: u16 = 0x0004;
-                pub const MAX: u16 = 0x4000;
-
-                /// Try to create a ScanInterval
-                ///
-                /// The parameter must be between the constants MIN and MAX
-                ///
-                /// ``` rust
-                /// # use bo_tie_linux::hci::le::ConnectionInterval;
-                /// let ci = ConnectionInterval::try_from(0x0027).unwrap();
-                /// ```
-                ///
-                /// # Errors
-                /// Will return a ConnectionIntervalErr with the violated bound as above or below the maximum or minimum
-                /// interval value
-                pub fn try_from(val: u16) -> Result<Self, BoundsErr> {
-                    Ok(
-                        LEScanInterval {
-                            interval: BoundsErr::check(val, Self::MIN, Self::MAX)?
-                        }
-                    )
-                }
-
-                /// Get the minimum interval value as a duration
-                pub fn as_duration(&self) -> Duration {
-                    Duration::from_micros((self.interval as u64) * Self::CNV)
-                }
-
-                pub fn get_interval(&self) -> u16 {
-                    self.interval
-                }
-            }
-
-            pub struct LEScanWindow {
-                window: u16,
-            }
-
-            impl LEScanWindow {
-                const CNV: u64 = 625; // unit: microseconds
-                pub const MIN: u16 = 0x0004;
-                pub const MAX: u16 = 0x4000;
-
-                /// Try to create a ScanInterval
-                ///
-                /// The parameter must be between the constants MIN and MAX
-                ///
-                /// ``` rust
-                /// # use bo_tie_linux::hci::le::ConnectionInterval;
-                /// let ci = ConnectionInterval::try_from(0x0027).unwrap();
-                /// ```
-                ///
-                /// # Errors
-                /// Will return a ConnectionIntervalErr with the violated bound as above or below the maximum or minimum
-                /// interval value
-                pub fn try_from(val: u16) -> Result<Self, BoundsErr> {
-                    Ok(
-                        LEScanWindow {
-                            window: BoundsErr::check(val, Self::MIN, Self::MAX)?
-                        }
-                    )
-                }
-
-                /// Get the minimum interval value as a duration
-                pub fn as_duration(&self) -> Duration {
-                    Duration::from_micros((self.window as u64) * Self::CNV)
-                }
-
-                pub fn get_window(&self) -> u16 {
-                    self.window
-                }
-            }
-
             pub struct ConnectionParameters {
-                scan_interval : LEScanInterval,
-                scan_window : LEScanWindow,
+                scan_interval : ScanningInterval,
+                scan_window : ScanningWindow,
                 initiator_filter_policy: InitiatorFilterPolicy,
                 peer_address_type: LEAddressType,
                 peer_address: ::BluetoothDeviceAddress,
                 own_address_type: OwnAddressType,
-                connection_interval: ConnectionInterval,
+                connection_interval: ConnectionIntervalBounds,
                 connection_latency: ConnectionLatency,
                 supervision_timeout: SupervisionTimeout,
                 connection_event_len: ConnectionEventLength,
@@ -3829,14 +3766,14 @@ pub mod le {
                 const OCF: u16 = OCF_LE_CREATE_CONN as u16;
                 fn get_parameter(&self) -> Self::Parameter {
                     le_create_connection_cp {
-                        interval:            self.scan_interval.get_interval(),
-                        window:              self.scan_window.get_window(),
+                        interval:            self.scan_interval.get_raw_val(),
+                        window:              self.scan_window.get_raw_val(),
                         initiator_filter:    self.initiator_filter_policy.into_raw(),
                         peer_bdaddr_type:    self.peer_address_type.into_raw(),
                         peer_bdaddr:         bdaddr_t::from(self.peer_address),
                         own_bdaddr_type:     self.own_address_type.into_val(),
-                        min_interval:        self.connection_interval.min.get_interval(),
-                        max_interval:        self.connection_interval.max.get_interval(),
+                        min_interval:        self.connection_interval.min.get_raw_val(),
+                        max_interval:        self.connection_interval.max.get_raw_val(),
                         latency:             self.connection_latency.get_latency(),
                         supervision_timeout: self.supervision_timeout.get_timeout(),
                         min_ce_length:       self.connection_event_len.minimum,
@@ -3849,12 +3786,12 @@ pub mod le {
 
                 /// Command Parameters for connecting without the white list
                 pub fn new_without_whitelist(
-                    scan_interval : LEScanInterval,
-                    scan_window : LEScanWindow,
+                    scan_interval : ScanningInterval,
+                    scan_window : ScanningWindow,
                     peer_address_type: LEAddressType,
                     peer_address: ::BluetoothDeviceAddress,
                     own_address_type: OwnAddressType,
-                    connection_interval: ConnectionInterval,
+                    connection_interval: ConnectionIntervalBounds,
                     connection_latency: ConnectionLatency,
                     supervision_timeout: SupervisionTimeout,
                     connection_event_len: ConnectionEventLength,
@@ -3875,10 +3812,10 @@ pub mod le {
 
                 /// Command parameters for connecting with the white list
                 pub fn new_with_whitelist(
-                    scan_interval : LEScanInterval,
-                    scan_window : LEScanWindow,
+                    scan_interval : ScanningInterval,
+                    scan_window : ScanningWindow,
                     own_address_type: OwnAddressType,
-                    connection_interval: ConnectionInterval,
+                    connection_interval: ConnectionIntervalBounds,
                     connection_latency: ConnectionLatency,
                     supervision_timeout: SupervisionTimeout,
                     connection_event_len: ConnectionEventLength,

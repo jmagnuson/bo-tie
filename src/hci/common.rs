@@ -1,5 +1,6 @@
 use core::iter::Iterator;
 use core::time::Duration;
+use core::fmt::Debug;
 
 #[derive(Clone,Copy,PartialEq,PartialOrd)]
 pub struct ConnectionHandle {
@@ -33,18 +34,16 @@ impl ConnectionHandle {
 ///
 /// The value contained in each enum should be the bound value that was violated.
 #[derive(Debug,Clone,Copy,PartialEq)]
-pub enum BoundsErr {
-    AboveMax(u16),
-    BelowMin(u16),
+pub enum BoundsErr<T> where T: Debug + Clone + Copy + PartialEq + PartialOrd {
+    AboveMax(T),
+    BelowMin(T),
 }
 
-impl BoundsErr {
-    pub(crate) fn check(val: u16, min: u16, max: u16) -> Result<u16, Self> {
-        match val {
-            val if val < min => Err(BoundsErr::BelowMin(min)),
-            val if val > max => Err(BoundsErr::AboveMax(max)),
-            _ => Ok(val),
-        }
+impl<T> BoundsErr<T> where T: Debug + Clone + Copy + PartialEq + PartialOrd {
+    pub(crate) fn check(val: T, min: T, max: T) -> Result<T, Self> {
+        if val < min      { Err(BoundsErr::BelowMin(min)) }
+        else if val > max { Err(BoundsErr::AboveMax(max)) }
+        else              { Ok(val) }
     }
 }
 
@@ -82,7 +81,7 @@ impl ConnectionInterval {
     /// # Errors
     /// Will return a ConnectionIntervalErr with the violated bound as above or below the maximum
     /// or minimum interval value
-    pub fn try_from(val: u16) -> Result<Self, BoundsErr> {
+    pub fn try_from(val: u16) -> Result<Self, BoundsErr<u16> > {
         Ok(
             ConnectionInterval {
                 interval: BoundsErr::check(val, Self::MIN, Self::MAX)?
@@ -90,55 +89,6 @@ impl ConnectionInterval {
         )
     }
 
-    pub fn as_duration(&self) -> Duration {
-        Duration::from_micros((self.interval as u64) * Self::CNV)
-    }
-
-    pub fn get_interval(&self) -> u16 {
-        self.interval
-    }
-}
-
-#[derive(Clone)]
-pub struct LEConnectionInterval {
-    interval: u16
-}
-
-impl LEConnectionInterval {
-    const CNV: u64 = 1250; // unit: microseconds
-    pub const MIN: u16 = 0x0006;
-    pub const MAX: u16 = 0x0C80;
-
-    /// Raw is a pair for (minimum, maximum)
-    pub(crate) fn from(raw: u16 ) -> Self {
-        debug_assert!( raw >= 0x0006 && raw <= 0x0C80 );
-
-        LEConnectionInterval {
-            interval: raw,
-        }
-    }
-
-    /// Try to create a LEConnectionInterval
-    ///
-    /// The parameter must be between the constants MIN and MAX
-    ///
-    /// ``` rust
-    /// # use bo_tie_linux::hci::common::ConnectionInterval;
-    /// let ci = ConnectionInterval::try_from(0x0077).unwrap();
-    /// ```
-    ///
-    /// # Errors
-    /// Will return a ConnectionIntervalErr with the violated bound as above or below the maximum or minimum
-    /// interval value
-    pub fn try_from(val: u16) -> Result<Self, BoundsErr> {
-        Ok(
-            LEConnectionInterval {
-                interval: BoundsErr::check(val, Self::MIN, Self::MAX)?
-            }
-        )
-    }
-
-    /// Get the minimum interval value as a duration
     pub fn as_duration(&self) -> Duration {
         Duration::from_micros((self.interval as u64) * Self::CNV)
     }
@@ -232,12 +182,36 @@ impl SupervisionTimeout {
         }
     }
 
-    pub fn try_from(val: u16) -> Result<Self, BoundsErr> {
+    pub fn try_from_raw(val: u16) -> Result<Self, BoundsErr<u16> > {
         Ok(
             SupervisionTimeout {
                 timeout: BoundsErr::check(val, Self::MIN, Self::MAX)?
             }
         )
+    }
+
+    /// Create an advertising interval from a Duration
+    ///
+    /// # Error
+    /// the value is out of bounds.
+    pub fn try_from_duration( duration: Duration ) -> Result<Self, &'static str>
+    {
+        let min = Duration::from_millis(Self::MIN as u64 * Self::CNV);
+        let max = Duration::from_millis(Self::MAX as u64 * Self::CNV);
+
+        if duration >= min && duration <= max {
+            Ok( SupervisionTimeout {
+                timeout: (duration.as_secs() * (1000 / Self::CNV)) as u16 +
+                    (duration.subsec_millis() / Self::CNV as u32) as u16,
+            })
+        }
+        else {
+            Err(concat!("Duration out of range: ",
+                stringify!( ($raw_low * $micro_sec_conv) ),
+                "us..=",
+                stringify!( ($raw_hi * $micro_sec_conv) ),
+                "us"))
+        }
     }
 
     pub fn as_duration(&self) -> Duration {

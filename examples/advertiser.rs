@@ -1,3 +1,14 @@
+//! Advertising example
+//!
+//! This examples sets up the bluetooth device to advertise. The only data sent in each advertising
+//! message is just the local name "Advertiser Test". The application will continue to run until
+//! the example is sent a signal (e.g. by pressing ctrl-c on a unix system).
+//!
+//! # Note
+//! Super User privaleges may be required to interact with your bluetooth peripheral. To do will
+//! probably require the full path to cargo. The cargo binary is usually locacted in your home
+//! directory at `.cargo/bin/cargo`.
+
 #![feature(async_await)]
 #![feature(await_macro)]
 #![feature(futures_api)]
@@ -14,8 +25,8 @@ use bo_tie::hci::le::transmitter::{
     set_advertising_enable,
 };
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc,RwLock};
 use std::task;
 use std::thread;
 
@@ -49,7 +60,7 @@ macro_rules! wait {
         let mut gen_fut = $gen_fut;
 
         loop {
-            let pin_fut = unsafe { ::std::pin::Pin::new_unchecked(&mut gen_fut) };
+            let pin_fut = unsafe { Pin::new_unchecked(&mut gen_fut) };
 
             match pin_fut.poll(&waker) {
                 task::Poll::Ready(val) => break val,
@@ -59,7 +70,11 @@ macro_rules! wait {
     }}
 }
 
-async fn advertise_setup(hi: &hci::HostInterface, data: set_advertising_data::AdvertisingData) {
+async fn advertise_setup (
+    hi: &hci::HostInterface,
+    data: set_advertising_data::AdvertisingData,
+    flag: Arc<RwLock<bool>> )
+{
 
     await!(set_advertising_enable::send(&hi, false).unwrap()).unwrap();
 
@@ -71,7 +86,9 @@ async fn advertise_setup(hi: &hci::HostInterface, data: set_advertising_data::Ad
 
     await!(set_advertising_parameters::send(&hi, adv_prams).unwrap()).unwrap();
 
-    await!(set_advertising_enable::send(&hi, true).unwrap()).unwrap();
+    await!(set_advertising_enable::send(&hi, *flag.read().unwrap() ).unwrap()).unwrap();
+
+    println!("Advertising")
 }
 
 async fn advertise_teardown(hi: &hci::HostInterface) {
@@ -79,21 +96,17 @@ async fn advertise_teardown(hi: &hci::HostInterface) {
 }
 
 #[cfg(unix)]
-fn handle_sig() -> Arc<AtomicBool> {
+fn handle_sig( flag: Arc<RwLock<bool>> ) {
     use simple_signal;
 
-    let running = Arc::new(AtomicBool::new(true));
-
-    let ret = running.clone();
-
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
-        move |_| { running.store(false, Ordering::Relaxed) }
+        move |_| { *flag.write().unwrap() = false }
     );
-
-    ret
 }
 
 fn main() {
+
+    let adv_flag = Arc::new(RwLock::new(true));
 
     let interface = hci::HostInterface::default();
 
@@ -103,11 +116,11 @@ fn main() {
 
     adv_data.try_push(adv_name).unwrap();
 
-    wait!(advertise_setup(&interface, adv_data));
+    handle_sig(adv_flag.clone());
 
-    let run_flag = handle_sig();
+    wait!(advertise_setup(&interface, adv_data, adv_flag.clone()));
 
-    while run_flag.load(Ordering::Relaxed) {}
+    while *adv_flag.read().unwrap() {}
 
     wait!(advertise_teardown(&interface));
 }

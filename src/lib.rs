@@ -89,8 +89,7 @@ mod bluez {
     }
 }
 
-/// This is an "unpacked" version of the bdaddr_t address type
-type BluetoothDeviceAddress = [u8; 6];
+pub type BluetoothDeviceAddress = [u8; 6];
 
 pub mod hci;
 pub mod gap;

@@ -110,6 +110,7 @@ impl AssignedTypes {
 #[derive(Debug)]
 pub enum Error {
     IncorrectDataType,
+    IncorrectLength,
     RawTooSmall,
     UTF8Error(::alloc::str::Utf8Error),
 }
@@ -118,6 +119,7 @@ impl fmt::Display for Error where {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::IncorrectDataType => write!(f, "Incorrect Data Type Field"),
+            Error::IncorrectLength => write!(f, "The length of this type is larger than the remaining bytes in the packet"),
             Error::RawTooSmall => write!(f, "Raw data length is too small"),
             Error::UTF8Error(_) => write!(f, "UTF-8 conversion error"),
         }
@@ -137,27 +139,39 @@ fn set_len( buf: &mut [u8] ) {
 
 /// A trait for converting the Advertising Data Structure into or from its raw form
 ///
-/// This trait is use d for converting a Advertising or Extended Inquiry data structure into or
+/// This trait is used for converting a Advertising or Extended Inquiry data structure into or
 /// from the raw data that is transferred to or from a controller during Advertising or an
 /// Extended Inquiry.
-pub trait ConvertRawData where Self: core::marker::Sized{
+pub trait ConvertRawData where Self: core::marker::Sized {
+    /// Convert the data into a vector of bytes
+    ///
+    /// This converts the data into the form that will be passed from devices over the air
     fn into_raw(&self) -> Vec<u8>;
+
+    /// Attempt to convert the data from its raw form into this type
+    ///
+    /// Takes the data protion of one raw advertising or extended inquiry struct and converts
+    /// it into this data type.  An error will be returned if the raw data cannot be converted
+    /// into this type.
+    ///
+    /// The passed parameter `raw` needs to refer to a slice to a single data portion *without* the
+    /// length byte. The slice should start with the type id.
     fn try_from_raw(raw: &[u8]) -> Result<Self, Error>;
 }
 
+/// This works for assigned types or any other types that the first byte is the type id
 macro_rules! from_raw {
     ($arr:expr, $( $ad:path, )* $to_do:block) => {
-        from_raw!($arr, (), $($ad,)* $to_do)
-    };
-    ($arr:expr, $err_ty:ty, $( $ad:path, )* $to_do:block) => {
-        if $arr.len() < 2 {
-            Err(::gap::advertise::Error::RawTooSmall)
-        }
-        else if $($arr[1] != $ad.val())&&* {
-            Err(::gap::advertise::Error::IncorrectDataType)
+        if $arr.len() > 0 && $($arr[0] == $ad.val())||* {
+            Ok($to_do)
         }
         else {
-            Ok($to_do)
+            if $arr.len() == 0 {
+                Err(::gap::advertise::Error::RawTooSmall)
+            }
+            else {
+                Err(::gap::advertise::Error::IncorrectDataType)
+            }
         }
     };
 }
@@ -376,8 +390,7 @@ pub mod flags {
             let mut set = BTreeSet::new();
 
             from_raw!{ raw, AssignedTypes::Flags, {
-                // first byte of raw is the length, sencond is the type, so data starts at 3rd byte
-                let data = &raw[2..];
+                let data = &raw[1..];
 
                 for octet in 0..data.len() {
                     for bit in 0..8 {
@@ -414,7 +427,9 @@ pub mod flags {
         fn from_raw_test() {
             let d_type = AssignedTypes::Flags.val();
 
-            let mut flags = Flags::try_from_raw(&[4u8, d_type, 3u8, 8u8, 7u8]).unwrap();
+            let packet = [4u8, d_type, 3u8, 8u8, 7u8];
+
+            let mut flags = Flags::try_from_raw(&packet[1..]).unwrap();
 
             assert!(flags.get_core(CoreFlags::LELimitedDiscoverableMode).get());
             assert!(flags.get_core(CoreFlags::LEGeneralDiscoverableMode).get());
@@ -582,8 +597,7 @@ pub mod service_class_uuid {
                         use core::mem::size_of;
 
                         Services::<$type> {
-                            set: raw[2..raw.len()]
-                                .chunks_exact(size_of::<$type>())
+                            set: raw[1..].chunks_exact(size_of::<$type>())
                                 .map( |raw_uuid| {
                                     unsafe{ $type::from_le(*(raw_uuid.as_ptr() as *const $type)) }
                                 })
@@ -633,6 +647,18 @@ pub mod local_name {
         }
     }
 
+    impl AsRef<str> for LocalName {
+        fn as_ref(&self) -> &str {
+            &self.name
+        }
+    }
+
+    impl From<LocalName> for String {
+        fn from( ln: LocalName) -> String {
+            ln.name
+        }
+    }
+
     impl ConvertRawData for LocalName {
         fn into_raw(&self) -> Vec<u8> {
 
@@ -657,7 +683,7 @@ pub mod local_name {
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
                 use core::str::from_utf8;
 
-                let ref_name = from_utf8(raw).map_err(|e| super::Error::UTF8Error(e) )?;
+                let ref_name = from_utf8(&raw[1..]).map_err(|e| super::Error::UTF8Error(e) )?;
 
                 Self {
                     name: ref_name.to_string(),

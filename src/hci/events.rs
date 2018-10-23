@@ -9,10 +9,10 @@ use hci::common::{
     ExtendedAdvertisingAndScanResponseDataItr,
     ExtendedInquiryResponseDataItr,
     LEAddressType,
-    LEConnectionInterval,
     SupervisionTimeout,
 };
 use hci::error::Error;
+use hci::le;
 use BluetoothDeviceAddress;
 use core::convert::From;
 use core::time::Duration;
@@ -2397,6 +2397,44 @@ impl LEEventType {
     }
 }
 
+pub struct ReportDataIter<'a> {
+    data: &'a [u8]
+}
+
+impl<'a> ::std::iter::Iterator for ReportDataIter<'a> {
+    type Item = Result<&'a [u8], ::gap::advertise::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.data.len() > 0 {
+            let len = self.data[0] as usize;
+
+            if len > 0 {
+                if len + 1 <= self.data.len() {
+                    let (ret, rest_of) = self.data.split_at(len + 1);
+
+                    self.data = rest_of;
+
+                    // No need to include the length byte because the length is included in the slice
+                    // fat pointer.
+                    Some(Ok(&ret[1..]))
+                }
+                else {
+                    // short data so that None is returned the next iteration
+                    self.data = &self.data[self.data.len()..];
+
+                    Some(Err(::gap::advertise::Error::IncorrectLength))
+                }
+            }
+            else {
+                None
+            }
+        }
+        else {
+            None
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct LEAdvertisingReportData {
     pub event_type: LEEventType,
@@ -2408,6 +2446,12 @@ pub struct LEAdvertisingReportData {
 }
 
 impl LEAdvertisingReportData {
+
+    pub fn data_iter<'a>(&'a self) -> ReportDataIter<'a> {
+        ReportDataIter {
+            data: &self.data,
+        }
+    }
 
     fn buf_from(data: &[u8]) -> BufferType<[Self]> {
         let mut packet = data;
@@ -2530,8 +2574,8 @@ impl LEConnectionTimeout {
 #[derive(Clone)]
 pub struct LERemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
-    pub minimum_interval: LEConnectionInterval,
-    pub maximum_interval: LEConnectionInterval,
+    pub minimum_interval: le::connection::ConnectionInterval,
+    pub maximum_interval: le::connection::ConnectionInterval,
     pub latency: ConnectionLatency,
     pub timeout: LEConnectionTimeout,
 }
@@ -2543,8 +2587,8 @@ impl LERemoteConnectionParameterRequestData {
 
         LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
-            minimum_interval: LEConnectionInterval::from( chew_u16!(packet) ),
-            maximum_interval: LEConnectionInterval::from( chew_u16!(packet) ),
+            minimum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).unwrap(),
+            maximum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).unwrap(),
             latency: ConnectionLatency::from( chew_u16!(packet) ),
             timeout: LEConnectionTimeout::from( chew_u16!(packet) ),
         }
@@ -2661,7 +2705,7 @@ pub struct LEEnhancedConnectionCompleteData {
     pub peer_address: BluetoothDeviceAddress,
     pub local_resolvable_private_address: Option<BluetoothDeviceAddress>,
     pub peer_resolvable_private_address: Option<BluetoothDeviceAddress>,
-    pub connection_interval: LEConnectionInterval,
+    pub connection_interval: le::connection::ConnectionInterval,
     pub connection_latency: ConnectionLatency,
     pub supervision_timeout: SupervisionTimeout,
     pub master_clock_accuracy: ClockAccuracy,
@@ -2700,7 +2744,7 @@ impl LEEnhancedConnectionCompleteData {
             peer_address: chew_baddr!(packet),
             local_resolvable_private_address: if_rpa_is_used!(),
             peer_resolvable_private_address: if_rpa_is_used!(),
-            connection_interval: LEConnectionInterval::from( chew_u16!(packet) ),
+            connection_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).unwrap(),
             connection_latency: ConnectionLatency::from( chew_u16!(packet) ),
             supervision_timeout: SupervisionTimeout::from( chew_u16!(packet) ),
             master_clock_accuracy: ClockAccuracy::from( chew!(packet) ),
@@ -3208,28 +3252,103 @@ impl LEChannelSelectionAlgorithmData {
     }
 }
 
-#[derive(Clone)]
-pub enum LEMetaData {
-    ConnectionComplete(LEConnectionCompleteData),
-    AdvertisingReport(BufferType<[LEAdvertisingReportData]>),
-    ConnectionUpdateComplete(LEConnectionUpdateCompleteData),
-    ReadRemoteFeaturesComplete(LEReadRemoteFeaturesCompleteData),
-    LongTermKeyRequest(LELongTermKeyRequestData),
-    RemoteConnectionParameterRequest(LERemoteConnectionParameterRequestData),
-    DataLengthChange(LEDataLengthChangeData),
-    ReadLocalP256PublicKeyComplete(LEReadLocalP256PublicKeyCompleteData),
-    GenerateDHKeyComplete(LEGenerateDHKeyCompleteData),
-    EnhancedConnectionComplete(LEEnhancedConnectionCompleteData),
-    DirectedAdvertisingReport(BufferType<[LEDirectedAdvertisingReportData]>),
-    PHYUpdateComplete(LEPHYUpdateCompleteData),
-    ExtendedAdvertisingReport(BufferType<[LEExtendedAdvertisingReportData]>),
-    PeriodicAdvertisingSyncEstablished(LEPeriodicAdvertisingSyncEstablishedData),
-    PeriodicAdvertisingReport(LEPeriodicAdvertisingReportData),
-    PeriodicAdvertisingSyncLost(LEPeriodicAdvertisingSyncLostData),
-    ScanTimeout,
-    AdvertisingSetTerminated(LEAdvertisingSetTerminatedData),
-    ScanRequestReceived(LEScanRequestReceivedData),
-    ChannelSelectionAlgorithm(LEChannelSelectionAlgorithmData),
+/// Used for splitting up the enumeration - one for without data and one with the data
+macro_rules! enumerate_split {
+    ( $( #[ $attrs_1:meta ] )* pub enum $EnumName:tt ( $( #[ $attrs_2:meta ] )* enum $EnumDataName:tt ) {
+        $( $name:tt $(( $($val:tt),* ))* $({ $( $data:ident $(< $($type:ty),* >)* ),* })*, )*
+    } ) => {
+
+        $( #[$attrs_1] )*
+        pub enum $EnumName {
+            $( $name $(( $($val),* ))* ),*
+        }
+
+        $( #[$attrs_2] )*
+        pub enum $EnumDataName {
+            $( $name $(( $( $data $(< $($type),* >)* ),* )),*),*
+        }
+    }
+}
+
+enumerate_split! {
+    #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+    pub enum LEMeta ( #[derive(Clone)] enum LEMetaData ) {
+        ConnectionComplete{LEConnectionCompleteData},
+        AdvertisingReport{BufferType<[LEAdvertisingReportData]>},
+        ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
+        ReadRemoteFeaturesComplete{LEReadRemoteFeaturesCompleteData},
+        LongTermKeyRequest{LELongTermKeyRequestData},
+        RemoteConnectionParameterRequest{LERemoteConnectionParameterRequestData},
+        DataLengthChange{LEDataLengthChangeData},
+        ReadLocalP256PublicKeyComplete{LEReadLocalP256PublicKeyCompleteData},
+        GenerateDHKeyComplete{LEGenerateDHKeyCompleteData},
+        EnhancedConnectionComplete{LEEnhancedConnectionCompleteData},
+        DirectedAdvertisingReport{BufferType<[LEDirectedAdvertisingReportData]>},
+        PHYUpdateComplete{LEPHYUpdateCompleteData},
+        ExtendedAdvertisingReport{BufferType<[LEExtendedAdvertisingReportData]>},
+        PeriodicAdvertisingSyncEstablished{LEPeriodicAdvertisingSyncEstablishedData},
+        PeriodicAdvertisingReport{LEPeriodicAdvertisingReportData},
+        PeriodicAdvertisingSyncLost{LEPeriodicAdvertisingSyncLostData},
+        ScanTimeout,
+        AdvertisingSetTerminated{LEAdvertisingSetTerminatedData},
+        ScanRequestReceived{LEScanRequestReceivedData},
+        ChannelSelectionAlgorithm{LEChannelSelectionAlgorithmData},
+    }
+}
+
+impl LEMeta {
+    fn from( raw: u8 ) -> LEMeta {
+        match raw {
+            0x01 => LEMeta::ConnectionComplete,
+            0x02 => LEMeta::AdvertisingReport,
+            0x03 => LEMeta::ConnectionUpdateComplete,
+            0x04 => LEMeta::ReadRemoteFeaturesComplete,
+            0x05 => LEMeta::LongTermKeyRequest,
+            0x06 => LEMeta::RemoteConnectionParameterRequest,
+            0x07 => LEMeta::DataLengthChange,
+            0x08 => LEMeta::ReadLocalP256PublicKeyComplete,
+            0x09 => LEMeta::GenerateDHKeyComplete,
+            0x0A => LEMeta::EnhancedConnectionComplete,
+            0x0B => LEMeta::DirectedAdvertisingReport,
+            0x0C => LEMeta::PHYUpdateComplete,
+            0x0D => LEMeta::ExtendedAdvertisingReport,
+            0x0E => LEMeta::PeriodicAdvertisingSyncEstablished,
+            0x0F => LEMeta::PeriodicAdvertisingReport,
+            0x10 => LEMeta::PeriodicAdvertisingSyncLost,
+            0x11 => LEMeta::ScanTimeout,
+            0x12 => LEMeta::AdvertisingSetTerminated,
+            0x13 => LEMeta::ScanRequestReceived,
+            0x14 => LEMeta::ChannelSelectionAlgorithm,
+            _    => panic!("Unknown {}", raw),
+        }
+    }
+}
+
+impl LEMetaData {
+    fn into_simple(&self) -> LEMeta {
+        match *self {
+            LEMetaData::ConnectionComplete(_) => LEMeta::ConnectionComplete,
+            LEMetaData::AdvertisingReport(_) => LEMeta::AdvertisingReport,
+            LEMetaData::ConnectionUpdateComplete(_) => LEMeta::ConnectionUpdateComplete,
+            LEMetaData::ReadRemoteFeaturesComplete(_) => LEMeta::ReadRemoteFeaturesComplete,
+            LEMetaData::LongTermKeyRequest(_) => LEMeta::LongTermKeyRequest,
+            LEMetaData::RemoteConnectionParameterRequest(_) => LEMeta::RemoteConnectionParameterRequest,
+            LEMetaData::DataLengthChange(_) => LEMeta::DataLengthChange,
+            LEMetaData::ReadLocalP256PublicKeyComplete(_) => LEMeta::ReadLocalP256PublicKeyComplete,
+            LEMetaData::GenerateDHKeyComplete(_) => LEMeta::GenerateDHKeyComplete,
+            LEMetaData::EnhancedConnectionComplete(_) => LEMeta::EnhancedConnectionComplete,
+            LEMetaData::DirectedAdvertisingReport(_) => LEMeta::DirectedAdvertisingReport,
+            LEMetaData::PHYUpdateComplete(_) => LEMeta::PHYUpdateComplete,
+            LEMetaData::ExtendedAdvertisingReport(_) => LEMeta::ExtendedAdvertisingReport,
+            LEMetaData::PeriodicAdvertisingSyncEstablished(_) => LEMeta::PeriodicAdvertisingSyncEstablished,
+            LEMetaData::PeriodicAdvertisingReport(_) => LEMeta::PeriodicAdvertisingReport,
+            LEMetaData::PeriodicAdvertisingSyncLost(_) => LEMeta::PeriodicAdvertisingSyncLost,
+            LEMetaData::ScanTimeout => LEMeta::ScanTimeout,
+            LEMetaData::AdvertisingSetTerminated(_) => LEMeta::AdvertisingSetTerminated,
+            LEMetaData::ScanRequestReceived(_) => LEMeta::ScanRequestReceived,
+            LEMetaData::ChannelSelectionAlgorithm(_) => LEMeta::ChannelSelectionAlgorithm,
+        }
+    }
 }
 
 impl_from_for_raw_packet! {
@@ -3260,6 +3379,12 @@ impl_from_for_raw_packet! {
             0x14 => ChannelSelectionAlgorithm(LEChannelSelectionAlgorithmData::from(packet)),
             _    => panic!("Unknown {}", packet[0]),
         }
+    }
+}
+
+impl From<LEMeta> for Events {
+    fn from(meta: LEMeta) -> Events {
+        Events::LEMeta(meta)
     }
 }
 
@@ -3384,38 +3509,48 @@ impl_from_for_raw_packet! {
     }
 }
 
+macro_rules! put_ { ( $t:tt ) => { _ } }
+
+macro_rules! data_into_simple { ($unused_rpt:tt, $data_var:expr) => { $data_var.into_simple() } }
+
 macro_rules! events_markup {
     ( pub enum $EnumName:tt ( $EnumDataName:tt ) {
-        $( $name:tt($data:ident $(< $type:ty >)*) -> $val:expr, )*
+        $( $name:tt $(( $($enum_val:tt),* ))* {$data:ident $(< $type:ty >)*} -> $val:expr, )*
     } ) => (
-        #[derive(Debug,Hash,PartialEq,Clone,Copy,Eq,PartialOrd,Ord)]
-        pub enum $EnumName {
-            $( $name ),*
+
+        #[cfg(not(test))]
+        enumerate_split! {
+            #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+            pub enum $EnumName ( enum $EnumDataName ){
+                $( $name $(( $($enum_val),* ))* {$data $(< $type >)*}, )*
+            }
+        }
+
+        #[cfg(test)]
+        enumerate_split! {
+            #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+            pub enum $EnumName ( enum $EnumDataName ){
+                $( $name $(( $($enum_val),* ))* {$data $(< $type >)* , BufferType<[u8]> }, )*
+            }
         }
 
         impl ::hci::events::$EnumName {
             pub(crate) fn get_val( &self ) -> u8 {
                 match *self {
-                    $(::hci::events::$EnumName::$name => $val,)*
+                    $(::hci::events::$EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
                 }
             }
 
-            pub(crate) fn from_raw( val: u8) -> ::hci::events::$EnumName {
-                match val {
-                    $($val => ::hci::events::$EnumName::$name,)*
-                    _ => panic!("Unknown Event ID: {}", val),
+            /// The from raw normaly only needs to have the first val (`vals.0`) for determining the
+            /// enum conversion. Bun in the case where the first val matches LEMeta, the second
+            /// value (`vals.1`) is used to determine the LEMeta sub event.
+            pub(crate) fn from_raw( vals: (u8, u8) ) -> ::hci::events::$EnumName {
+                match vals.0 {
+                    $( $val => ::hci::events::$EnumName::$name $(( $($enum_val::from(vals.1))* ))*, )*
+                    _ => panic!("Unknown Event ID: {}", vals.0),
                 }
             }
-        }
 
-        #[cfg(not(test))]
-        pub enum $EnumDataName {
-            $( $name($data <$( $type ),*> ), ) *
-        }
-
-        #[cfg(test)]
-        pub enum $EnumDataName {
-            $( $name($data <$( $type ),*>, BufferType<[u8]> ), ) *
         }
 
         impl ::hci::events::$EnumDataName {
@@ -3423,12 +3558,14 @@ macro_rules! events_markup {
             pub(crate) fn get_enum_name(&self) -> $EnumName {
                 #[cfg(not(test))]
                 match *self {
-                    $( ::hci::events::$EnumDataName::$name(_) => ::hci::events::$EnumName::$name, )*
+                    $( ::hci::events::$EnumDataName::$name(ref _data) =>
+                        ::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
 
                 #[cfg(test)]
                 match *self {
-                    $( ::hci::events::$EnumDataName::$name(_,_) => ::hci::events::$EnumName::$name, )*
+                    $( ::hci::events::$EnumDataName::$name(ref _data,_) =>
+                        ::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
             }
 
@@ -3440,7 +3577,10 @@ macro_rules! events_markup {
                 let mut packet = data;
 
                 let hci_msg_type = chew!(packet);
-                let event_code = ::hci::events::$EnumName::from_raw(chew!(packet));
+
+                // packet[1] is the LEMeta specific event code if the event is LEMeta
+                let event_code = ::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
+
                 let event_len  = chew!(packet);
 
                 // The first byte indicates what HCI packet the HCI message is. A value of 4
@@ -3459,7 +3599,7 @@ macro_rules! events_markup {
 
                 #[cfg(not(test))]
                 match event_code {
-                    $( ::hci::events::$EnumName::$name =>
+                    $( ::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
                         ::hci::events::$EnumDataName::$name(
                             ::hci::events::$data::<$( $type ),*>::from(packet)),
                     )*
@@ -3467,13 +3607,21 @@ macro_rules! events_markup {
 
                 #[cfg(test)]
                 match event_code {
-                    $( ::hci::events::$EnumName::$name =>
+                    $( ::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
                         ::hci::events::$EnumDataName::$name(
                             ::hci::events::$data::<$( $type ),*>::from(packet),
-                            ::core::vec::Vec::from(data).into_boxed_slice()
+                            ::std::vec::Vec::from(data).into_boxed_slice()
                         ),
                     )*
                 }
+            }
+        }
+
+        impl ::core::fmt::Debug for ::hci::events::$EnumDataName {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+                write!( f, "{}", match *self {
+                    $(::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
+                })
             }
         }
     )
@@ -3481,81 +3629,81 @@ macro_rules! events_markup {
 
 events_markup! {
     pub enum Events(EventsData) {
-        InquiryComplete(InquiryCompleteData) -> 0x01,
-        InquiryResult(Multiple<[InquiryResultData]>) -> 0x02,
-        ConnectionComplete(ConnectionCompleteData) -> 0x03,
-        ConnectionRequest(ConnectionRequestData) -> 0x04,
-        DisconnectionComplete(DisconnectionCompleteData) -> 0x05,
-        AuthenticationComplete(AuthenticationCompleteData) -> 0x06,
-        RemoteNameRequestComplete(RemoteNameRequestCompleteData) -> 0x07,
-        EncryptionChange(EncryptionChangeData) -> 0x08,
-        ChangeConnectionLinkKeyComplete(ChangeConnectionLinkKeyCompleteData) -> 0x09,
-        MasterLinkKeyComplete(MasterLinkKeyCompleteData) -> 0x0A,
-        ReadRemoteSupportedFeaturesComplete(ReadRemoteSupportedFeaturesCompleteData) -> 0x0B,
-        ReadRemoteVersionInformationComplete(ReadRemoteVersionInformationCompleteData) -> 0x0C,
-        QosSetupComplete(QosSetupCompleteData) -> 0x0D,
-        CommandComplete(CommandCompleteData) -> 0x0E,
-        CommandStatus(CommandStatusData) -> 0x0F,
-        HardwareError(HardwareErrorData) -> 0x10,
-        FlushOccured(FlushOccuredData) -> 0x11,
-        RoleChange(RoleChangeData) -> 0x12,
-        NumberOfCompletedPackets(Multiple<[NumberOfCompletedPacketsData]>) -> 0x13,
-        ModeChange(ModeChangeData) -> 0x14,
-        ReturnLinkKeys(Multiple<[ReturnLinkKeysData]>) -> 0x15,
-        PINCodeRequest(PINCodeRequestData) -> 0x16,
-        LinkKeyRequest(LinkKeyRequestData) -> 0x17,
-        LinkKeyNotification(LinkKeyNotificationData) -> 0x18,
-        LoopbackCommand(LoopbackCommandData) -> 0x19,
-        DataBufferOverflow(DataBufferOverflowData) -> 0x1A,
-        MaxSlotsChange(MaxSlotsChangeData) -> 0x1B,
-        ReadClockOffsetComplete(ReadClockOffsetCompleteData) -> 0x1C,
-        ConnectionPacketTypeChanged(ConnectionPacketTypeChangedData) -> 0x1D,
-        QoSViolation(QoSViolationData) -> 0x1E,
-        PageScanRepitionModeChange(PageScanRepitionModeChangeData) -> 0x20,
-        FlowSpecificationComplete(FlowSpecificationCompleteData) -> 0x21,
-        InquiryResultWithRSSI(Multiple<[InquiryResultWithRSSIData]>) -> 0x22,
-        ReadRemoteExtendedFeaturesComplete(ReadRemoteExtendedFeaturesCompleteData) -> 0x23,
-        SynchronousConnectionComplete(SynchronousConnectionCompleteData) -> 0x2C,
-        SynchronousConnectionChanged(SynchronousConnectionChangedData) -> 0x2D,
-        SniffSubrating(SniffSubratingData) -> 0x2E,
-        ExtendedInquiryResult(ExtendedInquiryResultData) -> 0x2F,
-        EncryptuionKeyRefreshComplete(EncryptuionKeyRefreshCompleteData) -> 0x30,
-        IOCapabilityRequest(IOCapabilityRequestData) -> 0x31,
-        IOCapabilityResponse(IOCapabilityResponseData) -> 0x32,
-        UserConfirmationRequest(UserConfirmationRequestData) -> 0x33,
-        UserPasskeyRequest(UserPasskeyRequestData) -> 0x34,
-        RemoteOOBDataRequest(RemoteOOBDataRequestData) -> 0x35,
-        SimplePairingComplete(SimplePairingCompleteData) -> 0x36,
-        LinkSupervisionTimeoutChanged(LinkSupervisionTimeoutChangedData) -> 0x38,
-        EnhancedFlushComplete(EnhancedFlushCompleteData) -> 0x39,
-        UserPasskeyNotification(UserPasskeyNotificationData) -> 0x3B,
-        KeypressNotification(KeypressNotificationData) -> 0x3C,
-        RemoteHostSupportedFeaturesNotification(RemoteHostSupportedFeaturesNotificationData) -> 0x3D,
-        PhysicalLinkComplete(PhysicalLinkCompleteData) -> 0x40,
-        ChannelSelected(ChannelSelectedData) -> 0x41,
-        DisconnectionPhysicalLinkComplete(DisconnectionPhysicalLinkCompleteData) -> 0x42,
-        PhysicalLInkLossEarlyWarning(PhysicalLInkLossEarlyWarningData) -> 0x43,
-        PhysicalLinkRecovery(PhysicalLinkRecoveryData) -> 0x44,
-        LogicalLinkComplete(LogicalLinkCompleteData) -> 0x45,
-        DisconnectionLogicalLinkComplete(DisconnectionLogicalLinkCompleteData) -> 0x46,
-        FlowSpecModifyComplete(FlowSpecModifyCompleteData) -> 0x47,
-        NumberOfCompletedDataBlocks(NumberOfCompletedDataBlocksData) -> 0x48,
-        ShortRangeModeChangeComplete(ShortRangeModeChangeCompleteData) -> 0x4C,
-        AMPStatusChange(AMPStatusChangeData) -> 0x4D,
-        AMPStartTest(AMPStartTestData) -> 0x49,
-        AMPTestEnd(AMPTestEndData) -> 0x4A,
-        AMPReceiverReport(AMPReceiverReportData) -> 0x4B,
-        LEMeta(LEMetaData) -> 0x3E,
-        TriggeredClockCapture(TriggeredClockCaptureData) -> 0x4E,
-        SynchronizationTrainComplete(SynchronizationTrainCompleteData) -> 0x4F,
-        SynchronizationTrainReceived(SynchronizationTrainReceivedData) -> 0x50,
-        ConnectionlessSlaveBroadcastReceive(ConnectionlessSlaveBroadcastReceiveData) -> 0x51,
-        ConnectionlessSlaveBroadcastTimeout(ConnectionlessSlaveBroadcastTimeoutData) -> 0x52,
-        TruncatedPageComplete(TruncatedPageCompleteData) -> 0x53,
-        SlavePageRespoinseTimeout(SlavePageRespoinseTimeoutData) -> 0x54,
-        ConnectionlessSlaveBroadcastChannelMapChange(ConnectionlessSlaveBroadcastChannelMapChangeData) -> 0x55,
-        InquiryResponseNotification(InquiryResponseNotificationData) -> 0x56,
-        AuthenticatedPayloadTimeoutExpired(AuthenticatedPayloadTimeoutExpiredData) -> 0x57,
-        SAMStatusChange(SAMStatusChangeData) -> 0x58,
+        InquiryComplete{InquiryCompleteData} -> 0x01,
+        InquiryResult{Multiple<[InquiryResultData]>} -> 0x02,
+        ConnectionComplete{ConnectionCompleteData} -> 0x03,
+        ConnectionRequest{ConnectionRequestData} -> 0x04,
+        DisconnectionComplete{DisconnectionCompleteData} -> 0x05,
+        AuthenticationComplete{AuthenticationCompleteData} -> 0x06,
+        RemoteNameRequestComplete{RemoteNameRequestCompleteData} -> 0x07,
+        EncryptionChange{EncryptionChangeData} -> 0x08,
+        ChangeConnectionLinkKeyComplete{ChangeConnectionLinkKeyCompleteData} -> 0x09,
+        MasterLinkKeyComplete{MasterLinkKeyCompleteData} -> 0x0A,
+        ReadRemoteSupportedFeaturesComplete{ReadRemoteSupportedFeaturesCompleteData} -> 0x0B,
+        ReadRemoteVersionInformationComplete{ReadRemoteVersionInformationCompleteData} -> 0x0C,
+        QosSetupComplete{QosSetupCompleteData} -> 0x0D,
+        CommandComplete{CommandCompleteData} -> 0x0E,
+        CommandStatus{CommandStatusData} -> 0x0F,
+        HardwareError{HardwareErrorData} -> 0x10,
+        FlushOccured{FlushOccuredData} -> 0x11,
+        RoleChange{RoleChangeData} -> 0x12,
+        NumberOfCompletedPackets{Multiple<[NumberOfCompletedPacketsData]>} -> 0x13,
+        ModeChange{ModeChangeData} -> 0x14,
+        ReturnLinkKeys{Multiple<[ReturnLinkKeysData]>} -> 0x15,
+        PINCodeRequest{PINCodeRequestData} -> 0x16,
+        LinkKeyRequest{LinkKeyRequestData} -> 0x17,
+        LinkKeyNotification{LinkKeyNotificationData} -> 0x18,
+        LoopbackCommand{LoopbackCommandData} -> 0x19,
+        DataBufferOverflow{DataBufferOverflowData} -> 0x1A,
+        MaxSlotsChange{MaxSlotsChangeData} -> 0x1B,
+        ReadClockOffsetComplete{ReadClockOffsetCompleteData} -> 0x1C,
+        ConnectionPacketTypeChanged{ConnectionPacketTypeChangedData} -> 0x1D,
+        QoSViolation{QoSViolationData} -> 0x1E,
+        PageScanRepitionModeChange{PageScanRepitionModeChangeData} -> 0x20,
+        FlowSpecificationComplete{FlowSpecificationCompleteData} -> 0x21,
+        InquiryResultWithRSSI{Multiple<[InquiryResultWithRSSIData]>} -> 0x22,
+        ReadRemoteExtendedFeaturesComplete{ReadRemoteExtendedFeaturesCompleteData} -> 0x23,
+        SynchronousConnectionComplete{SynchronousConnectionCompleteData} -> 0x2C,
+        SynchronousConnectionChanged{SynchronousConnectionChangedData} -> 0x2D,
+        SniffSubrating{SniffSubratingData} -> 0x2E,
+        ExtendedInquiryResult{ExtendedInquiryResultData} -> 0x2F,
+        EncryptuionKeyRefreshComplete{EncryptuionKeyRefreshCompleteData} -> 0x30,
+        IOCapabilityRequest{IOCapabilityRequestData} -> 0x31,
+        IOCapabilityResponse{IOCapabilityResponseData} -> 0x32,
+        UserConfirmationRequest{UserConfirmationRequestData} -> 0x33,
+        UserPasskeyRequest{UserPasskeyRequestData} -> 0x34,
+        RemoteOOBDataRequest{RemoteOOBDataRequestData} -> 0x35,
+        SimplePairingComplete{SimplePairingCompleteData} -> 0x36,
+        LinkSupervisionTimeoutChanged{LinkSupervisionTimeoutChangedData} -> 0x38,
+        EnhancedFlushComplete{EnhancedFlushCompleteData} -> 0x39,
+        UserPasskeyNotification{UserPasskeyNotificationData} -> 0x3B,
+        KeypressNotification{KeypressNotificationData} -> 0x3C,
+        RemoteHostSupportedFeaturesNotification{RemoteHostSupportedFeaturesNotificationData} -> 0x3D,
+        PhysicalLinkComplete{PhysicalLinkCompleteData} -> 0x40,
+        ChannelSelected{ChannelSelectedData} -> 0x41,
+        DisconnectionPhysicalLinkComplete{DisconnectionPhysicalLinkCompleteData} -> 0x42,
+        PhysicalLInkLossEarlyWarning{PhysicalLInkLossEarlyWarningData} -> 0x43,
+        PhysicalLinkRecovery{PhysicalLinkRecoveryData} -> 0x44,
+        LogicalLinkComplete{LogicalLinkCompleteData} -> 0x45,
+        DisconnectionLogicalLinkComplete{DisconnectionLogicalLinkCompleteData} -> 0x46,
+        FlowSpecModifyComplete{FlowSpecModifyCompleteData} -> 0x47,
+        NumberOfCompletedDataBlocks{NumberOfCompletedDataBlocksData} -> 0x48,
+        ShortRangeModeChangeComplete{ShortRangeModeChangeCompleteData} -> 0x4C,
+        AMPStatusChange{AMPStatusChangeData} -> 0x4D,
+        AMPStartTest{AMPStartTestData} -> 0x49,
+        AMPTestEnd{AMPTestEndData} -> 0x4A,
+        AMPReceiverReport{AMPReceiverReportData} -> 0x4B,
+        LEMeta(LEMeta){LEMetaData} -> 0x3E,
+        TriggeredClockCapture{TriggeredClockCaptureData} -> 0x4E,
+        SynchronizationTrainComplete{SynchronizationTrainCompleteData} -> 0x4F,
+        SynchronizationTrainReceived{SynchronizationTrainReceivedData} -> 0x50,
+        ConnectionlessSlaveBroadcastReceive{ConnectionlessSlaveBroadcastReceiveData} -> 0x51,
+        ConnectionlessSlaveBroadcastTimeout{ConnectionlessSlaveBroadcastTimeoutData} -> 0x52,
+        TruncatedPageComplete{TruncatedPageCompleteData} -> 0x53,
+        SlavePageRespoinseTimeout{SlavePageRespoinseTimeoutData} -> 0x54,
+        ConnectionlessSlaveBroadcastChannelMapChange{ConnectionlessSlaveBroadcastChannelMapChangeData} -> 0x55,
+        InquiryResponseNotification{InquiryResponseNotificationData} -> 0x56,
+        AuthenticatedPayloadTimeoutExpired{AuthenticatedPayloadTimeoutExpiredData} -> 0x57,
+        SAMStatusChange{SAMStatusChangeData} -> 0x58,
     }
 }
