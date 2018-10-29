@@ -73,7 +73,7 @@ pub enum Error {
     Type0SubmapNotDefined,
     UnknownAdvertisingIdentifier,
     LimitReached,
-    OperationCancelledByHose,
+    OperationCancelledByHost,
 }
 
 impl Debug for Error {
@@ -218,7 +218,7 @@ impl Debug for Error {
                 write!(f, "UnknownAdvertisingIdentifier (0x{:X})", 0x42)
             }
             LimitReached => write!(f, "LimitReached (0x{:X})", 0x43),
-            OperationCancelledByHose => write!(f, "OperationCancelledByHose (0x{:X})", 0x44),
+            OperationCancelledByHost => write!(f, "OperationCancelledByHost (0x{:X})", 0x44),
         }
     }
 }
@@ -293,7 +293,7 @@ impl From<u8> for Error {
             0x41 => Type0SubmapNotDefined,
             0x42 => UnknownAdvertisingIdentifier,
             0x43 => LimitReached,
-            0x44 => OperationCancelledByHose,
+            0x44 => OperationCancelledByHost,
             _ => panic!(r#"Cannot convert "{}" into HCI Error"#, raw),
         }
     }

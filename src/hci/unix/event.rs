@@ -1,4 +1,4 @@
-use bluez;
+use super::bluez;
 use hci::events;
 use std::cell::Cell;
 use std::cmp::{PartialEq,PartialOrd,Ordering};
@@ -43,7 +43,7 @@ impl EventFlag {
         filter.type_mask |= 1 << bluez::HCI_EVENT_PKT;
 
         // Copied from bluez hci_lib.h hci_set_bit
-        filter.event_mask[ eval >> 5] |= 1 << (eval & 31);
+        filter.event_mask[ eval >> 5] |= 1 << (eval & bluez::HCI_FLT_TYPE_BITS);
 
         Errno::result( unsafe { setsockopt(
             adapter_fd.raw_fd(),

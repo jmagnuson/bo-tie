@@ -8,6 +8,7 @@ macro_rules! hci_future_output {
     () => { ::core::result::Result<::hci::events::EventsData,impl ::core::fmt::Display + ::core::fmt::Debug> }
 }
 
+mod opcodes;
 pub mod common;
 pub mod error;
 #[macro_use] pub mod events;
@@ -38,10 +39,9 @@ pub enum CommandError<SysErr,SpecErr>
 trait CommandParameters {
     /// The command parameter to return
     type Parameter;
-    /// OpCode Group Field for the command
-    const OGF: u16;
-    /// Command identifier (OpCode Command Field)
-    const OCF: u16;
+
+    /// Command
+    const COMMAND: opcodes::HCICommand;
 
     fn get_parameter(&self) -> Self::Parameter;
 }
@@ -123,7 +123,7 @@ impl ::core::default::Default for HostInterface {
 
 /// For commands that only return a status
 macro_rules! impl_status_return {
-    ($ocf:expr, $ogf:expr ) => {
+    ($command:expr) => {
         pub struct Return;
 
         impl Return {
@@ -139,7 +139,7 @@ macro_rules! impl_status_return {
             }
         }
 
-        impl_get_data_for_command!($ocf, $ogf, u8, Return, (), error::Error);
+        impl_get_data_for_command!($command, u8, Return, (), error::Error);
     }
 }
 
@@ -233,9 +233,30 @@ mod test_util {
             }
         }
     }
+
+    #[macro_use]
+    macro_rules! command_complete_fail_test {
+        ( $future_return:expr, $ret_ty:ty ) => {
+            match $future_return {
+                events::EventsData::CommandComplete(ref data, _) => {
+                    let return_val = unsafe {
+                        (data as &::hci::events::GetDataForCommand<$ret_ty>).get_return()
+                    };
+
+                    if let Ok(_) = return_val {
+                        panic!("Command Complete didn't return an error, valid data or an update \
+                            command complete event was received");
+                    }
+                    /* Else test was ok */
+                },
+                _ => {
+                    panic!("Expected Command Complete Event");
+                }
+            }
+        };
+    }
 }
 
-#[cfg(not(no_le))]
 pub mod le {
 
     #[macro_use]
@@ -490,12 +511,7 @@ pub mod le {
     pub mod mandatory {
 
         macro_rules! add_remove_white_list_setup {
-            ( $ocf: ident ) => {
-
-                use bluez::{
-                    $ocf,
-                    OGF_LE_CTL
-                };
+            ( $command: ident ) => {
                 use hci::*;
                 use hci::events::Events;
                 use hci::le::common::AddressType;
@@ -504,15 +520,14 @@ pub mod le {
                 ///
                 /// Not using bluez becasue there are different parameter structs for the
                 /// two commands even though they are the same in structure.
-                #[repr(C, packed)]
+                #[repr(packed)]
                 #[derive(Clone, Copy)]
                 struct CommandPrameter {
-                    address_type: u8,
-                    address: [u8;6],
+                    _address_type: u8,
+                    _address: [u8;6],
                 }
 
-
-                impl_status_return!( $ocf, OGF_LE_CTL);
+                impl_status_return!( $command );
 
 
                 pub fn send( hci: &HostInterface,
@@ -520,8 +535,8 @@ pub mod le {
                     addr: ::BluetoothDeviceAddress ) -> hci_return!()
                 {
                     let parameter = CommandPrameter {
-                        address_type: at.to_value(),
-                        address: addr,
+                        _address_type: at.to_value(),
+                        _address: addr,
                     };
 
                     hci.send_command(parameter, Events::CommandComplete, Duration::from_secs(1) )
@@ -529,15 +544,15 @@ pub mod le {
 
                 impl CommandParameters for CommandPrameter {
                     type Parameter = Self;
-                    const OGF: u16 = OGF_LE_CTL as u16;
-                    const OCF: u16 = $ocf as u16;
+                    const COMMAND: opcodes::HCICommand = $command;
                     fn get_parameter(&self) -> Self::Parameter { *self }
                 }
             };
         }
         pub mod add_device_to_white_list {
+            const COMMAND: ::hci::opcodes::HCICommand = ::hci::opcodes::HCICommand::LEController(::hci::opcodes::LEController::AddDeviceToWhiteList);
 
-            add_remove_white_list_setup!(OCF_LE_ADD_DEVICE_TO_WHITE_LIST);
+            add_remove_white_list_setup!(COMMAND);
 
             #[cfg(test)]
             mod tests {
@@ -614,23 +629,20 @@ pub mod le {
         }
         pub mod clear_white_list {
 
-            use bluez::{
-                OGF_LE_CTL,
-                OCF_LE_CLEAR_WHITE_LIST,
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ClearWhiteList);
 
             #[derive(Clone, Copy)]
             struct Prameter;
 
             impl CommandParameters for Prameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_CLEAR_WHITE_LIST as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            impl_status_return!( OCF_LE_CLEAR_WHITE_LIST, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
             pub fn send( hci: &HostInterface ) -> hci_return!() {
                 hci.send_command(Prameter, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -640,7 +652,6 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use bluez;
                 use hci::test_util::block_for_command_result;
                 use std::process::Command;
 
@@ -705,20 +716,23 @@ pub mod le {
         }
         pub mod read_buffer_size {
 
-            use bluez::{
-                le_read_buffer_size_rp,
-                OGF_LE_CTL,
-                OCF_LE_READ_BUFFER_SIZE
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                packet_length: u16,
+                maximum_packet_cnt: u8,
+            }
 
             #[derive(Clone,Copy)]
             struct Parameter;
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_BUFFER_SIZE as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
@@ -737,13 +751,22 @@ pub mod le {
             }
 
             impl BufferSize {
-                fn try_from(packed: le_read_buffer_size_rp) -> Result<Self, error::Error >{
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error >{
                     let err_val = error::Error::from(packed.status);
 
                     match err_val {
                         error::Error::NoError => {
-                            let len = if packed.pkt_len != 0 { Some(packed.pkt_len) } else { None };
-                            let cnt = if packed.max_pkt != 0 { Some(packed.max_pkt) } else { None };
+                            let len = if packed.packet_length != 0 {
+                                Some(packed.packet_length)
+                            } else {
+                                None
+                            };
+
+                            let cnt = if packed.maximum_packet_cnt != 0 {
+                                Some(packed.maximum_packet_cnt)
+                            } else {
+                                None
+                            };
 
                             Ok(BufferSize {
                                 packet_len: len,
@@ -756,9 +779,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_BUFFER_SIZE,
-                OGF_LE_CTL,
-                le_read_buffer_size_rp,
+                COMMAND,
+                CmdReturn,
                 BufferSize,
                 error::Error);
 
@@ -785,16 +807,19 @@ pub mod le {
         }
         pub mod read_local_supported_features {
 
-            use bluez::{
-                le_read_local_supported_features_rp,
-                OGF_LE_CTL,
-                OCF_LE_READ_LOCAL_SUPPORTED_FEATURES
-            };
             use hci::common::EnabledLEFeaturesItr;
             use hci::*;
 
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                features: [u8;8]
+            }
+
             impl EnabledLEFeaturesItr {
-                fn try_from( packed: le_read_local_supported_features_rp ) -> Result<Self,error::Error> {
+                fn try_from( packed: CmdReturn ) -> Result<Self,error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -807,9 +832,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_LOCAL_SUPPORTED_FEATURES,
-                OGF_LE_CTL,
-                le_read_local_supported_features_rp,
+                COMMAND,
+                CmdReturn,
                 EnabledLEFeaturesItr,
                 error::Error
             );
@@ -819,8 +843,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_LOCAL_SUPPORTED_FEATURES as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -847,16 +870,18 @@ pub mod le {
         }
         pub mod read_supported_states {
 
-            use bluez::{
-                le_read_supported_states_rp,
-                OGF_LE_CTL,
-                OCF_LE_READ_SUPPORTED_STATES
-            };
             use hci::*;
             use alloc::collections::BTreeSet;
             use alloc::vec::Vec;
             use core::mem::size_of_val;
 
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                states: [u8;8],
+            }
 
             /// All possible states/roles a controller can be in
             #[derive(PartialEq,Eq,PartialOrd,Ord,Debug)]
@@ -982,30 +1007,30 @@ pub mod le {
                 }
 
                 /// This function will return all the supported states
-                fn get_supported_states( rss: &le_read_supported_states_rp) -> Vec<Self> {
+                fn get_supported_states( rss: &CmdReturn) -> Vec<Self> {
 
                     let mut set = BTreeSet::new();
 
                     let count = StatesAndRoles::get_bit_count();
 
-                    let temp = rss.states;
-
-                    for bit in 0..(size_of_val(&temp) * 8) {
-                        if bit < count {
-                            if 0 != rss.states & ( 1 << bit ) {
-                                for state_or_role in StatesAndRoles::get_states_for_bit_val( bit ) {
-                                    set.insert(state_or_role);
+                    for byte in 0..size_of_val(&rss.states) {
+                        for bit in 0..8 {
+                            if (byte * 8 + bit) < count {
+                                if 0 != rss.states[byte] & ( 1 << bit ) {
+                                    for state_or_role in StatesAndRoles::get_states_for_bit_val( bit ) {
+                                        set.insert(state_or_role);
+                                    }
                                 }
                             }
-                        }
-                        else {
-                            return StatesAndRoles::collect_to_vec(set);
+                            else {
+                                return StatesAndRoles::collect_to_vec(set);
+                            }
                         }
                     }
                     StatesAndRoles::collect_to_vec(set)
                 }
 
-                fn try_from(packed: le_read_supported_states_rp) -> Result<Vec<Self>, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Vec<Self>, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -1018,9 +1043,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_SUPPORTED_STATES,
-                OGF_LE_CTL,
-                le_read_supported_states_rp,
+                COMMAND,
+                CmdReturn,
                 StatesAndRoles,
                 Vec<StatesAndRoles>,
                 error::Error
@@ -1031,8 +1055,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_SUPPORTED_STATES as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1059,17 +1082,20 @@ pub mod le {
         }
         pub mod read_white_list_size {
 
-            use bluez::{
-                le_read_white_list_size_rp,
-                OGF_LE_CTL,
-                OCF_LE_READ_WHITE_LIST_SIZE,
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadWhiteListSize);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                size: u8,
+            }
 
             pub struct Return;
 
             impl Return {
-                fn try_from( packed: le_read_white_list_size_rp) -> Result<usize, error::Error> {
+                fn try_from( packed: CmdReturn) -> Result<usize, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -1082,9 +1108,8 @@ pub mod le {
             }
 
             impl_get_data_for_command! (
-                OCF_LE_READ_WHITE_LIST_SIZE,
-                OGF_LE_CTL,
-                le_read_white_list_size_rp,
+                COMMAND,
+                CmdReturn,
                 Return,
                 usize,
                 error::Error
@@ -1095,8 +1120,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_WHITE_LIST_SIZE as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1135,13 +1159,14 @@ pub mod le {
         }
         pub mod remove_device_from_white_list {
 
-            add_remove_white_list_setup!(OCF_LE_REMOVE_DEVICE_FROM_WHITE_LIST);
+            const COMMAND: ::hci::opcodes::HCICommand = ::hci::opcodes::HCICommand::LEController(::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
+
+            add_remove_white_list_setup!(COMMAND);
 
             #[cfg(test)]
             mod tests {
 
                 use super::*;
-                use bluez;
                 use hci::test_util::block_for_command_result;
                 use std::process::Command;
 
@@ -1189,7 +1214,7 @@ pub mod le {
                     .unwrap();
 
                     let result_2 = block_for_command_result(
-                        send(&hi, AddressType::PublicDeviceAddress, test_address_2).unwrap()
+                        send(&hi, AddressType::RandomDeviceAddress, test_address_2).unwrap()
                     )
                     .unwrap();
 
@@ -1200,20 +1225,17 @@ pub mod le {
 
                     command_complete_test!(result_l, Return);
                     command_complete_test!(result_2, Return);
-                    command_complete_test!(result_3, Return);
+                    command_complete_fail_test!(result_3, Return);
                 }
             }
         }
         pub mod set_event_mask {
 
-            use bluez::{
-                le_set_event_mask_cp,
-                OGF_LE_CTL,
-                OCF_LE_SET_EVENT_MASK,
-            };
             use hci::*;
             use alloc::vec::Vec;
             use hci::events::LEMeta;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
 
             impl LEMeta {
 
@@ -1256,12 +1278,17 @@ pub mod le {
                 }
             }
 
-            impl_status_return!( OCF_LE_SET_EVENT_MASK, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
-            impl CommandParameters for le_set_event_mask_cp {
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _mask: [u8;8]
+            }
+
+            impl CommandParameters for CmdParameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_EVENT_MASK as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1278,8 +1305,8 @@ pub mod le {
             /// ```
             pub fn send( hi: &HostInterface, enabled_events: Vec<LEMeta>) -> hci_return!() {
 
-                let command_pram = le_set_event_mask_cp {
-                    mask: LEMeta::build_mask(enabled_events),
+                let command_pram = CmdParameter {
+                    _mask: LEMeta::build_mask(enabled_events),
                 };
 
                 hi.send_command(command_pram, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -1290,7 +1317,7 @@ pub mod le {
 
                 use super::*;
                 use hci::test_util::block_for_command_result;
-                use hci::events::Events;
+                use hci::events::LEMeta;
 
                 #[test]
                 fn set_event_mask_test() {
@@ -1298,10 +1325,10 @@ pub mod le {
                     let hi = HostInterface::default();
 
                     let enabled_events = vec! [
-                        Events::LEConnectionComplete,
-                        Events::LEAdvertisingReport,
-                        Events::LEConnectionUpdateComplete,
-                        Events::LEReadRemoteFeaturesComplete,
+                        LEMeta::ConnectionComplete,
+                        LEMeta::AdvertisingReport,
+                        LEMeta::ConnectionUpdateComplete,
+                        LEMeta::ReadRemoteFeaturesComplete,
                     ];
 
                     let result = block_for_command_result(
@@ -1314,21 +1341,25 @@ pub mod le {
             }
         }
         pub mod test_end {
-            use bluez::{
-                le_test_end_rp,
-                OCF_LE_TEST_END,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TestEnd);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                number_of_packets: u16
+            }
 
             pub struct Return;
 
             impl Return {
-                fn try_from(packed: le_test_end_rp) -> Result<usize, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<usize, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
-                        Ok(packed.num_pkts as usize)
+                        Ok(packed.number_of_packets as usize)
                     }
                     else {
                         Err(status)
@@ -1337,9 +1368,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_TEST_END,
-                OGF_LE_CTL,
-                le_test_end_rp,
+                COMMAND,
+                CmdReturn,
                 Return,
                 usize,
                 error::Error
@@ -1350,8 +1380,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_TEST_END as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1380,26 +1409,29 @@ pub mod le {
                 }
             }
         }
-        /// This is part of the Informational Parameters opcode group
+        /// This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_bd_addr {
 
             use BluetoothDeviceAddress;
-            use bluez::{
-                read_bd_addr_rp,
-                OCF_READ_BD_ADDR,
-                OGF_INFO_PARAM,
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                address: ::BluetoothDeviceAddress,
+            }
 
             struct Return;
 
             impl Return {
-                fn try_from(packed: read_bd_addr_rp) -> Result<BluetoothDeviceAddress, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<BluetoothDeviceAddress, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
-                        Ok(packed.bdaddr.b)
+                        Ok(packed.address)
                     }
                     else {
                         Err(status)
@@ -1408,9 +1440,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_READ_BD_ADDR,
-                OGF_INFO_PARAM,
-                read_bd_addr_rp,
+                COMMAND,
+                CmdReturn,
                 Return,
                 BluetoothDeviceAddress,
                 error::Error
@@ -1421,8 +1452,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_INFO_PARAM as u16;
-                const OCF: u16 = OCF_READ_BD_ADDR as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1497,20 +1527,23 @@ pub mod le {
                 }
             }
         }
-        /// This is part of the Informational Parameters opcode group
+        /// This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_features {
 
-            use bluez::{
-                read_local_features_rp,
-                OCF_READ_LOCAL_FEATURES,
-                OGF_INFO_PARAM,
-            };
             use hci::*;
             use hci::common::EnabledFeaturesIter;
 
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                features: [u8;8],
+            }
+
             impl EnabledFeaturesIter {
-                fn try_from(packed: read_local_features_rp) -> Result<Self, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -1523,9 +1556,8 @@ pub mod le {
             }
 
             impl_get_data_for_command! (
-                OCF_READ_LOCAL_FEATURES,
-                OGF_INFO_PARAM,
-                read_local_features_rp,
+                COMMAND,
+                CmdReturn,
                 EnabledFeaturesIter,
                 error::Error
             );
@@ -1535,8 +1567,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_INFO_PARAM as u16;
-                const OCF: u16 = OCF_READ_LOCAL_FEATURES as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1562,16 +1593,23 @@ pub mod le {
                 }
             }
         }
-        // This is part of the Information Parameters opcode group
+        // This is part of the Information Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_version_information {
 
-            use bluez::{
-                read_local_version_rp,
-                OCF_READ_LOCAL_FEATURES,
-                OGF_INFO_PARAM,
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedVersionInformation);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                hci_version: u8,
+                hci_revision: u16,
+                lmp_pal_version: u8,
+                manufacturer_name: u16,
+                lmp_pal_subversion: u16,
+            }
 
             #[derive(Debug)]
             pub struct VersionInformation {
@@ -1583,16 +1621,16 @@ pub mod le {
             }
 
             impl VersionInformation {
-                fn try_from(packed: read_local_version_rp) -> Result<Self, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
                         Ok( Self {
-                            hci_version: packed.hci_ver,
-                            hci_revision: packed.hci_rev,
-                            lmp_pal_version: packed.lmp_ver,
-                            manufacturer_name: packed.manufacturer,
-                            lmp_pal_subversion: packed.lmp_subver,
+                            hci_version: packed.hci_version,
+                            hci_revision: packed.hci_revision,
+                            lmp_pal_version: packed.lmp_pal_version,
+                            manufacturer_name: packed.manufacturer_name,
+                            lmp_pal_subversion: packed.lmp_pal_subversion,
                         })
                     }
                     else {
@@ -1602,9 +1640,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_READ_LOCAL_FEATURES,
-                OGF_INFO_PARAM,
-                read_local_version_rp,
+                COMMAND,
+                CmdReturn,
                 VersionInformation,
                 error::Error
             );
@@ -1614,8 +1651,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_INFO_PARAM as u16;
-                const OCF: u16 = OCF_READ_LOCAL_FEATURES as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -1640,25 +1676,22 @@ pub mod le {
                 }
             }
         }
-        // This is part of the Host Controller and Baseband opcode group
+        // This is part of the Host Controller and Baseband opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod reset {
 
-            use bluez::{
-                OCF_RESET,
-                OGF_HOST_CTL,
-            };
             use hci::*;
 
-            impl_status_return!(OCF_RESET, OGF_HOST_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
+
+            impl_status_return!(COMMAND);
 
             #[derive(Clone,Copy)]
             struct Parameter;
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_HOST_CTL as u16;
-                const OCF: u16 = OCF_RESET as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
@@ -1684,17 +1717,21 @@ pub mod le {
                 }
             }
         }
-        // This is part of the Informational Parameters opcode group
+        // This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_commands {
-            use bluez::{
-                read_local_commands_rp,
-                OCF_READ_LOCAL_COMMANDS,
-                OGF_INFO_PARAM,
-            };
+
             use hci::*;
             use core::option::Option;
             use alloc::vec::Vec;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedCommands);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                supported_commands: [u8;64],
+            }
 
             #[cfg_attr(test,derive(Debug))]
             #[derive(PartialEq)]
@@ -2272,7 +2309,7 @@ pub mod le {
                 }
 
                 // TODO re-make this private
-                pub(crate) fn try_from( packed: read_local_commands_rp ) -> Result<Vec<Self>, error::Error> {
+                pub(crate) fn try_from( packed: CmdReturn ) -> Result<Vec<Self>, error::Error> {
 
                     let status = error::Error::from(packed.status);
 
@@ -2280,7 +2317,7 @@ pub mod le {
 
                         let mut sup_commands = Vec::new();
 
-                        let raw = &packed.commands;
+                        let raw = &packed.supported_commands;
 
                         for indx in 0..raw.len() {
                             for bit in 0..8 {
@@ -2301,9 +2338,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_READ_LOCAL_COMMANDS,
-                OGF_INFO_PARAM,
-                read_local_commands_rp,
+                COMMAND,
+                CmdReturn,
                 SupportedCommands,
                 Vec<SupportedCommands>,
                 error::Error
@@ -2314,8 +2350,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_INFO_PARAM as u16;
-                const OCF: u16 = OCF_READ_LOCAL_COMMANDS as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -2354,12 +2389,10 @@ pub mod le {
 
                     // Should be the worse than the worst case from the hci return for
                     // performance reasons.
-                    let test_data = read_local_commands_rp {
+                    b.iter( || { SupportedCommands::try_from(CmdReturn {
                         status : 0,
-                        commands: [0xFFu8;64], // worst case scenerio
-                    };
-
-                    b.iter(|| { SupportedCommands::try_from(test_data) } );
+                        supported_commands: [0xFFu8;64], // worst case scenerio
+                    }) } );
                 }
             }
         }
@@ -2367,12 +2400,16 @@ pub mod le {
 
     pub mod transmitter {
         pub mod read_advertising_channel_tx_power {
-            use bluez::{
-                le_read_advertising_channel_tx_power_rp,
-                OCF_LE_READ_ADVERTISING_CHANNEL_TX_POWER,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadAdvertisingChannelTxPower);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                tx_power_level: i8
+            }
 
             /// The LE Read Advertising Channel Tx Power Command returns dBm, a unit of power
             /// provided to the radio antenna.
@@ -2381,11 +2418,11 @@ pub mod le {
 
             impl TxPower {
 
-                fn try_from(packed: le_read_advertising_channel_tx_power_rp) -> Result<Self, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
-                        Ok(TxPower(packed.level))
+                        Ok(TxPower(packed.tx_power_level))
                     }
                     else {
                         Err(status)
@@ -2399,9 +2436,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_ADVERTISING_CHANNEL_TX_POWER,
-                OGF_LE_CTL,
-                le_read_advertising_channel_tx_power_rp,
+                COMMAND,
+                CmdReturn,
                 TxPower,
                 error::Error
             );
@@ -2411,8 +2447,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_ADVERTISING_CHANNEL_TX_POWER as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
@@ -2460,13 +2495,19 @@ pub mod le {
             }
         }
         pub mod transmitter_test{
-            use bluez::{
-                le_transmitter_test_cp,
-                OCF_LE_TRANSMITTER_TEST,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::le::common::Frequency;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TransmitterTest);
+
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _tx_channel: u8,
+                _lenght_of_test_data: u8,
+                _packet_payload: u8,
+            }
 
             #[cfg_attr(test,derive(Debug))]
             pub enum TestPayload {
@@ -2496,25 +2537,24 @@ pub mod le {
                 }
             }
 
-            impl_status_return!(OCF_LE_TRANSMITTER_TEST, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
-            impl CommandParameters for le_transmitter_test_cp {
+            impl CommandParameters for CmdParameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_TRANSMITTER_TEST as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
             pub fn send(
                 hci: &HostInterface,
-                frequency: Frequency,
+                channel: Frequency,
                 payload: TestPayload,
                 payload_length: u8 ) -> hci_return!() {
 
-                let parameters = le_transmitter_test_cp {
-                    frequency: frequency.get_val(),
-                    length: payload_length,
-                    payload: payload.into_val(),
+                let parameters = CmdParameter {
+                    _tx_channel: channel.get_val(),
+                    _lenght_of_test_data: payload_length,
+                    _packet_payload: payload.into_val(),
                 };
 
                 hci.send_command(parameters, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -2556,15 +2596,19 @@ pub mod le {
             }
         }
         pub mod set_advertising_data {
-            use bluez::{
-                le_set_advertising_data_cp,
-                OCF_LE_SET_ADVERTISING_DATA,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use gap::advertise::{ConvertRawData,DataTooLargeError};
 
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);
+
             type Payload = [u8;31];
+
+            #[repr(packed)]
+            pub(crate) struct CmdParameter {
+                _length: u8,
+                _data: [u8;31],
+            }
 
             /// Advertising data
             ///
@@ -2651,18 +2695,17 @@ pub mod le {
             }
 
             impl CommandParameters for AdvertisingData{
-                type Parameter = le_set_advertising_data_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_ADVERTISING_DATA as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_set_advertising_data_cp {
-                        length: self.length as u8,
-                        data: self.payload,
+                    CmdParameter {
+                        _length: self.length as u8,
+                        _data: self.payload,
                     }
                 }
             }
 
-            impl_status_return!(OCF_LE_SET_ADVERTISING_DATA, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
             pub fn send( hci: &HostInterface, adv_data: AdvertisingData ) -> hci_return!() {
                 hci.send_command(adv_data, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -2740,14 +2783,12 @@ pub mod le {
             }
         }
         pub mod set_advertising_enable {
-            use bluez::{
-                le_set_advertise_enable_cp,
-                OCF_LE_SET_ADVERTISE_ENABLE,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
 
-            impl_status_return!(OCF_LE_SET_ADVERTISE_ENABLE, OGF_LE_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingEnable);
+
+            impl_status_return!(COMMAND);
 
             #[derive(Clone,Copy)]
             struct Parameter{
@@ -2755,13 +2796,10 @@ pub mod le {
             }
 
             impl CommandParameters for Parameter {
-                type Parameter = le_set_advertise_enable_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_ADVERTISE_ENABLE as u16;
+                type Parameter = u8;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_set_advertise_enable_cp {
-                        enable: if self.enable { 1 } else { 0 }
-                    }
+                    if self.enable { 1u8 } else { 0u8 }
                 }
             }
 
@@ -2808,14 +2846,12 @@ pub mod le {
             }
         }
         pub mod set_advertising_parameters {
-            use bluez::{
-                le_set_advertising_parameters_cp,
-                OCF_LE_SET_ADVERTISING_PARAMETERS,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::le::common::OwnAddressType;
             use core::default::Default;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
 
             interval!( AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
 
@@ -2984,34 +3020,46 @@ pub mod le {
                 }
             }
 
-            impl CommandParameters for le_set_advertising_parameters_cp{
-                type Parameter = le_set_advertising_parameters_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_ADVERTISING_PARAMETERS as u16;
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _advertising_interval_min: u16,
+                _advertising_interval_max: u16,
+                _advertising_type: u8,
+                _own_address_type: u8,
+                _peer_address_type: u8,
+                _peer_address: ::BluetoothDeviceAddress,
+                _advertising_channel_map: u8,
+                _advertising_filter_policy: u8,
+            }
+
+            impl CommandParameters for CmdParameter{
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            impl_status_return!(OCF_LE_SET_ADVERTISING_PARAMETERS, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
             pub fn send( hci: &HostInterface, params: AdvertisingParameters ) -> hci_return!() {
 
-                let parameter = le_set_advertising_parameters_cp {
+                let parameter = CmdParameter {
 
-                    min_interval: params.minimum_advertising_interval.get_raw_val(),
+                    _advertising_interval_min: params.minimum_advertising_interval.get_raw_val(),
 
-                    max_interval: params.maximum_advertising_interval.get_raw_val(),
+                    _advertising_interval_max: params.maximum_advertising_interval.get_raw_val(),
 
-                    advtype: params.advertising_type.into_val(),
+                    _advertising_type: params.advertising_type.into_val(),
 
-                    own_bdaddr_type: params.own_address_type.into_val(),
+                    _own_address_type: params.own_address_type.into_val(),
 
-                    direct_bdaddr_type: params.peer_address_type.into_val(),
+                    _peer_address_type: params.peer_address_type.into_val(),
 
-                    direct_bdaddr: params.peer_address.into(),
+                    _peer_address: params.peer_address.into(),
 
-                    chan_map: params.advertising_channel_map.iter().fold(0u8, |v, x| v | x.into_val()),
+                    _advertising_channel_map: params.advertising_channel_map.iter().fold(0u8, |v, x| v | x.into_val()),
 
-                    filter: params.advertising_filter_policy.into_val(),
+                    _advertising_filter_policy: params.advertising_filter_policy.into_val(),
                 };
 
                 hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -3059,30 +3107,22 @@ pub mod le {
             }
         }
         pub mod set_random_address {
-            use bluez::{
-                bdaddr_t,
-                le_set_random_address_cp,
-                OCF_LE_SET_RANDOM_ADDRESS,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
 
-            impl_status_return!(OCF_LE_SET_RANDOM_ADDRESS, OGF_LE_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
+
+            impl_status_return!(COMMAND);
 
             struct Parameter {
                 rand_address: ::BluetoothDeviceAddress
             }
 
             impl CommandParameters for Parameter {
-                type Parameter = le_set_random_address_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_RANDOM_ADDRESS as u16;
+                type Parameter = ::BluetoothDeviceAddress;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_set_random_address_cp {
-                        bdaddr: bdaddr_t {
-                            b: self.rand_address
-                        }
-                    }
+                    self.rand_address
                 }
             }
 
@@ -3118,25 +3158,20 @@ pub mod le {
 
     pub mod receiver {
         pub mod receiver_test {
-            use bluez::{
-                le_receiver_test_cp,
-                OCF_LE_RECEIVER_TEST,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::le::common::Frequency;
 
-            impl_status_return!(OCF_LE_RECEIVER_TEST, OGF_LE_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReceiverTest);
+
+            impl_status_return!(COMMAND);
 
             impl CommandParameters for Frequency
             {
-                type Parameter = le_receiver_test_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_RECEIVER_TEST as u16;
+                type Parameter = u8;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_receiver_test_cp {
-                        frequency: self.get_val()
-                    }
+                    self.get_val()
                 }
             }
 
@@ -3167,14 +3202,18 @@ pub mod le {
             }
         }
         pub mod set_scan_enable {
-            use bluez::{
-                le_set_scan_enable_cp,
-                OCF_LE_SET_SCAN_ENABLE,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
 
-            impl_status_return!(OCF_LE_SET_SCAN_ENABLE, OGF_LE_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanEnable);
+
+            impl_status_return!(COMMAND);
+
+            #[repr(packed)]
+            struct CmdParameter {
+                _enable: u8,
+                _filter_duplicates: u8,
+            }
 
             struct Parameter {
                 enable: bool,
@@ -3182,13 +3221,12 @@ pub mod le {
             }
 
             impl CommandParameters for Parameter {
-                type Parameter = le_set_scan_enable_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_SCAN_ENABLE as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_set_scan_enable_cp {
-                        enable: if self.enable {1} else {0},
-                        filter_dup: if self.filter_duplicates {1} else {0},
+                    CmdParameter {
+                        _enable: if self.enable {1} else {0},
+                        _filter_duplicates: if self.filter_duplicates {1} else {0},
                     }
                 }
             }
@@ -3252,13 +3290,11 @@ pub mod le {
             }
         }
         pub mod set_scan_parameters {
-            use bluez::{
-                le_set_scan_parameters_cp,
-                OCF_LE_SET_SCAN_PARAMETERS,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::le::common::OwnAddressType;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanParameters);
 
             interval!( ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
             interval!( ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
@@ -3339,19 +3375,27 @@ pub mod le {
                 }
             }
 
-            impl_status_return!(OCF_LE_SET_SCAN_PARAMETERS, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
+
+            #[repr(packed)]
+            pub(crate) struct CmdParameter {
+                _scan_type: u8,
+                _scan_interval: u16,
+                _scan_window: u16,
+                _own_address_type: u8,
+                _filter_policy: u8,
+            }
 
             impl CommandParameters for ScanningParameters {
-                type Parameter = le_set_scan_parameters_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_SCAN_PARAMETERS as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_set_scan_parameters_cp {
-                        type_:           self.scan_type.into_val(),
-                        interval:        self.scan_interval.get_raw_val(),
-                        window:          self.scan_window.get_raw_val(),
-                        own_bdaddr_type: self.own_address_type.into_val(),
-                        filter:          self.scanning_filter_policy.into_val(),
+                    CmdParameter {
+                        _scan_type:        self.scan_type.into_val(),
+                        _scan_interval:    self.scan_interval.get_raw_val(),
+                        _scan_window:      self.scan_window.get_raw_val(),
+                        _own_address_type: self.own_address_type.into_val(),
+                        _filter_policy:    self.scanning_filter_policy.into_val(),
                     }
                 }
             }
@@ -3452,13 +3496,10 @@ pub mod le {
 
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod disconnect {
-            use bluez::{
-                disconnect_cp,
-                OCF_DISCONNECT,
-                OGF_LINK_CTL,
-            };
             use hci::*;
             use hci::common::ConnectionHandle;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::Disconnect);
 
             /// These are the error codes that are given as reasons for disconnecting
             ///
@@ -3520,19 +3561,24 @@ pub mod le {
                 }
             }
 
+            #[repr(packed)]
+            pub(crate) struct CmdParameter {
+                _handle: u16,
+                _reason: u8,
+            }
+
             pub struct DisconnectParameters {
                 pub connection_handle: ConnectionHandle,
                 pub disconnect_reason: DisconnectReason,
             }
 
             impl CommandParameters for DisconnectParameters {
-                type Parameter = disconnect_cp;
-                const OGF: u16 = OGF_LINK_CTL as u16;
-                const OCF: u16 = OCF_DISCONNECT as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    disconnect_cp {
-                        handle: self.connection_handle.get_raw_handle(),
-                        reason: self.disconnect_reason.get_val(),
+                    CmdParameter {
+                        _handle: self.connection_handle.get_raw_handle(),
+                        _reason: self.disconnect_reason.get_val(),
                     }
                 }
             }
@@ -3583,17 +3629,25 @@ pub mod le {
             }
         }
         pub mod connection_update {
-            use bluez::{
-                le_connection_update_cp,
-                OGF_LE_CTL,
-                OCF_LE_CONN_UPDATE,
-            };
             use hci::*;
             use hci::common::{
                 ConnectionHandle,
                 SupervisionTimeout,
             };
             use super::{ ConnectionEventLength, ConnectionIntervalBounds };
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ConnectionUpdate);
+
+            #[repr(packed)]
+            pub(crate) struct CmdParameter {
+                _handle: u16,
+                _conn_interval_min: u16,
+                _conn_interval_max: u16,
+                _conn_latency: u16,
+                _supervision_timeout: u16,
+                _minimum_ce_length: u16,
+                _maximum_ce_length: u16,
+            }
 
             pub struct ConnectionUpdate {
                 pub handle: ConnectionHandle,
@@ -3605,18 +3659,17 @@ pub mod le {
 
 
             impl CommandParameters for ConnectionUpdate {
-                type Parameter = le_connection_update_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_CONN_UPDATE as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_connection_update_cp {
-                        handle:              self.handle.get_raw_handle(),
-                        min_interval:        self.interval.min.get_raw_val(),
-                        max_interval:        self.interval.max.get_raw_val(),
-                        latency:             self.latency,
-                        supervision_timeout: self.supervision_timeout.get_timeout(),
-                        min_ce_length:       self.connection_event_len.minimum,
-                        max_ce_length:       self.connection_event_len.maximum,
+                    CmdParameter {
+                        _handle:              self.handle.get_raw_handle(),
+                        _conn_interval_min:   self.interval.min.get_raw_val(),
+                        _conn_interval_max:   self.interval.max.get_raw_val(),
+                        _conn_latency:        self.latency,
+                        _supervision_timeout: self.supervision_timeout.get_timeout(),
+                        _minimum_ce_length:   self.connection_event_len.minimum,
+                        _maximum_ce_length:   self.connection_event_len.maximum,
                     }
                 }
             }
@@ -3631,11 +3684,14 @@ pub mod le {
             mod tests {
 
                 use super::*;
+                use hci::common;
+                use super::super::ConnectionInterval;
                 use hci::test_util::block_for_command_result;
 
                 /// This will likely fail with a timeout due to there being no connection to
                 /// a device.
                 #[test]
+                #[ignore]
                 fn connection_update_test() {
 
                     let timeout = Duration::from_secs(1);
@@ -3643,11 +3699,11 @@ pub mod le {
                     let parameter = ConnectionUpdate {
                         handle: ConnectionHandle::try_from(0x0033).unwrap(),
                         interval: ConnectionIntervalBounds::try_from(
-                            ConnectionInterval::try_from(0x100).unwrap(),
-                            ConnectionInterval::try_from(0x100).unwrap()
+                            ConnectionInterval::try_from_raw(0x100).unwrap(),
+                            ConnectionInterval::try_from_raw(0x100).unwrap()
                         ).unwrap(),
                         latency: 0x1000,
-                        supervision_timeout: SupervisionTimeout::try_from(0x234).unwrap(),
+                        supervision_timeout: common::SupervisionTimeout::try_from_raw(0x234).unwrap(),
                         connection_event_len: ConnectionEventLength::new(0, 0xFFFF)
                     };
 
@@ -3673,21 +3729,19 @@ pub mod le {
             }
         }
         pub mod create_connection_cancel {
-            use bluez::{
-                OCF_LE_CREATE_CONN_CANCEL,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
 
-            impl_status_return!(OCF_LE_CREATE_CONN_CANCEL, OGF_LE_CTL);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnectionCancel);
+
+            impl_status_return!(COMMAND);
 
             #[derive(Clone,Copy)]
             struct Parameter;
 
             impl CommandParameters for Parameter {
                 type Parameter = Self;
-                const OCF: u16 = OCF_LE_CREATE_CONN_CANCEL as u16;
-                const OGF: u16 = OGF_LE_CTL as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
@@ -3702,6 +3756,7 @@ pub mod le {
                 use hci::test_util::block_for_command_result;
 
                 #[test]
+                #[ignore]
                 fn create_connection_cancel_test() {
 
                     let result = block_for_command_result(
@@ -3714,12 +3769,7 @@ pub mod le {
             }
         }
         pub mod create_connection {
-            use bluez::{
-                bdaddr_t,
-                le_create_connection_cp,
-                OCF_LE_CREATE_CONN,
-                OGF_LE_CTL,
-            };
+
             use super::{ConnectionEventLength, ConnectionIntervalBounds};
             use hci::*;
             use hci::common::{
@@ -3729,6 +3779,8 @@ pub mod le {
             };
             use hci::le::common::OwnAddressType;
             use core::time::Duration;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnection);
 
             interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
             interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
@@ -3760,24 +3812,39 @@ pub mod le {
                 connection_event_len: ConnectionEventLength,
             }
 
+            #[repr(packed)]
+            pub(crate) struct CmdParameter {
+                _scan_interval: u16,
+                _scan_window: u16,
+                _initiator_filter_policy: u8,
+                _peer_address_type: u8,
+                _peer_address: ::BluetoothDeviceAddress,
+                _own_address_type: u8,
+                _conn_interval_min: u16,
+                _conn_interval_max: u16,
+                _conn_latency: u16,
+                _supervision_timeout: u16,
+                _minimum_ce_length: u16,
+                _maximum_ce_length: u16,
+            }
+
             impl CommandParameters for ConnectionParameters {
-                type Parameter = le_create_connection_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_CREATE_CONN as u16;
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
-                    le_create_connection_cp {
-                        interval:            self.scan_interval.get_raw_val(),
-                        window:              self.scan_window.get_raw_val(),
-                        initiator_filter:    self.initiator_filter_policy.into_raw(),
-                        peer_bdaddr_type:    self.peer_address_type.into_raw(),
-                        peer_bdaddr:         bdaddr_t::from(self.peer_address),
-                        own_bdaddr_type:     self.own_address_type.into_val(),
-                        min_interval:        self.connection_interval.min.get_raw_val(),
-                        max_interval:        self.connection_interval.max.get_raw_val(),
-                        latency:             self.connection_latency.get_latency(),
-                        supervision_timeout: self.supervision_timeout.get_timeout(),
-                        min_ce_length:       self.connection_event_len.minimum,
-                        max_ce_length:       self.connection_event_len.maximum,
+                    CmdParameter {
+                        _scan_interval:           self.scan_interval.get_raw_val(),
+                        _scan_window:             self.scan_window.get_raw_val(),
+                        _initiator_filter_policy: self.initiator_filter_policy.into_raw(),
+                        _peer_address_type:       self.peer_address_type.into_raw(),
+                        _peer_address:            self.peer_address,
+                        _own_address_type:        self.own_address_type.into_val(),
+                        _conn_interval_min:       self.connection_interval.min.get_raw_val(),
+                        _conn_interval_max:       self.connection_interval.max.get_raw_val(),
+                        _conn_latency:            self.connection_latency.get_latency(),
+                        _supervision_timeout:     self.supervision_timeout.get_timeout(),
+                        _minimum_ce_length:       self.connection_event_len.minimum,
+                        _maximum_ce_length:       self.connection_event_len.maximum,
                     }
                 }
             }
@@ -3850,14 +3917,18 @@ pub mod le {
             }
         }
         pub mod read_channel_map {
-            use bluez::{
-                le_read_channel_map_cp,
-                le_read_channel_map_rp,
-                OCF_LE_READ_CHANNEL_MAP,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::common::ConnectionHandle;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                connection_handle: u16,
+                channel_map: [u8;5]
+            }
 
             pub struct ChannelMapInfo {
                 pub handle: ConnectionHandle,
@@ -3866,7 +3937,7 @@ pub mod le {
             }
 
             impl ChannelMapInfo {
-                fn try_from(packed: le_read_channel_map_rp) -> Result<Self, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
                     use alloc::vec::Vec;
 
                     let status = error::Error::from(packed.status);
@@ -3880,7 +3951,7 @@ pub mod le {
 
                         let mut mapped_channels = Vec::with_capacity(channel_count);
 
-                        'outer: for byte in packed.map.iter() {
+                        'outer: for byte in packed.channel_map.iter() {
                             for bit in 0..8 {
                                 if count < channel_count {
                                     if 0 != (byte & (1 << bit)) {
@@ -3895,7 +3966,7 @@ pub mod le {
                         }
 
                         Ok( Self {
-                            handle: ConnectionHandle::try_from(packed.handle).unwrap(),
+                            handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
                             channel_map: mapped_channels.into_boxed_slice(),
                         })
                     }
@@ -3905,25 +3976,29 @@ pub mod le {
                 }
             }
 
-            impl CommandParameters for le_read_channel_map_cp {
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _connection_handle: u16
+            }
+
+            impl CommandParameters for CmdParameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_CHANNEL_MAP as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_CHANNEL_MAP,
-                OGF_LE_CTL,
-                le_read_channel_map_rp,
+                COMMAND,
+                CmdReturn,
                 ChannelMapInfo,
                 error::Error
             );
 
             pub fn send( hci: &HostInterface, handle: ConnectionHandle ) -> hci_return!() {
 
-                let parameter = le_read_channel_map_cp {
-                    handle: handle.get_raw_handle()
+                let parameter = CmdParameter {
+                    _connection_handle: handle.get_raw_handle()
                 };
 
                 hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -3940,25 +4015,28 @@ pub mod le {
             }
         }
         pub mod read_remote_features {
-            use bluez:: {
-                read_remote_features_cp,
-                OCF_LE_READ_REMOTE_USED_FEATURES,
-                OGF_LE_CTL,
-            };
+
             use hci::*;
             use hci::common::ConnectionHandle;
 
-            impl CommandParameters for read_remote_features_cp {
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
+
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _connection_handle: u16
+            }
+
+            impl CommandParameters for CmdParameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_REMOTE_USED_FEATURES as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
             pub fn send( hci: HostInterface, handle: ConnectionHandle ) -> hci_return!() {
 
-                let parameter = read_remote_features_cp {
-                    handle: handle.get_raw_handle(),
+                let parameter = CmdParameter {
+                    _connection_handle: handle.get_raw_handle(),
                 };
 
                 hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) )
@@ -3974,12 +4052,14 @@ pub mod le {
             }
         }
         pub mod set_host_channel_classification {
-            use bluez::{
-                le_set_host_channel_classification_cp,
-                OCF_LE_SET_HOST_CHANNEL_CLASSIFICATION,
-                OGF_LE_CTL,
-            };
             use hci::*;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetHostChannelClassification);
+
+            #[repr(packed)]
+            pub(crate) struct CmdParemeter {
+                _channel_map: [u8;5]
+            }
 
             const CHANNEL_MAP_MAX: usize = 37;
 
@@ -4017,9 +4097,8 @@ pub mod le {
             }
 
             impl CommandParameters for ChannelMap {
-                type Parameter = le_set_host_channel_classification_cp;
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_SET_HOST_CHANNEL_CLASSIFICATION as u16;
+                type Parameter = CmdParemeter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
 
                     let mut raw = [0u8;5];
@@ -4030,13 +4109,13 @@ pub mod le {
                         }
                     }
 
-                    le_set_host_channel_classification_cp {
-                        map : raw
+                    CmdParemeter {
+                        _channel_map : raw
                     }
                 }
             }
 
-            impl_status_return!(OCF_LE_SET_HOST_CHANNEL_CLASSIFICATION, OGF_LE_CTL);
+            impl_status_return!(COMMAND);
 
             pub fn send( hci: HostInterface, map: ChannelMap ) -> hci_return!() {
                 hci.send_command( map, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -4068,48 +4147,42 @@ pub mod le {
                 }
             }
         }
-        #[cfg(bluetooth_5_0)]
+        // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_transmit_power_level {
-            use bluez::OGF_LE_CTL;
             use hci::*;
-            use std::ops::RangeInclusive;
+            use hci::common::ConnectionHandle;
 
-            const OCF_LE_READ_TRANSMIT_POWER: u16 = 0x4B;
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
 
             #[repr(packed)]
-            struct PackedReturn {
+            pub(crate) struct CmdParameter {
+                _connection_handle: u16,
+                _level_type: u8,
+            }
+
+            #[repr(packed)]
+            struct CmdReturn {
                 status: u8,
-                min_tx_power: u8,
-                max_tx_power: u8,
+                connection_handle: u16,
+                power_level: i8,
             }
 
             /// Transmit power range (from minimum to maximum levels)
-            pub struct TransmitPowerRange {
-                min: u8,
-                max: u8,
+            pub struct TransmitPowerLevel {
+                pub connection_handle: ConnectionHandle,
+                pub power_level: i8,
             }
 
-            impl TransmitPowerRange {
+            impl TransmitPowerLevel {
 
-                pub fn into_range_inclusive(&self) -> RangeInclusive<u8> {
-                    self.min..=self.max
-                }
-
-                pub fn minimum_transmit_power(&self) -> u8 {
-                    self.min
-                }
-
-                pub fn maximum_transmit_power(&self) -> u8 {
-                    self.max
-                }
-
-                fn try_from(packed: PackedReturn) -> Result<Self, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
                         Ok(Self {
-                            min: packed.min_tx_power,
-                            max: packed.max_tx_power,
+                            // If this panics here the controller returned a bad connection handle
+                            connection_handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
+                            power_level: packed.power_level,
                         })
                     }
                     else {
@@ -4119,24 +4192,38 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_LE_READ_TRANSMIT_POWER,
-                OGF_LE_CTL,
-                PackedReturn,
-                TransmitPowerRange,
+                COMMAND,
+                CmdReturn,
+                TransmitPowerLevel,
                 error::Error
             );
 
-            struct Parameter;
-
-            impl CommandParameters for Parameter {
-                type Parameter = ();
-                const OGF: u16 = OGF_LE_CTL as u16;
-                const OCF: u16 = OCF_LE_READ_TRANSMIT_POWER;
-                fn get_parameter(&self) -> Self::Parameter {()}
+            pub enum TransmitPowerLevelType {
+                CurrentPowerLevel,
+                MaximumPowerLevel,
             }
 
-            pub fn send( hci: HostInterface ) -> hci_return!() {
-                hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) )
+            pub struct CommandParameter {
+                pub connection_handle: ConnectionHandle,
+                pub level_type: TransmitPowerLevelType,
+            }
+
+            impl CommandParameters for CommandParameter {
+                type Parameter = CmdParameter;
+                const COMMAND: opcodes::HCICommand = COMMAND;
+                fn get_parameter(&self) -> Self::Parameter {
+                    CmdParameter {
+                        _connection_handle: self.connection_handle.get_raw_handle(),
+                        _level_type: match self.level_type {
+                            TransmitPowerLevelType::CurrentPowerLevel => 0,
+                            TransmitPowerLevelType::MaximumPowerLevel => 1,
+                        }
+                    }
+                }
+            }
+
+            pub fn send( hci: &HostInterface, parameter: CommandParameter ) -> hci_return!() {
+                hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) )
             }
 
             #[cfg(test)]
@@ -4145,39 +4232,46 @@ pub mod le {
                 use hci::test_util::block_for_command_result;
 
                 #[test]
-                fn read_transmit_power_level() {
-                    let result = block_for_command_result!(
-                        send(&HostInterface::default()).unwrap()
+                #[ignore]
+                fn read_transmit_power_level_test() {
+                    let parameter = CommandParameter {
+                        connection_handle: ConnectionHandle::try_from(0x00FF).unwrap(),
+                        level_type: TransmitPowerLevelType::CurrentPowerLevel,
+                    };
+
+                    let result = block_for_command_result(
+                        send(&HostInterface::default(), parameter).unwrap()
                     )
                     .unwrap();
 
-                    assert_eq!(result.len(), 1);
-
-                    command_complete_test!(result[0], TransmitPowerRange);
+                    command_complete_test!(result, TransmitPowerLevel);
                 }
             }
         }
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_remote_version_information {
-            use bluez::{
-                read_remote_version_cp,
-                OGF_LINK_CTL,
-                OCF_READ_REMOTE_VERSION,
-            };
+
             use hci::*;
             use hci::common::ConnectionHandle;
 
-            impl CommandParameters for read_remote_version_cp {
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::ReadRemoteVersionInformation);
+
+            #[repr(packed)]
+            #[derive( Clone, Copy)]
+            struct CmdParameter {
+                _connection_handle: u16
+            }
+
+            impl CommandParameters for CmdParameter {
                 type Parameter = Self;
-                const OGF: u16 = OGF_LINK_CTL as u16;
-                const OCF: u16 = OCF_READ_REMOTE_VERSION as u16;
-                fn get_parameter(&self) -> Self::Parameter {*self}
+                const COMMAND: opcodes::HCICommand = COMMAND;
+                fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
             pub fn send( hci: &HostInterface, handle: ConnectionHandle) -> hci_return!() {
 
-                let parameter = read_remote_version_cp {
-                    handle: handle.get_raw_handle()
+                let parameter = CmdParameter {
+                    _connection_handle: handle.get_raw_handle()
                 };
 
                 hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) )
@@ -4195,13 +4289,18 @@ pub mod le {
         }
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_rssi {
-            use bluez:: {
-                read_rssi_rp,
-                OGF_STATUS_PARAM,
-                OCF_READ_RSSI,
-            };
+
             use hci::*;
             use hci::common::ConnectionHandle;
+
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::StatusParameters(opcodes::StatusParameters::ReadRSSI);
+
+            #[repr(packed)]
+            pub(crate) struct CmdReturn {
+                status: u8,
+                handle: u16,
+                rssi: i8
+            }
 
             struct Parameter {
                 handle: u16
@@ -4209,8 +4308,7 @@ pub mod le {
 
             impl CommandParameters for Parameter {
                 type Parameter = u16;
-                const OGF: u16 = OGF_STATUS_PARAM as u16;
-                const OCF: u16 = OCF_READ_RSSI as u16;
+                const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { self.handle }
             }
 
@@ -4220,7 +4318,7 @@ pub mod le {
             }
 
             impl RSSIInfo {
-                fn try_from(packed: read_rssi_rp) -> Result<Self, error::Error > {
+                fn try_from(packed: CmdReturn) -> Result<Self, error::Error > {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -4236,9 +4334,8 @@ pub mod le {
             }
 
             impl_get_data_for_command!(
-                OCF_READ_RSSI,
-                OGF_STATUS_PARAM,
-                read_rssi_rp,
+                COMMAND,
+                CmdReturn,
                 RSSIInfo,
                 error::Error
             );

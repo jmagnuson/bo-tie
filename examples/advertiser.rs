@@ -88,7 +88,7 @@ async fn advertise_setup (
 
     await!(set_advertising_enable::send(&hi, *flag.read().unwrap() ).unwrap()).unwrap();
 
-    println!("Advertising")
+    println!("Advertising");
 }
 
 async fn advertise_teardown(hi: &hci::HostInterface) {

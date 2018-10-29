@@ -2,7 +2,7 @@
 name = "bo-tie"
 version = "0.1.0"
 authors = []
-build = "build/build.rs"
+#build = "build/build.rs"
 keywords = ["Bluetooth", "BLE", "Low Energy"]
 categories = ["asynchronous"]
 license = "MIT"
@@ -12,12 +12,9 @@ bluetooth_4 = [] # 4.* devices
 bluetooth_5_0 = [] # 5.0 devices
 default = ["bluetooth_5_0"]
 
-[dependencies]
-nix = "0.11"
+[target.'cfg(unix)'.dependencies]
+nix = "~0.11.0"
 
 [dev-dependencies]
-lazy_static= "1.0.1"
 simple-signal= "1.1.1"
-
-[build-dependencies]
-bindgen = "0.37.0"
+lazy_static = "^1.1.0"

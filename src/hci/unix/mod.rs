@@ -1,4 +1,3 @@
-use bluez;
 use hci::events;
 use std::boxed::Box;
 use std::collections::BTreeMap;
@@ -14,6 +13,38 @@ use std::task;
 use std::thread;
 use std::time::Duration;
 use std::os::unix::io::RawFd;
+
+mod bluez {
+    use std::os::raw::c_void;
+
+    // Linux Bluetooth socket constants
+    pub const SOL_HCI: u32 = 0;
+    pub const HCI_FILTER: u32 = 2;
+    //pub const HCI_COMMAND_PKT: u32 = 1;
+    //pub const HCI_ACLDATA_PKT: u32 = 2;
+    //pub const HCI_SCODATA_PKT: u32 = 3;
+    pub const HCI_EVENT_PKT: u32 = 4;
+    //pub const HCI_VENDOR_PKT: u32 = 255;
+
+    // HCI filter constants from the bluez library
+    pub const HCI_FLT_TYPE_BITS: usize = 31;
+    // const HCI_FLT_EVENT_BITS: u32 = 63;
+
+    #[link(name = "bluetooth")]
+    extern "C" {
+        pub fn hci_open_dev(dev_id: i32) -> i32;
+        pub fn hci_get_route(bt_dev_addr: *mut ::BluetoothDeviceAddress) -> i32;
+        pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct hci_filter {
+        pub type_mask: u32,
+        pub event_mask: [u32; 2usize],
+        pub opcode: u16,
+    }
+}
 
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct FileDescriptor(RawFd);
@@ -651,13 +682,15 @@ impl HCIAdapter {
         // set the future for the event
         let future = self.event_expecter.expect_event(expected_event, &mut timeout_builder)?;
 
+        let oc_pair = CmdData::COMMAND.as_opcode_pair();
+
         timeout_builder.enable_timer()?;
 
         // send the command
         if let Err(err) = Errno::result( unsafe { bluez::hci_send_cmd(
             self.adapter_fd.raw_fd(),
-            CmdData::OGF,
-            CmdData::OCF,
+            oc_pair.ogf,
+            oc_pair.ocf,
             size_of::<CmdData::Parameter>() as u8,
             &mut input.get_parameter() as *mut CmdData::Parameter as *mut ::std::os::raw::c_void
         )}){

@@ -763,7 +763,7 @@ pub struct CommandCompleteData {
 /// - try_from_err_ty: The error type of the return of the try_from function implemented for "data"
 #[macro_use]
 macro_rules! impl_get_data_for_command {
-    ( $ocf:expr, $ogf:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
+    ( $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
         impl ::hci::events::DataResult for $data {
             type ReturnData = $return_ty;
             type UnpackErrorType = $try_from_err_ty;
@@ -776,7 +776,9 @@ macro_rules! impl_get_data_for_command {
                     ::hci::events::CommandDataErr< <$data as ::hci::events::DataResult>::UnpackErrorType >
                 >
             {
-                let expected_opcode = $ocf as u16 | (($ogf as u16) << 10);
+                let oc_pair = $command.as_opcode_pair();
+
+                let expected_opcode = oc_pair.ocf | (oc_pair.ogf << 10);
 
                 if self.command_opcode == Some(expected_opcode) {
                     <Self as ::hci::events::GetDataForCommand<$data>>::get_return_unchecked(&self)
@@ -784,7 +786,7 @@ macro_rules! impl_get_data_for_command {
                     Ok(None)
                 } else {
                     Err(::hci::events::CommandDataErr::IncorrectOCF(
-                        $ocf as u16 | (($ogf as u16) << 10),
+                        oc_pair.ocf | (oc_pair.ogf << 10),
                         self.command_opcode.unwrap()))
                 }
             }
@@ -815,8 +817,8 @@ macro_rules! impl_get_data_for_command {
             }
         }
     };
-    ( $ocf:expr, $ogf:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
-        impl_get_data_for_command!($ocf, $ogf, $packed_data, $data, $data, $try_from_err_ty);
+    ( $command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
+        impl_get_data_for_command!($command, $packed_data, $data, $data, $try_from_err_ty);
     };
 }
 
@@ -3617,10 +3619,20 @@ macro_rules! events_markup {
             }
         }
 
+        #[cfg(not(test))]
         impl ::core::fmt::Debug for ::hci::events::$EnumDataName {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
+                })
+            }
+        }
+
+        #[cfg(test)]
+        impl ::core::fmt::Debug for ::hci::events::$EnumDataName {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+                write!( f, "{}", match *self {
+                    $(::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
             }
         }
