@@ -141,10 +141,10 @@ impl fmt::Display for Error  {
                     received_event);
 
                 if expected_events.len() != 0 {
-                    write!(f, ", expected event(s): ");
+                    write!(f, ", expected event(s): ")?;
 
                     for event in expected_events[..(expected_events.len() - 1)].iter() {
-                        write!(f, " {:?},", event);
+                        write!(f, " {:?},", event)?;
                     }
 
                     write!(f, " {:?}", expected_events[expected_events.len() - 1])

@@ -469,7 +469,7 @@ impl Iterator for EnabledFeaturesIter {
 
 impl ::core::fmt::Debug for EnabledFeaturesIter {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
-        write!(f, "Enabled features: [");
+        write!(f, "Enabled features: [")?;
 
         let mut features = self.clone();
 
@@ -477,7 +477,7 @@ impl ::core::fmt::Debug for EnabledFeaturesIter {
         features.reset();
 
         for ref feature in features {
-            write!(f, "{:?}", feature );
+            write!(f, "{:?}", feature )?;
         }
 
         write!(f, "]")
@@ -549,7 +549,7 @@ impl Iterator for EnabledExtendedFeaturesItr {
 
 impl ::core::fmt::Debug for EnabledExtendedFeaturesItr {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
-        write!(f, "Enabled features: [");
+        write!(f, "Enabled features: [")?;
 
         let mut features = self.clone();
 
@@ -557,7 +557,7 @@ impl ::core::fmt::Debug for EnabledExtendedFeaturesItr {
         features.reset();
 
         for ref feature in features {
-            write!(f, "{:?}", feature );
+            write!(f, "{:?}", feature )?;
         }
 
         write!(f, "]")
@@ -746,7 +746,7 @@ impl Iterator for EnabledLEFeaturesItr {
 
 impl ::core::fmt::Debug for EnabledLEFeaturesItr {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
-        write!(f, "Enabled features: [");
+        write!(f, "Enabled features: [")?;
 
         let mut features = self.clone();
 
@@ -754,7 +754,7 @@ impl ::core::fmt::Debug for EnabledLEFeaturesItr {
         features.reset();
 
         for ref feature in features {
-            write!(f, "{:?}", feature );
+            write!(f, "{:?}", feature )?;
         }
 
         write!(f, "]")
