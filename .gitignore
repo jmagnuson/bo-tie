@@ -1,4 +1,10 @@
 /target
 **/*.rs.bk
 /temp
-/build/generated_bindings/*
+
+# res is auto generated
+/ci/res
+
+# Get rid of these later?
+/android
+Makefile

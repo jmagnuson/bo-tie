@@ -10,11 +10,15 @@
 
 extern crate core;
 extern crate alloc;
-#[cfg(unix)] extern crate nix;
+
+#[cfg(all(unix, not(target_os = "android")))] extern crate nix;
+
+#[cfg(target_os = "android")] extern crate jni;
+
 #[cfg(test)] extern crate test;
 #[cfg(test)] #[macro_use] extern crate lazy_static;
 
 pub type BluetoothDeviceAddress = [u8; 6];
 
-pub mod hci;
+#[cfg(not(target_os = "android"))] pub mod hci;
 pub mod gap;
