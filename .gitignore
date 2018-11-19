@@ -2,9 +2,7 @@
 **/*.rs.bk
 /temp
 
-# res is auto generated
-/ci/res
-
 # Get rid of these later?
+/ci/android/sdk
 /android
 Makefile

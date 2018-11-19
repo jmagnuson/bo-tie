@@ -1,19 +1,28 @@
 extern crate jni;
 extern crate bo_tie;
+extern crate compiletest_rs as compiletest;
 
 mod jni_gen;
 
 use jni::JNIEnv;
 use jni::objects;
 
+#[allow(dead_code)]
 struct Tests;
 
 impl jni_gen::TestJNI for Tests {
     #[no_mangle]
-    fn Java_Test_testInit(env: *mut JNIEnv, class: objects::JClass ) {
-    }
+    fn Java_Test_runTests(env: JNIEnv, _: objects::JClass) -> ::jni::sys::jstring {
+        // let mut config = compiletest::Config::default();
+        //
+        // // Everything should pass
+        // config.mode = "run-pass".parse.unwrap();
+        // config.src_base = PathBuf::from();
+        // config.link_deps();
+        // config.clean_rmeta();
+        //
+        // compiletest::run_tests(&config);
 
-    #[no_mangle]
-    fn Java_Test_runTests(env: *mut JNIEnv, class: objects::JClass ) {
+        env.new_string("Hellow World".to_string()).unwrap().into_inner()
     }
 }

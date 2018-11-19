@@ -1,12 +1,18 @@
 [package]
-name = "botietests"
+name = "bo-tie-tests"
 version = "0.1.0"
-authors = ["gpace <greg.pace@bo.tie>"]
 edition = "2018"
 
 [dependencies]
 bo-tie= { path="../../../" }
 jni = "~0.10.2"
+compiletest_rs = "0.3.17"
 
 [build-dependencies]
 bindgen= "~0.43.1"
+
+[lib]
+crate-type = ["dylib"]
+
+[profile.release]
+debug= true
