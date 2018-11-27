@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-bo-tie= { path="../../../" }
+# This is the path in the docker container
+bo-tie= { path="/bo-tie" }
 jni = "~0.10.2"
 compiletest_rs = "0.3.17"
 

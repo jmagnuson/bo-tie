@@ -6,32 +6,49 @@ use std::io::prelude::*;
 use std::path::{Path,PathBuf};
 use std::process::Command;
 
-static JAVA_FILE: &'static str = "src/java/Test.java";
+static KOTLIN_FILE: &'static str = "src/java/Test.kt";
 
-static JAVA_INCLUDE: &'static str = "/usr/lib/jvm/java-8-openjdk-amd64/include";
+static JDK_INCLUDE: &'static str = "/usr/lib/jvm/java-8-openjdk-amd64/include";
 
 static BINDINGS_FILE: &'static str = "src/jni_gen.rs";
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 static MD_PATH: &'static str = "/linux";
 
 #[cfg(target_os = "windows")]
 static MD_PATH: &'static str = "/win*";
 
 #[cfg(target_os = "macos")]
-static MD_PATH: &'static str = "/macos"; // I don't think this is right, might be darwin
+static MD_PATH: &'static str = "/macos";
 
 fn main() {
+
+    println!("cargo:rerun-if-changed={}", KOTLIN_FILE);
 
     let output_path = env::var("OUT_DIR").unwrap();
 
     let jni_inc_path: String = match env::var_os("JNI_INCLUDE") {
         Some(path) => path.into_string().unwrap(),
-        None => if Path::new(JAVA_INCLUDE).exists() {
-            String::from(JAVA_INCLUDE)
+        None => if Path::new(JDK_INCLUDE).exists() {
+            String::from(JDK_INCLUDE)
+        } else if let Some(java_home) = env::var_os("JAVA_HOME") {
+
+            let path = format!("{}/include", java_home.clone().into_string().unwrap());
+
+            if Path::new(&path).exists() {
+                path
+            }
+            else {
+                panic!("JAVA_HOME is defined (as '{}'), but path '{}' doesn't exist",
+                    java_home.into_string().unwrap(), path
+                );
+            }
         } else {
-            panic!("The include path to the jni header file is not defined (build.rs default \
-                location is {}). Set the env 'JNI_INCLUDE' to the include path for jni.h");
+            panic!("The include path to the jni header files is not defined (build.rs default \
+                location is {} which doesn't exist on your system). Set the env 'JNI_INCLUDE' \
+                to the jni header files or set JAVA_HOME to the base directory of the jdk",
+                JDK_INCLUDE
+            );
         }
     };
 
@@ -46,15 +63,24 @@ fn main() {
     write!(bindgen_header_file, "\n").unwrap();
     bindgen_header_file.flush().unwrap();
 
-    let javac_output = Command::new("javac")
-        .args(&["-d", &output_path ])
-        .args(&["-h", &output_path ])
-        .arg(JAVA_FILE)
+    let kotlinc_output = Command::new("kotlinc")
+        .args(&["-d", &output_path, "-no-reflect", "-no-stdlib"])
+        .arg(KOTLIN_FILE)
+        .output()
+        .expect("Cannot find kotlinc");
+
+    if ! kotlinc_output.status.success() {
+        panic!("{}", String::from_utf8(kotlinc_output.stderr).unwrap() );
+    }
+
+    let javah_output = Command::new("javah")
+        .args(&["-d", &output_path, "-cp", &output_path ])
+        .arg(Path::new(KOTLIN_FILE).file_stem().unwrap())
         .output()
         .expect("Java JDK not installed (uses Java v1.8)");
 
-    if ! javac_output.status.success() {
-        panic!("{}", String::from_utf8(javac_output.stderr).unwrap() );
+    if ! javah_output.status.success() {
+        panic!("{}", String::from_utf8(javah_output.stderr).unwrap() );
     }
 
     let generation = bindgen::Builder::default()
@@ -89,7 +115,7 @@ fn main() {
     while let Some(pos) = bindings.find(r#"extern "C" {"#) {
         bindings::replace_extern_c(pos, &mut bindings);
         bindings::replace_next( pos, &mut bindings, "*mut JNIEnv", "::jni::JNIEnv");
-        bindings::replace_next( pos, &mut bindings, "jclass", "::jni::objects::JClass");
+        bindings::replace_next( pos, &mut bindings, "jobject", "::jni::objects::JClass");
         bindings::replace_return( pos, &mut bindings)
     }
 

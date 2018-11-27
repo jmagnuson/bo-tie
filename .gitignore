@@ -1,8 +1,7 @@
 /target
 **/*.rs.bk
 /temp
+/.gradle
 
-# Get rid of these later?
-/ci/android/sdk
-/android
-Makefile
+# docker 
+1

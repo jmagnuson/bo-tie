@@ -16,7 +16,7 @@ extern crate alloc;
 #[cfg(target_os = "android")] extern crate jni;
 
 #[cfg(test)] extern crate test;
-#[cfg(test)] #[macro_use] extern crate lazy_static;
+#[cfg(test)] #[cfg_attr(test,macro_use)] extern crate lazy_static;
 
 pub type BluetoothDeviceAddress = [u8; 6];
 

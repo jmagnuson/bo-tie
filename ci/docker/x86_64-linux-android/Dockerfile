@@ -2,26 +2,39 @@ FROM ubuntu:18.04
 
 ENV TARGET x86_64-linux-android
 ENV ANDROID_ARCH x86_64
+ENV ANDROID_HOME /android/sdk
+ENV ANDROID_NDK /android/sdk/ndk-bundle
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+  apt-utils \
   curl \
   ca-certificates \
   unzip \
-  openjdk-8-jre \
-  python \
-  gcc \
+  openjdk-8-jdk \
   libc6-dev \
-  gawk
+  python \
+  rsync \
+  gawk \
+  gcc \
+  clang \
+  bluetooth \
+  bluez \
+  libbluetooth-dev \
+  bluez-tools \
+  rfkill
 
-WORKDIR /ci
-
+# ADB
 EXPOSE 5037
 
-COPY . /ci
-
-ENV PATH $PATH:/android-toolchain/bin
+ENV PATH $PATH:/android-toolchain/bin:/opt/kotlinc/bin
 
 ENV CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=x86_64-linux-android-gcc \
     CARGO_TARGET_X86_64_LINUX_ANDROID_RUNNER="true"
 
-RUN sh ./android-emulator-setup.sh /android x86_64-linux-android x86_64 26
+COPY ./docker /ci/docker
+
+RUN mkdir -p /workspace
+
+RUN chmod -R a+wrx /workspace
+
+RUN sh ci/docker/android-setup.sh x86_64-linux-android /android x86_64 26
