@@ -21,19 +21,6 @@ TARGET_PTH=$ANDROID_PTH/$TARGET
 
 SDK_PTH=$ANDROID_PTH/sdk
 
-# create the workspace
-mkdir -p /workspace
-ln -s /bo-tie /workspace
-
-# download kotlin
-mkdir -p /opt/kotlinc
-
-curl -L https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip > /opt/kotlinc/kotlinc.zip
-
-unzip -qq /opt/kotlinc/kotlinc.zip -d /opt/
-
-rm /opt/kotlinc/kotlinc.zip
-
 # Get the android sdk
 mkdir -p $SDK_PTH
 
@@ -50,15 +37,14 @@ rm $SDK_PTH/sdk.zip
 
 # install android needed tools
 yes | $SDK_PTH/tools/bin/sdkmanager --licenses > /dev/null
-yes | $SDK_PTH/tools/bin/sdkmanager "platforms;android-28" > /dev/null
-yes | $SDK_PTH/tools/bin/sdkmanager ndk-bundle > /dev/null
-yes | $SDK_PTH/tools/bin/sdkmanager "build-tools;28.0.3" > dev/null
-yes | $SDK_PTH/tools/bin/sdkmanager platform-tools > /dev/null
+yes | $SDK_PTH/tools/bin/sdkmanager "system-images;$SI_TARGET;$SI_TAG;$SI_ABI" > /dev/null
 
-# build the toolchain
-$SDK_PTH/ndk-bundle/build/tools/make_standalone_toolchain.py \
-  --arch $ARCH \
-  --stl=libc++ \
-  --api $API \
-  --install-dir /android-toolchain \
-  > /dev/null
+# Default is no, which is what is wanted. Spamming no however doesn't work so
+# just spamming newline instead with 'yes'.
+yes '' | $SDK_PTH/tools/bin/avdmanager create avd \
+      -k "system-images;$SI_TARGET;$SI_TAG;$SI_ABI" \
+      --force \
+      -n bo-tie \
+      -b $SI_ABI \
+      -g $SI_TAG \
+      > /dev/null

@@ -5,6 +5,7 @@ then
   (
     cd bo-tie
 
+    # Run rust only tests
     cargo test --release --target $TARGET
   )
 fi
@@ -27,10 +28,10 @@ case $TARGET in
   ;;
 esac
 
-mkdir -p /targets/$TARGET
+mkdir -p TestProject/app/src/main/jniLibs/$JNI_LIB_FOLDER
 
-cd /workspace/bo-tie-tests
+cd bo-tie-tests
 
-cargo build --release
+cargo build --release --lib
 
-cp target/release/libbo_tie_tests.so /targets/$TARGET
+cp target/release/libbo_tie_tests.so ../TestProject/app/src/main/jniLibs/$JNI_LIB_FOLDER/libbo_tie_tests.so

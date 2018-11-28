@@ -1,7 +1,7 @@
 FROM ubuntu:18.04
 
-ENV TARGET x86_64-linux-android
-ENV ANDROID_ARCH x86_64
+ENV TARGET i686-linux-android
+ENV ANDROID_ARCH i686
 ENV ANDROID_HOME /android/sdk
 ENV ANDROID_NDK /android/sdk/ndk-bundle
 
