@@ -1,4 +1,6 @@
-class Test {
+package botie.testproject
+
+class Interface {
 
   init {
     System.loadLibrary("bo_tie_tests");

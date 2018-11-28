@@ -6,13 +6,14 @@ mod jni_gen;
 
 use jni::JNIEnv;
 use jni::objects;
+use jni::sys::jstring;
 
 #[allow(dead_code)]
 struct Tests;
 
 impl jni_gen::TestJNI for Tests {
     #[no_mangle]
-    fn Java_Test_runTests(env: JNIEnv, _: objects::JClass) -> ::jni::sys::jstring {
+    extern "system" fn Java_Interface_runTests(env: JNIEnv, _: objects::JClass) -> jstring {
         // let mut config = compiletest::Config::default();
         //
         // // Everything should pass
