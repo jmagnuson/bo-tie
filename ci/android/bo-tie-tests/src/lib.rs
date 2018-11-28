@@ -13,7 +13,7 @@ struct Tests;
 
 impl jni_gen::TestJNI for Tests {
     #[no_mangle]
-    extern "system" fn Java_Interface_runTests(env: JNIEnv, _: objects::JClass) -> jstring {
+    extern "system" fn Java_botie_testproject_Interface_runTests(env: JNIEnv, _: objects::JClass) -> jstring {
         // let mut config = compiletest::Config::default();
         //
         // // Everything should pass

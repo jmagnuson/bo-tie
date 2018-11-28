@@ -8,7 +8,9 @@ use std::process::Command;
 
 static KOTLIN_FILE: &'static str = "src/kotlin/Interface.kt";
 
-static HEADER: &'static str = "Interface.h";
+static CLASS_PATH: &'static str = "botie.testproject.Interface";
+
+static HEADER: &'static str = "botie_testproject_Interface.h";
 
 static JDK_INCLUDE: &'static str = "/usr/lib/jvm/java-8-openjdk-amd64/include";
 
@@ -75,11 +77,9 @@ fn main() {
         panic!("{}", String::from_utf8(kotlinc_output.stderr).unwrap() );
     }
 
-    panic!("{}", String::from_utf8(kotlinc_output.stdout).unwrap());
-
     let javah_output = Command::new("javah")
         .args(&["-d", &output_path, "-cp", &output_path ])
-        .arg(Path::new(KOTLIN_FILE).file_stem().unwrap())
+        .arg(CLASS_PATH)
         .output()
         .expect("Java JDK not installed (uses Java v1.8)");
 
