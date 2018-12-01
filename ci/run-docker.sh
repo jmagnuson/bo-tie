@@ -6,8 +6,9 @@ RUN_RUST_TESTS=true
 RUN_ANDROID_LOCAL_TESTS=true
 RUN_ANDROID_INSTRUMENT_TESTS=false
 
-for i in "$@"; do
-  case $i in
+while [[ $# -gt 0 ]]; do
+  key=$1
+  case $key in
     -b|--build)
     BUILD_FLAG=true
     shift
@@ -53,6 +54,10 @@ Options:
                             used multiple times for multiple targets.
 
   -h, --help                This message.
+
+Note:
+Android targets do not run rust tests because the docker environment is not
+Android.
 """
     exit
     ;;
@@ -74,24 +79,15 @@ else
   BO_TIE_PATH=`pwd`
 fi
 
-# TODO use this later for other arch related builds
-qemu_setup() {
-  TARGET=$1
-
-  # get multi-arch
-  docker run --rm --privileged multiarch/qemu-user-static:register --reset > /dev/null
-
-}
-
 run() {
   TARGET=$1
 
-  if [ $BUILD_FLAG = true ] || ! $(docker image ls -q bo-tie:$TARGET > /dev/null )
+  if [ $BUILD_FLAG = true ] || [[ -z $(docker image ls -q bo-tie:$TARGET) ]]
   then
     docker build -t "bo-tie:$TARGET" -f $(dirname $0)/docker/$TARGET/Dockerfile $(dirname $0)
   fi
 
-  mkdir -p target
+  mkdir -p $BO_TIE_PATH/target
 
   if [ $RUN_FLAG = true ]
   then
@@ -103,20 +99,22 @@ run() {
       --env CARGO_HOME=/cargo \
       --volume `rustc --print sysroot`:/rust:ro \
       --env TARGET=$TARGET \
+      --env CARGO_TARGET_$(echo $TARGET | tr '[:lower:]-' '[:upper:]_')_LINKER=${TARGET}-gcc \
+      --env CARGO_TARGET_$(echo $TARGET | tr '[:lower:]-' '[:upper:]_')_RUNNER="true" \
       --env RUN_RUST_TESTS=$RUN_RUST_TESTS \
       --env RUN_ANDROID_LOCAL_TESTS=$RUN_ANDROID_LOCAL_TESTS \
       --env RUN_ANDROID_INSTRUMENT_TESTS=$RUN_ANDROID_INSTRUMENT_TESTS \
       --env JNI_INCLUDE=/android-toolchain/sysroot/usr/include \
       --env RUN_LOCAL_TESTS=true \
       --env RUN_INSTRUMENT_TESTS=false \
-      --volume $BO_TIE_PATH:/bo-tie:ro \
-      --volume $BO_TIE_PATH/target:/bo-tie/target \
+      --volume $BO_TIE_PATH:/workspace/bo-tie:ro \
+      --volume $BO_TIE_PATH/target:/workspace/bo-tie/target \
+      --volume $BO_TIE_PATH/ci/targets:/ci/targets \
+      --privileged \
       bo-tie:$TARGET \
       bash -c \
-      'rsync -rc --update /bo-tie/ci/android/{bo-tie-tests,TestProject} /workspace; \
-       chmod -R 777 /workspace/{bo-tie-tests,TestProject};
-       cd /workspace; \
-       PATH=$PATH:/rust/bin exec sh /ci/docker/run.sh' )
+      'rsync -rc --update /workspace/bo-tie/ci/android/{bo-tie-tests,TestProject} /workspace; \
+       PATH=$PATH:/rust/bin exec sh /workspace/bo-tie/ci/docker/run.sh')
 
     # Need to commit to image regardless of
     docker start -a $CONTAINER_ID || true
@@ -133,5 +131,9 @@ if [ ! -z ${TARGETS:+x} ]; then
     run $T
   done
 else
-  run x86_64-linux-android
+  for F in $(ls $(dirname $0)/docker); do
+    if [ -d $(dirname $0)/docker/$F ]; then
+      run $F
+    fi
+  done
 fi

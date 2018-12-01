@@ -2,11 +2,11 @@ set -ex
 
 if [ $RUN_RUST_TESTS = true ]
 then
-  (
-    cd bo-tie
+(
+  cd /workspace/bo-tie
 
-    cargo test --release --target $TARGET
-  )
+  cargo test ---target $TARGET
+)
 fi
 
 case $TARGET in
@@ -27,10 +27,10 @@ case $TARGET in
   ;;
 esac
 
-mkdir -p /targets/$TARGET
+mkdir -p /ci/targets
 
 cd /workspace/bo-tie-tests
 
-cargo build --release
+cargo build --release --target $TARGET
 
-cp target/release/libbo_tie_tests.so /targets/$TARGET
+cp -r target/$TARGET /ci/targets
