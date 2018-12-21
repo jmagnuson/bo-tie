@@ -1,0 +1,1 @@
+{"rustc":16480487526635704435,"features":"[\"backtrace\", \"default\", \"error-chain\"]","target":4944179213620976468,"profile":11870183705523825133,"path":3397964769740651611,"deps":[["walkdir v2.2.7","walkdir",10976525613275354973]],"local":[{"Precalculated":"0.10.2"}],"rustflags":[],"edition":"Edition2015"}

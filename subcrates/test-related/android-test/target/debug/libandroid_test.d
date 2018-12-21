@@ -1,0 +1,1 @@
+/home/gpace/Projects/night-sky-project/bo-tie/subprojects/test-related/android-test/target/debug/libandroid_test.so: /home/gpace/Projects/night-sky-project/bo-tie/subprojects/test-related/android-test/build.rs /home/gpace/Projects/night-sky-project/bo-tie/subprojects/test-related/android-test/src/lib.rs

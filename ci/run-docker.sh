@@ -2,9 +2,109 @@
 BUILD_FLAG=false
 RUN_FLAG=true
 
-RUN_RUST_TESTS=true
+BUILD_FOR_RELEASE=false
+RUN_RUST_TESTS=false
+BUILD_RUST_TESTS=false
+BUILD_ANDROID_TEST_WRAPPER=false
 RUN_ANDROID_LOCAL_TESTS=true
 RUN_ANDROID_INSTRUMENT_TESTS=false
+
+# So that run-docker.sh can be run from the bo-tie directory or ci directory
+if [ $(dirname $0) = '.' ]
+then
+  BO_TIE_PATH=`pwd`/..
+else
+  BO_TIE_PATH=`pwd`
+fi
+
+# Search for dockerfiles from the given basepath
+#
+# Returns a list of Dockerfile paths relative to the provided basepath (but the
+# dot isn't printed before the first path slash).
+#
+# Requires 1 argument, the basepath from where to start searching.
+# A second argument can be passed if it is desired to prepend each path in the
+# returned list with a given path.
+dockerfile_search() {
+  local DOCKERS=()
+
+  # P in the following 2 variable names is short for PATH
+  local P=$(if [ $1 ]; then echo $1; else echo '.'; fi)
+  local OUT_P=$(if [ $2 ]; then echo $2; else echo ''; fi)
+
+  for F in $(ls $P); do
+    if [ -d $P/$F ]; then
+        DOCKERS=( ${DOCKERS[*]} $(dockerfile_search $P/$F $OUT_P/$F) )
+    else
+      if [ $F = Dockerfile ]; then
+        DOCKERS=( ${DOCKERS[*]} $OUT_P )
+      fi
+    fi
+  done
+
+  echo ${DOCKERS[*]}
+}
+
+# Prints out the available targets, for use with the --print-targets option
+#
+# No args
+print_targets() {
+  local TARGET_PATHS=(\
+    $(dockerfile_search $BO_TIE_PATH/ci/docker/android android) \
+    $(dockerfile_search $BO_TIE_PATH/ci/docker/targets) \
+  )
+  local TARGET_PARTS=
+  local TARGET=
+  local ALL_TARGETS=
+
+  for TP in ${TARGET_PATHS[*]}; do
+    # SPLIT by /
+    IFS="\/" read -ra TARGET_PARTS <<< $TP
+    unset IFS
+
+    for I in ${TARGET_PARTS[*]}; do
+      if [ "$TARGET" ]; then
+        TARGET="$TARGET-$I"
+      else
+        TARGET="$I"
+      fi
+    done
+
+    ALL_TARGETS=( ${ALL_TARGETS[@]} $TARGET )
+
+    TARGET=''
+  done
+
+  printf "%s\n" $(echo ${ALL_TARGETS[@]} | tr " " "\n" | sort)
+}
+
+HELP_MESSAGE="""Usage: run-docker.sh [OPTION]
+
+This script runs the local unit tests for all android targets unless -t or
+--target are specified. The docker images are only built if the image doesn't
+exist.
+
+Options:
+-b, --build               Build the docker image(s).
+    --no-run              Do not run the container(s), usefull when combined
+                          with -b or --build. All other options that require a
+                          docker container will have no effect.
+-r, --release             Add the --release flag to rust tests and builds.
+    --rust-tests          Run rust tests
+    --build-rust-tests    Build rust tests but do not run rust tests. Superseded
+                          by the flag '--rust-tests'
+    --no-android-local-tests
+                          Do not run the android local tests. This is only
+                          applicable for the android-local-tests target.
+-i, --no-android-instrument-tests
+                          Run the tests through the android emulator. This is
+                          only applicable for the android-instrument-tests
+                          targert (which is still being developed).
+-t, --target <TARGET>     Run for only the specified target, this can be
+                          used multiple times for multiple targets.
+    --print-targets         Print all docker targets
+-h, --help                This message.
+"""
 
 while [[ $# -gt 0 ]]; do
   key=$1
@@ -18,8 +118,16 @@ while [[ $# -gt 0 ]]; do
     RUN_FLAG=false
     shift
     ;;
-    --no-rust-tests)
-    RUN_RUST_TESTS=false
+    -r|--release)
+    BUILD_FOR_RELEASE=true
+    shift
+    ;;
+    --rust-tests)
+    RUN_RUST_TESTS=true
+    shift
+    ;;
+    --build-rust-tests)
+    BUILD_RUST_TESTS=true
     shift
     ;;
     --no-local-tests)
@@ -35,30 +143,11 @@ while [[ $# -gt 0 ]]; do
     shift 2
     ;;
     -h|--help)
-    echo """Usage: run-docker.sh [OPTION]
-
-This script runs the local unit tests for all android targets. By default,
-docker images are only built if the image doesn't exist, and the instrument
-tests not run on an emulator. Options can be specified to change the default
-behavior.
-
-Options:
-  -b, --build               Build and run the docker image.
-      --no-run              Build the image and do not run it. All other
-                            options that require the image to run will have
-                            no effect.
-      --no-rust-tests       Do not run rust tests
-      --no-local-tests      Do not run the local tests
-  -i, --instrument          Run the tests through the android emulator
-  -t, --target <TRIPLE>     Run for only the specified target, this can be
-                            used multiple times for multiple targets.
-
-  -h, --help                This message.
-
-Note:
-Android targets do not run rust tests because the docker environment is not
-Android.
-"""
+    echo "$HELP_MESSAGE"
+    exit
+    ;;
+    --print-targets)
+    print_targets
     exit
     ;;
     *)
@@ -69,71 +158,34 @@ Android.
   esac
 done
 
-set -ex
-
-# So that run-docker.sh can be run from the bo-tie directory or ci directory
-if [ $(dirname $0) = '.' ]
-then
-  BO_TIE_PATH=`pwd`/..
-else
-  BO_TIE_PATH=`pwd`
-fi
-
-run() {
-  TARGET=$1
-
-  if [ $BUILD_FLAG = true ] || [[ -z $(docker image ls -q bo-tie:$TARGET) ]]
-  then
-    docker build -t "bo-tie:$TARGET" -f $(dirname $0)/docker/$TARGET/Dockerfile $(dirname $0)
-  fi
-
-  mkdir -p $BO_TIE_PATH/target
-
-  if [ $RUN_FLAG = true ]
-  then
-    CONTAINER_ID=$(docker create \
-      --user `id -u`:`id -g` \
-      --net=host \
-      --init \
-      --volume $HOME/.cargo:/cargo \
-      --env CARGO_HOME=/cargo \
-      --volume `rustc --print sysroot`:/rust:ro \
-      --env TARGET=$TARGET \
-      --env CARGO_TARGET_$(echo $TARGET | tr '[:lower:]-' '[:upper:]_')_LINKER=${TARGET}-gcc \
-      --env CARGO_TARGET_$(echo $TARGET | tr '[:lower:]-' '[:upper:]_')_RUNNER="true" \
-      --env RUN_RUST_TESTS=$RUN_RUST_TESTS \
-      --env RUN_ANDROID_LOCAL_TESTS=$RUN_ANDROID_LOCAL_TESTS \
-      --env RUN_ANDROID_INSTRUMENT_TESTS=$RUN_ANDROID_INSTRUMENT_TESTS \
-      --env JNI_INCLUDE=/android-toolchain/sysroot/usr/include \
-      --env RUN_LOCAL_TESTS=true \
-      --env RUN_INSTRUMENT_TESTS=false \
-      --volume $BO_TIE_PATH:/workspace/bo-tie:ro \
-      --volume $BO_TIE_PATH/target:/workspace/bo-tie/target \
-      --volume $BO_TIE_PATH/ci/targets:/ci/targets \
-      --privileged \
-      bo-tie:$TARGET \
-      bash -c \
-      'rsync -rc --update /workspace/bo-tie/ci/android/{bo-tie-tests,TestProject} /workspace; \
-       PATH=$PATH:/rust/bin exec sh /workspace/bo-tie/ci/docker/run.sh')
-
-    # Need to commit to image regardless of
-    docker start -a $CONTAINER_ID || true
-
-    docker commit $CONTAINER_ID bo-tie:$TARGET
-
-    docker rm $CONTAINER_ID
-  fi
-}
-
-if [ ! -z ${TARGETS:+x} ]; then
-  echo "Running bo-tie docker container for target ${TARGETS[@]}"
-  for T in $TARGETS; do
-    run $T
-  done
-else
-  for F in $(ls $(dirname $0)/docker); do
-    if [ -d $(dirname $0)/docker/$F ]; then
-      run $F
+find_docker_runners() {
+  for F in $(ls $1)
+  do
+    if [ -f $1/$F/Dockerfile ]
+    then
+      source $1/run-docker-target.sh $F
+    elif [ -d $1/$F ]
+    then
+      find_docker_runners "$1/$F"
     fi
   done
+}
+
+set -ex
+
+if [ ! -z ${TARGETS:+x} ]; then
+  for T in $TARGETS; do
+    ANDROID_PREFIX='android-'
+    case $T in
+      $ANDROID_PREFIX*)
+      source $(dirname $0)/docker/android/run-docker-target.sh ${T:${#ANDROID_PREFIX}}
+      ;;
+      *)
+      source $(dirname $0)/docker/targets/run-docker-target.sh $T
+      ;;
+    esac
+  done
+else
+  # All targets in ci/docker/targets
+  find_docker_runners $(dirname $0)/docker
 fi

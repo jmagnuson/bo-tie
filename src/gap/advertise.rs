@@ -450,6 +450,7 @@ pub mod service_class_uuid {
 
     use alloc::collections::BTreeSet;
     use core::convert::{AsRef,AsMut};
+    use core::iter::IntoIterator;
     use super::*;
 
     /// Internal trait for specifying the Data Type Value
@@ -498,6 +499,7 @@ pub mod service_class_uuid {
     ///
     /// Services implements `AsRef` for `BTreeSet` so use the methods of `BTreeSet` for editing
     /// the UUIDs in the instance
+    #[derive(Clone)]
     pub struct Services<T> where T: Ord {
         set: BTreeSet<T>,
         complete: bool,
@@ -515,6 +517,14 @@ pub mod service_class_uuid {
         pub fn is_complete(&self) -> bool {
             self.complete
         }
+
+        /// Add uuids to the list of uuids
+        ///
+        /// Returns true if the uuid is added, otherwise returns false if the uuid is already in
+        /// the set.
+        pub fn insert_uuid(&mut self, uuid: T) -> bool {
+            self.set.insert(uuid)
+        }
     }
 
     impl<T> AsRef<BTreeSet<T>> for Services<T> where T: Ord
@@ -528,6 +538,17 @@ pub mod service_class_uuid {
     {
         fn as_mut(&mut self) -> &mut BTreeSet<T> {
             &mut self.set
+        }
+    }
+
+    impl<T> IntoIterator for Services<T> where T: ::std::cmp::Ord {
+        type Item = T;
+        type IntoIter = <BTreeSet<T> as IntoIterator>::IntoIter;
+
+        /// Usefull for iterating over the contained UUIDs, but after this is done you obviously
+        /// cannot tell if the list is complete or not.
+        fn into_iter(self) -> Self::IntoIter {
+            self.set.into_iter()
         }
     }
 

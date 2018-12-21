@@ -1,0 +1,15 @@
+/home/gpace/Projects/night-sky-project/bo-tie/subprojects/test-related/android-test/target/debug/deps/libonig-a3e8deaffa078036.rlib: /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/lib.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/find.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/flags.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/region.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/replace.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/match_param.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/names.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/syntax.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/tree.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/utils.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/buffers.rs
+
+/home/gpace/Projects/night-sky-project/bo-tie/subprojects/test-related/android-test/target/debug/deps/onig-a3e8deaffa078036.d: /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/lib.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/find.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/flags.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/region.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/replace.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/match_param.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/names.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/syntax.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/tree.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/utils.rs /home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/buffers.rs
+
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/lib.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/find.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/flags.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/region.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/replace.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/match_param.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/names.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/syntax.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/tree.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/utils.rs:
+/home/gpace/.cargo/registry/src/github.com-1ecc6299db9ec823/onig-3.2.2/src/buffers.rs:

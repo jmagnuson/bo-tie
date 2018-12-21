@@ -1,0 +1,2 @@
+cargo:rustc-env=JAVA_PACKAGE=
+cargo:rust-env=JAVA_OUTPUT_PATH=/rob

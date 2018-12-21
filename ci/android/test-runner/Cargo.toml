@@ -1,0 +1,12 @@
+[package]
+name = "test-runner"
+version = "0.1.0"
+authors = ["gpace <greg.pace@bo.tie>"]
+edition = "2018"
+
+[dependencies]
+jni="*"
+
+[lib]
+name="testrunner"
+crate-type=["dylib"]

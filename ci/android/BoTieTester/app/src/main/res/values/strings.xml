@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">BoTieTester</string>
+
+    <string name="default_text">No Test Results</string>
+
+    <string name="text_placeholder">Running Tests ...</string>
+    <string name="text_output">%s\n%s</string>
+</resources>
