@@ -6,7 +6,6 @@
 #![feature(alloc)]
 #![feature(test)]
 #![feature(try_from)]
-#![feature(unsize)]
 
 // These crates are used all the time
 extern crate alloc;
@@ -16,7 +15,7 @@ extern crate bincode as serializer;
 // test related
 #[cfg(test)]
 extern crate test;
-#[cfg(any(test, target_os = "android"))]
+#[cfg(any(test))]
 #[macro_use]
 extern crate lazy_static;
 
@@ -27,20 +26,10 @@ extern crate lazy_static;
 )), no_std)]
 extern crate core;
 
-// Nix crate for just unix targets (except for android)
-#[cfg(all(
-    unix,
-    not(target_os = "android"))
-)]
+// Nix crate for just unix targets
+#[cfg(all(unix, not(target_os = "android")))]
 extern crate nix;
 
-// Android target related
-#[cfg(target_os = "android")]
-extern crate jni;
-#[cfg(target_os = "android")]
-pub mod android;
-
-// Host Controller interface
 #[cfg(not(target_os = "android"))]
 pub mod hci;
 

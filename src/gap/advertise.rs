@@ -743,10 +743,21 @@ pub mod service_data {
             self.uuid
         }
 
-        pub fn get_data<'de, Data>(&'de self) -> ::serializer::Result<Data>
-            where Data: ::serde::Deserialize<'de>
+        /// Attemp to get the service data as `Data`
+        pub fn get_data<'d, Data>(&'d self) -> ::serializer::Result<Data>
+            where Data: ::serde::Deserialize<'d>
         {
             ::serializer::deserialize(&self.serialized_data)
+        }
+
+        /// Get a reference to the serialized data
+        pub fn get_serialized_data<'a>(&'a self) -> &'a [u8] {
+            self.serialized_data.as_ref()
+        }
+
+        /// Consume self and get the serialized data
+        pub fn into_serialized_data(self) -> Box<[u8]> {
+            self.serialized_data.into_boxed_slice()
         }
     }
 
