@@ -146,6 +146,7 @@ macro_rules! impl_status_return {
 #[cfg(test)]
 #[macro_use]
 mod test_util {
+
     use std::future::Future;
     use std::marker::Unpin;
     use std::sync::{Arc,Mutex};
@@ -2598,7 +2599,7 @@ pub mod le {
         pub mod set_advertising_data {
 
             use hci::*;
-            use gap::advertise::{ConvertRawData,DataTooLargeError};
+            use gap::advertise::{IntoRaw,DataTooLargeError};
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);
 
@@ -2664,7 +2665,7 @@ pub mod le {
                 /// the advertising data.
                 pub fn try_push<T>(&mut self, data: T )
                     -> Result<(), DataTooLargeError>
-                    where T: ConvertRawData
+                    where T: IntoRaw
                 {
                     let raw_data = data.into_raw();
 

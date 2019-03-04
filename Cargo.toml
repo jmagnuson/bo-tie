@@ -2,7 +2,6 @@
 name = "bo-tie"
 version = "0.1.0"
 authors = []
-#build = "build/build.rs"
 keywords = ["Bluetooth", "BLE", "Low Energy"]
 categories = ["asynchronous"]
 license = "MIT"
@@ -14,6 +13,13 @@ default = ["bluetooth_5_0"]
 
 [target.'cfg(unix)'.dependencies]
 nix = "~0.11.0"
+
+[dependencies]
+serde = "1.0.85"
+
+[dependencies.bincode]
+version = "1.0.1"
+features = ["i128"]
 
 [dev-dependencies]
 simple-signal= "1.1.1"

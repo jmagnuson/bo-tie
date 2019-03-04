@@ -28,7 +28,7 @@ pub enum AssignedTypes {
     ListOf16bitServiceSolicitationUUIDs,
     ListOf128bitServiceSolicitationUUIDs,
     ServiceData,
-    ServiceData16bitUUID,
+    ServiceData16BitUUID,
     PublicTargetAddress,
     RandomTargetAddress,
     Appearance,
@@ -38,8 +38,8 @@ pub enum AssignedTypes {
     SimplePairingHashC256,
     SimplePairingRandomizerR256,
     ListOf32bitServiceSolicitationUUIDs,
-    ServiceData32bitUUID,
-    ServiceData128bitUUID,
+    ServiceData32BitUUID,
+    ServiceData128BitUUID,
     LESecureConnectionsConfirmationValue,
     LESecureConnectionsRandomValue,
     URI,
@@ -79,7 +79,7 @@ impl AssignedTypes {
             AssignedTypes::ListOf16bitServiceSolicitationUUIDs => 0x14,
             AssignedTypes::ListOf128bitServiceSolicitationUUIDs => 0x15,
             AssignedTypes::ServiceData => 0x16,
-            AssignedTypes::ServiceData16bitUUID => 0x16,
+            AssignedTypes::ServiceData16BitUUID => 0x16,
             AssignedTypes::PublicTargetAddress => 0x17,
             AssignedTypes::RandomTargetAddress => 0x18,
             AssignedTypes::Appearance => 0x19,
@@ -89,8 +89,8 @@ impl AssignedTypes {
             AssignedTypes::SimplePairingHashC256 => 0x1D,
             AssignedTypes::SimplePairingRandomizerR256 => 0x1E,
             AssignedTypes::ListOf32bitServiceSolicitationUUIDs => 0x1F,
-            AssignedTypes::ServiceData32bitUUID => 0x20,
-            AssignedTypes::ServiceData128bitUUID => 0x21,
+            AssignedTypes::ServiceData32BitUUID => 0x20,
+            AssignedTypes::ServiceData128BitUUID => 0x21,
             AssignedTypes::LESecureConnectionsConfirmationValue => 0x22,
             AssignedTypes::LESecureConnectionsRandomValue => 0x23,
             AssignedTypes::URI => 0x24,
@@ -113,6 +113,7 @@ pub enum Error {
     IncorrectLength,
     RawTooSmall,
     UTF8Error(::alloc::str::Utf8Error),
+    LeBytesConversionError,
 }
 
 impl fmt::Display for Error where {
@@ -121,7 +122,9 @@ impl fmt::Display for Error where {
             Error::IncorrectDataType => write!(f, "Incorrect Data Type Field"),
             Error::IncorrectLength => write!(f, "The length of this type is larger than the remaining bytes in the packet"),
             Error::RawTooSmall => write!(f, "Raw data length is too small"),
-            Error::UTF8Error(_) => write!(f, "UTF-8 conversion error"),
+            Error::UTF8Error(utf8_err) => write!(f, "UTF-8 conversion error, valid up to {}: '{}'",
+                utf8_err.valid_up_to(), utf8_err.to_string()),
+            Error::LeBytesConversionError => write!(f, "Error converting bytes from le")
         }
     }
 }
@@ -137,17 +140,16 @@ fn set_len( buf: &mut [u8] ) {
     buf[0] = (buf.len() as u8) - 1
 }
 
-/// A trait for converting the Advertising Data Structure into or from its raw form
-///
-/// This trait is used for converting a Advertising or Extended Inquiry data structure into or
-/// from the raw data that is transferred to or from a controller during Advertising or an
-/// Extended Inquiry.
-pub trait ConvertRawData where Self: core::marker::Sized {
+/// A trait for converting the Advertising Data Structure into its raw (byte slice) form
+pub trait IntoRaw where Self: core::marker::Sized {
     /// Convert the data into a vector of bytes
     ///
     /// This converts the data into the form that will be passed from devices over the air
     fn into_raw(&self) -> Vec<u8>;
+}
 
+/// A trait for attempting to convert a slice of bytes into an Advertising Data Structure
+pub trait TryFromRaw where Self: core::marker::Sized {
     /// Attempt to convert the data from its raw form into this type
     ///
     /// Takes the data protion of one raw advertising or extended inquiry struct and converts
@@ -155,11 +157,12 @@ pub trait ConvertRawData where Self: core::marker::Sized {
     /// into this type.
     ///
     /// The passed parameter `raw` needs to refer to a slice to a single data portion *without* the
-    /// length byte. The slice should start with the type id.
+    /// length byte. The slice should start with the type id. Refer to the Core specification
+    /// (Version 5.0 | Vol 3, Part C Section 11) for raw data format details.
     fn try_from_raw(raw: &[u8]) -> Result<Self, Error>;
 }
 
-/// This works for assigned types or any other types that the first byte is the type id
+/// $arr is assumed to be an array/slice where the first byte is the ad type.
 macro_rules! from_raw {
     ($arr:expr, $( $ad:path, )* $to_do:block) => {
         if $arr.len() > 0 && $($arr[0] == $ad.val())||* {
@@ -360,7 +363,7 @@ pub mod flags {
         }
     }
 
-    impl ConvertRawData for Flags {
+    impl IntoRaw for Flags {
         fn into_raw(&self) -> Vec<u8> {
             let mut raw = new_raw_type(Self::AD_TYPE.val());
 
@@ -385,6 +388,9 @@ pub mod flags {
 
             raw
         }
+    }
+
+    impl TryFromRaw for Flags {
 
         fn try_from_raw(raw: &[u8]) -> Result<Flags,Error> {
             let mut set = BTreeSet::new();
@@ -444,12 +450,11 @@ pub mod flags {
 pub mod service_class_uuid {
     //! Service Class UUID Data Type
     //!
-    //! The struct Services is the data type for the list of service class UUIDs. It is
-    //! implemented for the three types of UUIDs (16, 32, and 128 bit) and to create an instance
-    //! of it use the functions `use _16`, `use _32`, or `use _128` at the module level.
+    //! The struct Services is the data type for the list of service class UUIDs.
 
     use alloc::collections::BTreeSet;
-    use core::convert::{AsRef,AsMut};
+    use core::convert::{AsRef, AsMut};
+    use core::iter::{IntoIterator, FromIterator};
     use super::*;
 
     /// Internal trait for specifying the Data Type Value
@@ -476,19 +481,37 @@ pub mod service_class_uuid {
         const INCOMPLETE: AssignedTypes = AssignedTypes::IncompleteListOf128bitServiceClassUUIDs;
     }
 
+    /// Create a Services data type for 16-bit UUIDs
+    ///
+    /// This takes one input to indicate if the service list is to be a complete or incomplete
+    /// list of service id's.
     pub fn new_16( complete: bool ) -> Services<u16> {
         Services::new(complete)
     }
 
+    /// Create a Services data type for 32-bit UUIDs
+    ///
+    /// This takes one input to indicate if the service list is to be a complete or incomplete
+    /// list of service id's.
     pub fn new_32( complete: bool ) -> Services<u32> {
         Services::new(complete)
     }
 
+    /// Create a Services data type for 128-bit UUIDs
+    ///
+    /// This takes one input to indicate if the service list is to be a complete or incomplete
+    /// list of service id's.
     pub fn new_128( complete: bool ) -> Services<u128> {
         Services::new(complete)
     }
 
     /// Service UUIDs
+    ///
+    /// Use the module level functions
+    /// `[new_16]`(../fn.new_16.html),
+    /// `[new_32]`(../fn.new_32.html), or
+    /// `[new_128]` (../fn.new_128.html)
+    /// to crunstruct a new, empty `Services` (of 16, 32, or 128 bit UUIDs, respectively).
     ///
     /// This is a set of services uuids with sizes of u16, u32, or u128. `Services` can either
     /// be set as a complete or incomplete list
@@ -498,6 +521,7 @@ pub mod service_class_uuid {
     ///
     /// Services implements `AsRef` for `BTreeSet` so use the methods of `BTreeSet` for editing
     /// the UUIDs in the instance
+    #[derive(Clone, Debug)]
     pub struct Services<T> where T: Ord {
         set: BTreeSet<T>,
         complete: bool,
@@ -515,6 +539,14 @@ pub mod service_class_uuid {
         pub fn is_complete(&self) -> bool {
             self.complete
         }
+
+        /// Add uuids to the list of uuids
+        ///
+        /// Returns true if the uuid is added, otherwise returns false if the uuid is already in
+        /// the set.
+        pub fn insert(&mut self, uuid: T) -> bool {
+            self.set.insert(uuid)
+        }
     }
 
     impl<T> AsRef<BTreeSet<T>> for Services<T> where T: Ord
@@ -531,7 +563,45 @@ pub mod service_class_uuid {
         }
     }
 
-    macro_rules! impl_from {
+    impl<T> IntoIterator for Services<T> where T: ::std::cmp::Ord {
+        type Item = T;
+        type IntoIter = <BTreeSet<T> as IntoIterator>::IntoIter;
+
+        /// Usefull for iterating over the contained UUIDs, but after this is done you obviously
+        /// cannot tell if the list is complete or not.
+        fn into_iter(self) -> Self::IntoIter {
+            self.set.into_iter()
+        }
+    }
+
+    /// Using this constructs a new *complete* Services from the provided iterator
+    impl<T,B> FromIterator<T> for Services<B> where B: Ord, T: Into<B> {
+        fn from_iter<Iter>(iter: Iter) -> Self where Iter: IntoIterator<Item = T> {
+            let mut services = Self::new(true);
+
+            for i in iter {
+                services.insert(i.into());
+            }
+
+            services
+        }
+    }
+
+    macro_rules! impl_from_services {
+        ( $uuid_type_to:ty, $( $uuid_type_from:ty),+ ) => {
+            $( impl<'a> From<Services<$uuid_type_from>> for Services<$uuid_type_to> {
+
+                fn from( services: Services<$uuid_type_from> ) -> Self {
+                    services.into_iter().map( |uuid| uuid.clone() as $uuid_type_to ).collect()
+                }
+            } )*
+        };
+    }
+
+    impl_from_services!{u128,u32,u16}
+    impl_from_services!{u32,u16,&u16} // todo double check that this is correct
+
+    macro_rules! impl_from_for_slice_with_complete {
         ( $type: ty ) => {
             impl<'a> From<( &'a [$type], bool)> for Services<$type> {
 
@@ -549,19 +619,18 @@ pub mod service_class_uuid {
         }
     }
 
-    impl_from!{u16}
-    impl_from!{u32}
-    impl_from!{u128}
+    impl_from_for_slice_with_complete!{u16}
+    impl_from_for_slice_with_complete!{u32}
+    impl_from_for_slice_with_complete!{u128}
 
     /// Implementation for pimitive type numbers
     ///
     /// Requires `$type` to implement method to_le
     macro_rules! impl_raw {
         ( $type:tt ) => {
-            impl ConvertRawData for Services<$type> {
+            impl IntoRaw for Services<$type> {
 
                 fn into_raw(&self) -> Vec<u8> {
-                    use core::mem::{size_of, forget};
 
                     let data_type = if self.set.is_empty() || self.complete {
                         Self::COMPLETE
@@ -569,28 +638,21 @@ pub mod service_class_uuid {
                         Self::INCOMPLETE
                     };
 
-                    let mut raw = new_raw_type(data_type.val());
+                    let mut raw = self.set.iter()
+                    .map(|v| $type::to_le_bytes(*v) )
+                    .fold(new_raw_type(data_type.val()), |mut raw, slice| {
+                        raw.extend_from_slice(&slice);
+                        raw }
+                    );
 
-                    let data = self.set.iter().map(|v| $type::to_le(*v) ).collect::<Vec<$type>>();
-
-                    let ptr = data.as_ptr() as *const $type as *const u8 as *mut u8;
-                    let len = data.len() * size_of::<$type>();
-                    let cap = data.capacity() * size_of::<$type>();
-
-                    raw.append( &mut unsafe {
-
-                        // force data to be leaked
-                        forget(data);
-
-                        // immediatly reclame ownership of data, but convert it to a vector of bytes
-                        Vec::from_raw_parts(ptr, len, cap)
-                    });
-
-                   set_len(&mut raw);
+                    set_len(&mut raw);
 
                     raw
 
                 }
+            }
+
+            impl TryFromRaw for Services<$type> {
 
                 fn try_from_raw( raw: &[u8] ) -> Result<Services<$type>,Error> {
                     from_raw!{raw, Self::COMPLETE, Self::INCOMPLETE, {
@@ -616,6 +678,123 @@ pub mod service_class_uuid {
     impl_raw!{u16}
     impl_raw!{u32}
     impl_raw!{u128}
+}
+
+pub mod service_data {
+    //! Service Class UUID Data Type
+    //!
+    //! The struct Services is the data type for the list of service class UUIDs paired with
+    //! service data. It is implemented for the three types of UUIDs (16, 32, and 128 bit)
+    //! and to create an instance of it use the functions `new_16`, `new_32`, or
+    //! `new_128` at the module level.
+
+    use super::*;
+
+    /// Create service data for 16-bit UUID's
+    pub fn new_16<Data>(uuid: u16, data: &Data) -> ::serializer::Result<ServiceData<u16>>
+        where Data: ::serde::Serialize
+    {
+        ServiceData::new(uuid, data)
+    }
+
+    /// Create service data for 32-bit UUID's
+    pub fn new_32<Data>(uuid: u32, data: &Data) -> ::serializer::Result<ServiceData<u32>>
+        where Data: ::serde::Serialize
+    {
+        ServiceData::new(uuid, data)
+    }
+
+    /// Create service data for 64-bit UUID's
+    pub fn new_128<Data>(uuid: u128, data: &Data) -> ::serializer::Result<ServiceData<u128>>
+        where Data: ::serde::Serialize
+    {
+        ServiceData::new(uuid, data)
+    }
+
+    /// Service Data
+    ///
+    /// Contains a UUID along with the coresponding data for that UUID
+    ///
+    /// Use the module level functions
+    /// `[new_16]`(../fn.new_16.html),
+    /// `[new_32]`(../fn.new_32.html), or
+    /// `[new_128]` (../fn.new_128.html)
+    /// to crunstruct a new, empty `ServiceData` (of 16, 32, or 128 bit UUIDs, respectively).
+    #[derive(Clone, Debug)]
+    pub struct ServiceData<UuidType> {
+        uuid: UuidType,
+        pub(crate) serialized_data: Vec<u8>,
+    }
+
+    impl<UuidType> ServiceData<UuidType>
+    {
+        const AD_TYPE: AssignedTypes = AssignedTypes::ServiceData;
+
+        fn new<Data>(uuid: UuidType, data: &Data) -> ::serializer::Result<Self>
+            where Data: ::serde::Serialize
+        {
+            Ok(ServiceData {
+                uuid: uuid,
+                serialized_data: ::serializer::serialize(&data)?,
+            })
+        }
+
+        pub fn get_uuid(&self) -> UuidType where UuidType: Copy {
+            self.uuid
+        }
+
+        pub fn get_data<'de, Data>(&'de self) -> ::serializer::Result<Data>
+            where Data: ::serde::Deserialize<'de>
+        {
+            ::serializer::deserialize(&self.serialized_data)
+        }
+    }
+
+    macro_rules! impl_raw {
+        ( $type:tt, $ad_type:path ) => {
+            impl IntoRaw for ServiceData<$type> {
+
+                fn into_raw(&self) -> Vec<u8> {
+                    let mut raw = new_raw_type(Self::AD_TYPE.val());
+
+                    raw.extend_from_slice(&self.uuid.to_le_bytes());
+
+                    raw.extend(self.serialized_data.clone());
+
+                    set_len(&mut raw);
+
+                    raw
+                }
+            }
+
+            impl TryFromRaw for ServiceData<$type> {
+
+                fn try_from_raw( raw: &[u8] ) -> Result<ServiceData<$type>,Error> {
+                    let ad_type = $ad_type;
+                    from_raw!{raw, ad_type, {
+                        use std::convert::TryInto;
+
+                        if raw.len() >= 3 {
+                            let (uuid_raw, data) = raw.split_at(std::mem::size_of::<$type>());
+                            let err = ::gap::advertise::Error::LeBytesConversionError;
+
+                            ServiceData {
+                                uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
+                                serialized_data: Vec::from(data),
+                            }
+                        }
+                        else {
+                            return Err(::gap::advertise::Error::RawTooSmall)
+                        }
+                    }}
+                }
+            }
+        }
+    }
+
+    impl_raw!{u16, AssignedTypes::ServiceData16BitUUID }
+    impl_raw!{u32, AssignedTypes::ServiceData32BitUUID }
+    impl_raw!{u128, AssignedTypes::ServiceData128BitUUID }
 }
 
 pub mod local_name {
@@ -659,7 +838,7 @@ pub mod local_name {
         }
     }
 
-    impl ConvertRawData for LocalName {
+    impl IntoRaw for LocalName {
         fn into_raw(&self) -> Vec<u8> {
 
 
@@ -672,12 +851,15 @@ pub mod local_name {
 
             let mut val = new_raw_type(data_type.val());
 
-            val.append(&mut self.name.clone().into());
+            val.extend(self.name.clone().bytes());
 
             set_len(&mut val);
 
             val
         }
+    }
+
+    impl TryFromRaw for LocalName {
 
         fn try_from_raw(raw: &[u8]) -> Result<Self,Error> {
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
