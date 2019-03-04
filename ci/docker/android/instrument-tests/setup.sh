@@ -5,7 +5,7 @@ SDK_VERSION="4333796"
 
 ANDROID_PTH=$( if [ $1 ]; then echo $1; else echo $( cd $(dirname $0) ; pwd -P )/android; fi )
 
-SDK_PTH=ANDROID_PTH/sdk
+SDK_PTH=$ANDROID_PTH/sdk
 
 mkdir -p $SDK_PTH
 
@@ -22,6 +22,7 @@ rm $SDK_PTH/sdk.zip
 
 yes | $SDK_PTH/tools/bin/sdkmanager --licenses > /dev/null
 yes | $SDK_PTH/tools/bin/sdkmanager \
+  'ndk-bundle' \
   'platform-tools' \
   'tools' \
   'lldb;3.1' \

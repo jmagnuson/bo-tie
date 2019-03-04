@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gawk \
   gcc \
   clang \
-  libc6-dev \
-  bluetooth \
-  libbluetooth-dev
+  libc6-dev
 
 ENV PATH $PATH:/android-toolchain/bin:/opt/kotlinc/bin
 

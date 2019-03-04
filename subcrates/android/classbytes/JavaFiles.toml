@@ -1,0 +1,21 @@
+# Format for this toml file
+#
+# All keys are required for each table array entry
+# [[classes]] => The name of the table array
+# fully_qualified_name => The fully qualified name of the class
+# path_to_package => The path to the package folder (relative to crate bo-tie)
+# name_of_constant => The name of the constant in the generated constants file
+[[classes]]
+fully_qualified_name = "botie/AdvertiseCallback"
+path_to_package = "src/android/java"
+name_of_constant = "ADVERTISE_CALLBACK_CLASS_BYTES"
+
+[[classes]]
+fully_qualified_name = "botie/ScanCallback"
+path_to_package = "src/android/java"
+name_of_constant = "SCAN_CALLBACK_CLASS_BYTES"
+
+[[classes]]
+fully_qualified_name = "botie/BluetoothGattCallback"
+path_to_package = "src/android/java"
+name_of_constant = "GATT_CALLBACK_CLASS_BYTES"

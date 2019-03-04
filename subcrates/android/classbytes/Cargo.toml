@@ -1,0 +1,13 @@
+[package]
+name = "classbytes"
+version = "0.1.0"
+authors = ["gpace1 <33923139+gpace1@users.noreply.github.com>"]
+edition = "2018"
+
+[dependencies]
+jni = "0.10.2"
+build_const = "0.2.1"
+toml = "0.4.10"
+serde = "1.0.85"
+serde_derive = "1.0.85"
+regex = "1.1.0"

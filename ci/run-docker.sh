@@ -8,6 +8,7 @@ BUILD_RUST_TESTS=false
 BUILD_ANDROID_TEST_WRAPPER=false
 RUN_ANDROID_LOCAL_TESTS=true
 RUN_ANDROID_INSTRUMENT_TESTS=false
+BUILD_DOC=false
 
 # So that run-docker.sh can be run from the bo-tie directory or ci directory
 if [ $(dirname $0) = '.' ]
@@ -102,7 +103,10 @@ Options:
                           targert (which is still being developed).
 -t, --target <TARGET>     Run for only the specified target, this can be
                           used multiple times for multiple targets.
-    --print-targets         Print all docker targets
+    --print-targets       Print all docker targets
+    --doc                 Build and open documentation. Only applicable to build
+                          targets and not test targets. Does nothing if not
+                          applicable.
 -h, --help                This message.
 """
 
@@ -141,6 +145,10 @@ while [[ $# -gt 0 ]]; do
     -t|--target)
     TARGETS=( "${TARGETS[@]}" "$2" )
     shift 2
+    ;;
+    --doc)
+    BUILD_DOC=true
+    shift
     ;;
     -h|--help)
     echo "$HELP_MESSAGE"

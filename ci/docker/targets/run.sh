@@ -18,4 +18,9 @@ then
   cargo test --target $TARGET $RELEASE_FLAG --no-run
 fi
 
-cargo build --target $TARGET --release --lib
+cargo build --target $TARGET $RELEASE_FLAG --lib
+
+if [ $BUILD_DOC = true ]
+then
+  cargo doc --target $TARGET $RELEASE_FLAG --document-private-items
+fi

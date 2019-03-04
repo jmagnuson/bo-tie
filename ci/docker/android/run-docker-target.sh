@@ -44,14 +44,14 @@ run_depend_target() {
     --env CARGO_TARGET_$(echo $1 | tr '[:lower:]-' '[:upper:]_')_RUNNER="true" \
     --env JNI_INCLUDE=/android-toolchain/sysroot/usr/include \
     --env GEN_JAVA_FILE_PATH=/workspace/bo-tie/temp \
-    --volume $BO_TIE_PATH:/workspace/bo-tie:ro \
-    --volume $BO_TIE_PATH/Cargo.lock:/workspace/bo-tie/Cargo.lock \
-    --volume $BO_TIE_PATH/temp:/workspace/bo-tie/temp \
-    --volume $BO_TIE_PATH/target:/workspace/bo-tie/target \
+    --env LIBRARY_FILE_NAME=bo-tie \
+    --env JAVA_PACKAGE='botietester' \
+    --env ANDROID_JAR_CLASSPATH='/android/sdk/platforms/android-28/android.jar' \
+    --volume $BO_TIE_PATH:/workspace/bo-tie \
+    --workdir "/workspace/bo-tie" \
     bo-tie:$1 \
     bash -c \
-    'cd /workspace/bo-tie; \
-    PATH=$PATH:/rust/bin exec cargo rustc --features android_test --release --target $TARGET -- --crate-type dylib'
+    'PATH=$PATH:/rust/bin exec cargo rustc --features android_test --target $TARGET -- --crate-type dylib'
 }
 
 if [ $BUILD_FLAG = true ] || [[ -z $(docker image ls -q bo-tie:$TARGET) ]]
@@ -92,6 +92,7 @@ then
 
   CONTAINER_ID=$(docker create \
     --user `id -u`:`id -g` \
+    --group-add plugdev \
     --init \
     --privileged \
     --network=host \
@@ -101,11 +102,12 @@ then
     --env TARGET=$DEPENDENCY_TARGET \
     --volume `rustc --print sysroot`:/rust:ro \
     --volume $BO_TIE_PATH:/workspace/bo-tie:ro \
+    --volume $HOME/.android:/.android \
     bo-tie:$TARGET \
     bash -c \
     'PATH=$PATH:/rust/bin exec sh /workspace/bo-tie/ci/docker/android/instrument-tests/run.sh')
 
-  docker start -a $CONTAINER_ID
+  docker start -a $CONTAINER_ID || true # Continue even if this fails
 
   docker commit $CONTAINER_ID bo-tie:$TARGET
 

@@ -1,0 +1,28 @@
+[package]
+name = "android-test"
+version = "0.1.0"
+authors = ["gpace <greg.pace@bo.tie>"]
+edition = "2018"
+build = "build.rs"
+
+[lib]
+proc-macro = true
+
+[features]
+default = ["android-test"]
+android-test = []
+doc-build = []
+
+[dependencies]
+quote = "0.6.10"
+proc-macro2 = "0.4.24"
+lazy_static = "1.2.0"
+scribe = "0.7.2"
+
+[dependencies.syn]
+version = "0.15.24"
+default-features = true
+features = ["full"]
+
+[dev-dependencies]
+jni = "*"

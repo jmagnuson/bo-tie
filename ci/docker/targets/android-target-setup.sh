@@ -43,7 +43,7 @@ rm $SDK_PTH/sdk.zip
 
 # install android needed tools
 yes | $SDK_PTH/tools/bin/sdkmanager --licenses > /dev/null
-yes | $SDK_PTH/tools/bin/sdkmanager ndk-bundle > /dev/null
+yes | $SDK_PTH/tools/bin/sdkmanager 'ndk-bundle' 'platforms;android-28' > /dev/null
 
 # build the toolchain
 $SDK_PTH/ndk-bundle/build/tools/make_standalone_toolchain.py \
