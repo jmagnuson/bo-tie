@@ -252,7 +252,7 @@ impl EventExpecter {
         impl future::Future for EventFuture {
             type Output = EventResponse;
 
-            fn poll (self: Pin<&mut Self>, lw: &task::LocalWaker) ->
+            fn poll (self: Pin<&mut Self>, lw: &task::Waker) ->
                 task::Poll<Self::Output>
             {
                 use self::task::Poll;
@@ -262,7 +262,7 @@ impl EventExpecter {
                     Err(e) => return task::Poll::Ready(Err(Error::Other(e.to_string()))),
                 };
 
-                waker.set_waker(lw.clone().into_waker());
+                waker.set_waker(lw.clone());
 
                 if waker.triggered() {
                     match self.events_response.try_recv() {

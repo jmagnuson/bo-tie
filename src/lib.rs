@@ -1,11 +1,9 @@
 #![feature(futures_api)]
-#![feature(pin)]
 #![feature(arbitrary_self_types)]
 #![feature(async_await)]
 #![feature(await_macro)]
 #![feature(alloc)]
 #![feature(test)]
-#![feature(try_from)]
 
 // These crates are used all the time
 extern crate alloc;

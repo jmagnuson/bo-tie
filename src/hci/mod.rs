@@ -4020,7 +4020,7 @@ pub mod le {
             use hci::*;
             use hci::common::ConnectionHandle;
 
-            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
+            const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadRemoteFeatures);
 
             #[repr(packed)]
             #[derive( Clone, Copy)]

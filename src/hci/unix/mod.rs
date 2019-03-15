@@ -162,10 +162,10 @@ impl fmt::Display for Error  {
 }
 
 impl error::Error for Error  {
-    fn cause(&self) -> Option<&error::Error> {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match *self {
             Error::EventNotSentFromController(_) => None,
-            Error::IOError(ref errno) => errno.cause().clone(),
+            Error::IOError(ref errno) => errno.source().clone(),
             Error::MPSCError(_) => None,
             Error::IncorrectEvent(_,_) => None,
             Error::Timeout => None,
