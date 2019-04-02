@@ -5,6 +5,7 @@ authors = []
 keywords = ["Bluetooth", "BLE", "Low Energy"]
 categories = ["asynchronous"]
 license = "MIT"
+edition = "2018"
 
 [features]
 bluetooth_4 = [] # 4.* devices

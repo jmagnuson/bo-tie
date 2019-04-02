@@ -170,10 +170,10 @@ macro_rules! from_raw {
         }
         else {
             if $arr.len() == 0 {
-                Err(::gap::advertise::Error::RawTooSmall)
+                Err(crate::gap::advertise::Error::RawTooSmall)
             }
             else {
-                Err(::gap::advertise::Error::IncorrectDataType)
+                Err(crate::gap::advertise::Error::IncorrectDataType)
             }
         }
     };
@@ -691,21 +691,21 @@ pub mod service_data {
     use super::*;
 
     /// Create service data for 16-bit UUID's
-    pub fn new_16<Data>(uuid: u16, data: &Data) -> ::serializer::Result<ServiceData<u16>>
+    pub fn new_16<Data>(uuid: u16, data: &Data) -> crate::serializer::Result<ServiceData<u16>>
         where Data: ::serde::Serialize
     {
         ServiceData::new(uuid, data)
     }
 
     /// Create service data for 32-bit UUID's
-    pub fn new_32<Data>(uuid: u32, data: &Data) -> ::serializer::Result<ServiceData<u32>>
+    pub fn new_32<Data>(uuid: u32, data: &Data) -> crate::serializer::Result<ServiceData<u32>>
         where Data: ::serde::Serialize
     {
         ServiceData::new(uuid, data)
     }
 
     /// Create service data for 64-bit UUID's
-    pub fn new_128<Data>(uuid: u128, data: &Data) -> ::serializer::Result<ServiceData<u128>>
+    pub fn new_128<Data>(uuid: u128, data: &Data) -> crate::serializer::Result<ServiceData<u128>>
         where Data: ::serde::Serialize
     {
         ServiceData::new(uuid, data)
@@ -730,12 +730,12 @@ pub mod service_data {
     {
         const AD_TYPE: AssignedTypes = AssignedTypes::ServiceData;
 
-        fn new<Data>(uuid: UuidType, data: &Data) -> ::serializer::Result<Self>
+        fn new<Data>(uuid: UuidType, data: &Data) -> crate::serializer::Result<Self>
             where Data: ::serde::Serialize
         {
             Ok(ServiceData {
                 uuid: uuid,
-                serialized_data: ::serializer::serialize(&data)?,
+                serialized_data: crate::serializer::serialize(&data)?,
             })
         }
 
@@ -744,10 +744,10 @@ pub mod service_data {
         }
 
         /// Attemp to get the service data as `Data`
-        pub fn get_data<'d, Data>(&'d self) -> ::serializer::Result<Data>
+        pub fn get_data<'d, Data>(&'d self) -> crate::serializer::Result<Data>
             where Data: ::serde::Deserialize<'d>
         {
-            ::serializer::deserialize(&self.serialized_data)
+            crate::serializer::deserialize(&self.serialized_data)
         }
 
         /// Get a reference to the serialized data
@@ -787,7 +787,7 @@ pub mod service_data {
 
                         if raw.len() >= 3 {
                             let (uuid_raw, data) = raw.split_at(std::mem::size_of::<$type>());
-                            let err = ::gap::advertise::Error::LeBytesConversionError;
+                            let err = crate::gap::advertise::Error::LeBytesConversionError;
 
                             ServiceData {
                                 uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
@@ -795,7 +795,7 @@ pub mod service_data {
                             }
                         }
                         else {
-                            return Err(::gap::advertise::Error::RawTooSmall)
+                            return Err(crate::gap::advertise::Error::RawTooSmall)
                         }
                     }}
                 }

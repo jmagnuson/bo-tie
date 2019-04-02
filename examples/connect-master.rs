@@ -1,53 +1,53 @@
 #![feature(async_await)]
 #![feature(await_macro)]
 #![feature(futures_api)]
-#![feature(pin)]
+#![feature(gen_future)]
 
 extern crate bo_tie;
 
 use bo_tie::hci;
 use bo_tie::hci::events::EventsData;
-use std::future::Future;
-use std::sync::Arc;
 use std::task;
 use std::thread;
 use std::time::Duration;
 
-// All this does is just wake & sleep the current thread
-struct MainWaker {
-    thread: thread::Thread
+unsafe fn waker_clone(data: *const ()) -> task::RawWaker {
+    task::RawWaker::new( data, &RAW_WAKER_V_TABLE)
 }
 
-impl MainWaker {
-    fn new() -> Self {
-        MainWaker {
-            thread: thread::current()
-        }
-    }
-
-    fn sleep(&self) {
-        thread::park();
-    }
+unsafe fn waker_wake(data: *const ()) {
+    (*(data as *const thread::Thread)).unpark();
 }
 
-impl task::Wake for MainWaker {
-    fn wake(arc_self: &Arc<Self>) {
-        arc_self.thread.unpark();
-    }
-}
+unsafe fn waker_drop(_: *const ()) { }
+
+static RAW_WAKER_V_TABLE: task::RawWakerVTable = task::RawWakerVTable {
+    clone: waker_clone,
+    wake: waker_wake,
+    drop: waker_drop,
+};
 
 macro_rules! wait {
     ($gen_fut:expr) => {{
-        let main_waker = Arc::new(MainWaker::new());
-        let waker = ::std::task::local_waker_from_nonlocal(main_waker.clone());
-        let mut gen_fut = $gen_fut;
+        use std::future::Future;
+
+        let this_thread_handle = thread::current();
+
+        let waker = unsafe {
+            std::task::Waker::new_unchecked(
+                std::task::RawWaker::new(
+                    &this_thread_handle as *const thread::Thread as *const (),
+                    &RAW_WAKER_V_TABLE
+                )
+            )
+        };
+        
+        let mut future = $gen_fut;
 
         loop {
-            let pin_fut = unsafe { ::std::pin::Pin::new_unchecked(&mut gen_fut) };
-
-            match pin_fut.poll(&waker) {
+            match unsafe { std::pin::Pin::new_unchecked(&mut future ).poll(&waker) }  {
                 task::Poll::Ready(val) => break val,
-                task::Poll::Pending => main_waker.sleep(),
+                task::Poll::Pending => thread::park(),
             }
         }
     }}
@@ -74,7 +74,7 @@ async fn remove_from_white_list(hi: &hci::HostInterface, address: bo_tie::Blueto
 async fn scan_for_local_name<'a>( hi: &'a hci::HostInterface, name: &'a str )
     -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>>
 {
-    use bo_tie::gap::advertise::{local_name, ConvertRawData};
+    use bo_tie::gap::advertise::{local_name, TryFromRaw};
     use bo_tie::hci::events::{EventsData, LEMeta, LEMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask;
     use bo_tie::hci::le::receiver::{ set_scan_parameters, set_scan_enable };
@@ -218,7 +218,7 @@ fn main() {
                 wait!(remove_from_white_list(&host_interface, address));
             }
             Err(e) => {
-                cancel_connect(&host_interface);
+                wait!(cancel_connect(&host_interface));
                 println!("Couldn't connect: {:?}", e);
             }
             Ok(_) => println!("Any other event should never be returned"),

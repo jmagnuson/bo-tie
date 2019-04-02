@@ -3,7 +3,8 @@
 #![feature(async_await)]
 #![feature(await_macro)]
 #![feature(alloc)]
-#![feature(test)]
+#![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(gen_future))]
 
 // These crates are used all the time
 extern crate alloc;
@@ -85,7 +86,7 @@ impl UUID {
             base_uuid: ((v as u128) << 96) + Self::BLUETOOTH_BASE_UUID,
         }
     }
-        
+
     pub const fn from_u16(v: u16) -> Self {
         UUID {
             /// See V 5.0 Vol 3 part B sec 2.5.1 for this equation

@@ -1,4 +1,4 @@
-use hci::common::{
+use crate::hci::common::{
     ConnectionHandle,
     ConnectionInterval,
     ConnectionLatency,
@@ -11,9 +11,9 @@ use hci::common::{
     LEAddressType,
     SupervisionTimeout,
 };
-use hci::error::Error;
-use hci::le;
-use BluetoothDeviceAddress;
+use crate::hci::error::Error;
+use crate::hci::le;
+use crate::BluetoothDeviceAddress;
 use core::convert::From;
 use core::time::Duration;
 
@@ -657,7 +657,7 @@ impl<UnpackErrorType> ::core::fmt::Debug for CommandDataErr<UnpackErrorType>
 }
 
 pub(crate) trait DataResult
-where <Self as ::hci::events::DataResult>::UnpackErrorType: ::core::fmt::Debug
+where <Self as crate::hci::events::DataResult>::UnpackErrorType: ::core::fmt::Debug
 {
     type ReturnData;
     type UnpackErrorType;
@@ -764,16 +764,16 @@ pub struct CommandCompleteData {
 #[macro_use]
 macro_rules! impl_get_data_for_command {
     ( $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
-        impl ::hci::events::DataResult for $data {
+        impl crate::hci::events::DataResult for $data {
             type ReturnData = $return_ty;
             type UnpackErrorType = $try_from_err_ty;
         }
 
-        impl ::hci::events::GetDataForCommand<$data> for ::hci::events::CommandCompleteData {
+        impl crate::hci::events::GetDataForCommand<$data> for crate::hci::events::CommandCompleteData {
             unsafe fn get_return(&self) ->
                 ::core::result::Result<
-                    ::core::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
-                    ::hci::events::CommandDataErr< <$data as ::hci::events::DataResult>::UnpackErrorType >
+                    ::core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
+                    crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
                 >
             {
                 let oc_pair = $command.as_opcode_pair();
@@ -781,11 +781,11 @@ macro_rules! impl_get_data_for_command {
                 let expected_opcode = oc_pair.ocf | (oc_pair.ogf << 10);
 
                 if self.command_opcode == Some(expected_opcode) {
-                    <Self as ::hci::events::GetDataForCommand<$data>>::get_return_unchecked(&self)
+                    <Self as crate::hci::events::GetDataForCommand<$data>>::get_return_unchecked(&self)
                 } else if self.command_opcode.is_none() {
                     Ok(None)
                 } else {
-                    Err(::hci::events::CommandDataErr::IncorrectOCF(
+                    Err(crate::hci::events::CommandDataErr::IncorrectOCF(
                         oc_pair.ocf | (oc_pair.ogf << 10),
                         self.command_opcode.unwrap()))
                 }
@@ -793,8 +793,8 @@ macro_rules! impl_get_data_for_command {
 
             unsafe fn get_return_unchecked(&self) ->
                 ::core::result::Result<
-                    ::core::option::Option< <$data as ::hci::events::DataResult>::ReturnData >,
-                    ::hci::events::CommandDataErr< <$data as ::hci::events::DataResult>::UnpackErrorType >
+                    ::core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
+                    crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
                 >
             {
                 use core::mem::size_of;
@@ -808,11 +808,11 @@ macro_rules! impl_get_data_for_command {
 
                     match <$data>::try_from(p_data) {
                         Ok(val) => Ok(Some(val)),
-                        Err(e)  => Err(::hci::events::CommandDataErr::UnpackError(e))
+                        Err(e)  => Err(crate::hci::events::CommandDataErr::UnpackError(e))
                     }
                 }
                 else {
-                    Err(::hci::events::CommandDataErr::RawDataLenTooSmall)
+                    Err(crate::hci::events::CommandDataErr::RawDataLenTooSmall)
                 }
             }
         }
@@ -2404,7 +2404,7 @@ pub struct ReportDataIter<'a> {
 }
 
 impl<'a> ::std::iter::Iterator for ReportDataIter<'a> {
-    type Item = Result<&'a [u8], ::gap::advertise::Error>;
+    type Item = Result<&'a [u8], crate::gap::advertise::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.len() > 0 {
@@ -2424,7 +2424,7 @@ impl<'a> ::std::iter::Iterator for ReportDataIter<'a> {
                     // short data so that None is returned the next iteration
                     self.data = &self.data[self.data.len()..];
 
-                    Some(Err(::gap::advertise::Error::IncorrectLength))
+                    Some(Err(crate::gap::advertise::Error::IncorrectLength))
                 }
             }
             else {
@@ -3536,38 +3536,38 @@ macro_rules! events_markup {
             }
         }
 
-        impl ::hci::events::$EnumName {
+        impl crate::hci::events::$EnumName {
             pub(crate) fn get_val( &self ) -> u8 {
                 match *self {
-                    $(::hci::events::$EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
+                    $(crate::hci::events::$EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
                 }
             }
 
             /// The from raw normaly only needs to have the first val (`vals.0`) for determining the
             /// enum conversion. Bun in the case where the first val matches LEMeta, the second
             /// value (`vals.1`) is used to determine the LEMeta sub event.
-            pub(crate) fn from_raw( vals: (u8, u8) ) -> ::hci::events::$EnumName {
+            pub(crate) fn from_raw( vals: (u8, u8) ) -> crate::hci::events::$EnumName {
                 match vals.0 {
-                    $( $val => ::hci::events::$EnumName::$name $(( $($enum_val::from(vals.1))* ))*, )*
+                    $( $val => crate::hci::events::$EnumName::$name $(( $($enum_val::from(vals.1))* ))*, )*
                     _ => panic!("Unknown Event ID: {}", vals.0),
                 }
             }
 
         }
 
-        impl ::hci::events::$EnumDataName {
+        impl crate::hci::events::$EnumDataName {
 
             pub(crate) fn get_enum_name(&self) -> $EnumName {
                 #[cfg(not(test))]
                 match *self {
-                    $( ::hci::events::$EnumDataName::$name(ref _data) =>
-                        ::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
+                    $( crate::hci::events::$EnumDataName::$name(ref _data) =>
+                        crate::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
 
                 #[cfg(test)]
                 match *self {
-                    $( ::hci::events::$EnumDataName::$name(ref _data,_) =>
-                        ::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
+                    $( crate::hci::events::$EnumDataName::$name(ref _data,_) =>
+                        crate::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
             }
 
@@ -3581,7 +3581,7 @@ macro_rules! events_markup {
                 let hci_msg_type = chew!(packet);
 
                 // packet[1] is the LEMeta specific event code if the event is LEMeta
-                let event_code = ::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
+                let event_code = crate::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
 
                 let event_len  = chew!(packet);
 
@@ -3601,17 +3601,17 @@ macro_rules! events_markup {
 
                 #[cfg(not(test))]
                 match event_code {
-                    $( ::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
-                        ::hci::events::$EnumDataName::$name(
-                            ::hci::events::$data::<$( $type ),*>::from(packet)),
+                    $( crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
+                        crate::hci::events::$EnumDataName::$name(
+                            crate::hci::events::$data::<$( $type ),*>::from(packet)),
                     )*
                 }
 
                 #[cfg(test)]
                 match event_code {
-                    $( ::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
-                        ::hci::events::$EnumDataName::$name(
-                            ::hci::events::$data::<$( $type ),*>::from(packet),
+                    $( crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
+                        crate::hci::events::$EnumDataName::$name(
+                            crate::hci::events::$data::<$( $type ),*>::from(packet),
                             ::std::vec::Vec::from(data).into_boxed_slice()
                         ),
                     )*
@@ -3620,19 +3620,19 @@ macro_rules! events_markup {
         }
 
         #[cfg(not(test))]
-        impl ::core::fmt::Debug for ::hci::events::$EnumDataName {
+        impl ::core::fmt::Debug for crate::hci::events::$EnumDataName {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
                 write!( f, "{}", match *self {
-                    $(::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
+                    $(crate::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
             }
         }
 
         #[cfg(test)]
-        impl ::core::fmt::Debug for ::hci::events::$EnumDataName {
+        impl ::core::fmt::Debug for crate::hci::events::$EnumDataName {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
                 write!( f, "{}", match *self {
-                    $(::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
+                    $(crate::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
             }
         }

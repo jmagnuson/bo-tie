@@ -1,5 +1,5 @@
 use super::bluez;
-use hci::events;
+use crate::hci::events;
 use std::cell::Cell;
 use std::cmp::{PartialEq,PartialOrd,Ordering};
 use std::collections::{BTreeSet};

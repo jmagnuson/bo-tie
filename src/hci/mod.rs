@@ -5,7 +5,7 @@
 //! group field(s)).
 
 macro_rules! hci_future_output {
-    () => { ::core::result::Result<::hci::events::EventsData,impl ::core::fmt::Display + ::core::fmt::Debug> }
+    () => { ::core::result::Result<crate::hci::events::EventsData,impl ::core::fmt::Display + ::core::fmt::Debug> }
 }
 
 mod opcodes;
@@ -156,39 +156,19 @@ mod test_util {
         pub static ref TEST_EXCLUSION: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
     }
 
+    /// This just pins the passed future and calls
+    /// [`poll_with_tls_waker`](https://doc.rust-lang.org/nightly/std/future/fn.poll_with_tls_waker.html)
+    /// on it, waiting forever until Poll::Ready(T) is returned.
     pub fn block_for_result<T> ( mut cmd_future: impl Future <Output=T> + Unpin ) -> T {
-        use std::pin::Pin;
-        use std::sync::Arc;
-        use std::task::{LocalWaker, local_waker_from_nonlocal, Poll, Wake};
+        
+        use std::task;
         use std::thread;
 
-        struct SelfWaker {
-            thread: thread::Thread,
-        }
-
-        impl Wake for SelfWaker {
-            fn wake(arc_self: &Arc<Self>) {
-                arc_self.thread.unpark();
+        loop {
+            match std::future::poll_with_tls_waker(std::pin::Pin::new(&mut cmd_future)) {
+                task::Poll::Pending => thread::park(),
+                task::Poll::Ready(retval) => break retval,
             }
-        }
-
-        impl SelfWaker {
-            fn new_local_waker() -> LocalWaker {
-                local_waker_from_nonlocal(Arc::new(SelfWaker {
-                    thread: thread::current()
-                }))
-            }
-        }
-
-        let waker = SelfWaker::new_local_waker();
-
-        'async: loop {
-            let pinned_future = Pin::new(&mut cmd_future);
-
-            match pinned_future.poll(&waker) {
-                Poll::Pending => thread::park(),
-                Poll::Ready(rslt) => break 'async rslt,
-            };
         }
     }
 
@@ -205,7 +185,7 @@ mod test_util {
             match $future_return {
                 events::EventsData::CommandComplete(ref data, ref raw) => {
                     let return_val = unsafe {
-                        (data as &::hci::events::GetDataForCommand<$ret_ty>).get_return()
+                        (data as &crate::hci::events::GetDataForCommand<$ret_ty>).get_return()
                     };
 
                     if let Err(e) = return_val {
@@ -223,7 +203,7 @@ mod test_util {
             match $future_return {
                 events::EventsData::CommandComplete(ref data, ref raw) => {
                     let return_val = unsafe {
-                        (data as &::hci::events::GetDataForCommand<$ret_ty>).get_return()
+                        (data as &crate::hci::events::GetDataForCommand<$ret_ty>).get_return()
                     };
 
                     assert_eq!( Ok(Some($exp_ret_val)), return_val, "Raw Event data: {:?}", raw);
@@ -241,7 +221,7 @@ mod test_util {
             match $future_return {
                 events::EventsData::CommandComplete(ref data, _) => {
                     let return_val = unsafe {
-                        (data as &::hci::events::GetDataForCommand<$ret_ty>).get_return()
+                        (data as &crate::hci::events::GetDataForCommand<$ret_ty>).get_return()
                     };
 
                     if let Ok(_) = return_val {
@@ -433,7 +413,7 @@ pub mod le {
 
                 impl $name {
 
-                    const RAW_RANGE: ::hci::le::common::IntervalRange<u16> = ::hci::le::common::IntervalRange{
+                    const RAW_RANGE: crate::hci::le::common::IntervalRange<u16> = crate::hci::le::common::IntervalRange{
                         low: $raw_low,
                         hi: $raw_hi,
                         micro_sec_conv: $micro_sec_conv,
@@ -460,7 +440,7 @@ pub mod le {
                     /// the value is out of bounds.
                     pub fn try_from_duration( duration: ::core::time::Duration ) -> Result<Self, &'static str>
                     {
-                        let duration_range = ::hci::le::common::IntervalRange::<::core::time::Duration>::from($name::RAW_RANGE);
+                        let duration_range = crate::hci::le::common::IntervalRange::<::core::time::Duration>::from($name::RAW_RANGE);
 
                         if duration_range.contains(&duration) {
                             Ok( $name {
@@ -513,9 +493,9 @@ pub mod le {
 
         macro_rules! add_remove_white_list_setup {
             ( $command: ident ) => {
-                use hci::*;
-                use hci::events::Events;
-                use hci::le::common::AddressType;
+                use crate::hci::*;
+                use crate::hci::events::Events;
+                use crate::hci::le::common::AddressType;
 
                 /// Command parameter data for both add and remove whitelist commands.
                 ///
@@ -533,7 +513,7 @@ pub mod le {
 
                 pub fn send( hci: &HostInterface,
                     at: AddressType,
-                    addr: ::BluetoothDeviceAddress ) -> hci_return!()
+                    addr: crate::BluetoothDeviceAddress ) -> hci_return!()
                 {
                     let parameter = CommandPrameter {
                         _address_type: at.to_value(),
@@ -551,7 +531,7 @@ pub mod le {
             };
         }
         pub mod add_device_to_white_list {
-            const COMMAND: ::hci::opcodes::HCICommand = ::hci::opcodes::HCICommand::LEController(::hci::opcodes::LEController::AddDeviceToWhiteList);
+            const COMMAND: crate::hci::opcodes::HCICommand = crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::AddDeviceToWhiteList);
 
             add_remove_white_list_setup!(COMMAND);
 
@@ -560,12 +540,12 @@ pub mod le {
 
                 use super::*;
                 use std::process::Command;
-                use BluetoothDeviceAddress;
-                use hci::test_util::block_for_command_result;
+                use crate::BluetoothDeviceAddress;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn add_device_to_white_list_test() {
-                    let _u = ::hci::test_util::TEST_EXCLUSION.lock().unwrap();
+                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
 
                     let test_address_1 = BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
                     let test_address_2 = BluetoothDeviceAddress::from([0x12,0x34,0x56,0x78,0x9A,0xBC]);
@@ -630,7 +610,7 @@ pub mod le {
         }
         pub mod clear_white_list {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ClearWhiteList);
 
@@ -653,16 +633,16 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
                 use std::process::Command;
 
                 #[test]
                 pub fn clear_white_list_test() {
 
-                    let _u = ::hci::test_util::TEST_EXCLUSION.lock().unwrap();
+                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
 
-                    let test_address_1 = ::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
-                    let test_address_2 = ::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
+                    let test_address_1 = crate::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
+                    let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
 
                     let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_1[5],
@@ -717,7 +697,7 @@ pub mod le {
         }
         pub mod read_buffer_size {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize);
 
@@ -793,7 +773,7 @@ pub mod le {
             mod test {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn read_buffer_size_test() {
@@ -808,8 +788,8 @@ pub mod le {
         }
         pub mod read_local_supported_features {
 
-            use hci::common::EnabledLEFeaturesItr;
-            use hci::*;
+            use crate::hci::common::EnabledLEFeaturesItr;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
 
@@ -856,7 +836,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn read_local_supported_features_test() {
@@ -871,7 +851,7 @@ pub mod le {
         }
         pub mod read_supported_states {
 
-            use hci::*;
+            use crate::hci::*;
             use alloc::collections::BTreeSet;
             use alloc::vec::Vec;
             use core::mem::size_of_val;
@@ -1068,7 +1048,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn read_supported_states_test() {
@@ -1083,7 +1063,7 @@ pub mod le {
         }
         pub mod read_white_list_size {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadWhiteListSize);
 
@@ -1134,7 +1114,7 @@ pub mod le {
 
                 use super::*;
                 use std::process::Command;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn read_white_list_size_test() {
@@ -1145,8 +1125,8 @@ pub mod le {
                         .expect("failed to execute process");
 
                     let hcitool_cnt = String::from_utf8_lossy(&output.stdout)
-                            .trim_left_matches("White list size: ")
-                            .trim_right()
+                            .trim_start_matches("White list size: ")
+                            .trim_end()
                             .parse::<usize>()
                             .expect("Couldn't convert string to number");
 
@@ -1160,7 +1140,7 @@ pub mod le {
         }
         pub mod remove_device_from_white_list {
 
-            const COMMAND: ::hci::opcodes::HCICommand = ::hci::opcodes::HCICommand::LEController(::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
+            const COMMAND: crate::hci::opcodes::HCICommand = crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
 
             add_remove_white_list_setup!(COMMAND);
 
@@ -1168,17 +1148,17 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
                 use std::process::Command;
 
                 #[test]
                 fn remove_device_from_white_list_test() {
 
-                    let _u = ::hci::test_util::TEST_EXCLUSION.lock().unwrap();
+                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
 
-                    let test_address_1 = ::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
-                    let test_address_2 = ::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
-                    let test_address_3 = ::BluetoothDeviceAddress::from([0xff,0xee,0xdd,0xcc,0xbb,0xaa]);
+                    let test_address_1 = crate::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
+                    let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
+                    let test_address_3 = crate::BluetoothDeviceAddress::from([0xff,0xee,0xdd,0xcc,0xbb,0xaa]);
 
                     let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_1[5],
@@ -1232,9 +1212,9 @@ pub mod le {
         }
         pub mod set_event_mask {
 
-            use hci::*;
+            use crate::hci::*;
             use alloc::vec::Vec;
-            use hci::events::LEMeta;
+            use crate::hci::events::LEMeta;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
 
@@ -1317,8 +1297,8 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
-                use hci::events::LEMeta;
+                use crate::hci::test_util::block_for_command_result;
+                use crate::hci::events::LEMeta;
 
                 #[test]
                 fn set_event_mask_test() {
@@ -1343,7 +1323,7 @@ pub mod le {
         }
         pub mod test_end {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TestEnd);
 
@@ -1395,7 +1375,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 #[should_panic]
@@ -1414,15 +1394,15 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_bd_addr {
 
-            use BluetoothDeviceAddress;
-            use hci::*;
+            use crate::BluetoothDeviceAddress;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
 
             #[repr(packed)]
             pub(crate) struct CmdReturn {
                 status: u8,
-                address: ::BluetoothDeviceAddress,
+                address: crate::BluetoothDeviceAddress,
             }
 
             struct Return;
@@ -1468,7 +1448,7 @@ pub mod le {
                 use super::*;
                 use std::process::Command;
                 use std::iter::Iterator;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 trait TryCollect<A> {
                     fn try_collect(self) -> Result<A,&'static str>;
@@ -1509,8 +1489,8 @@ pub mod le {
 
                     let mut hcitool_bdaddr: BluetoothDeviceAddress =
                         String::from_utf8_lossy(&output.stdout)
-                            .trim_left_matches(|c: char| c != '0')
-                            .trim_left_matches("0")
+                            .trim_start_matches(|c: char| c != '0')
+                            .trim_start_matches("0")
                             .trim()
                             .split(":")
                             .map(|s| u8::from_str_radix(s,16).unwrap() )
@@ -1532,8 +1512,8 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_features {
 
-            use hci::*;
-            use hci::common::EnabledFeaturesIter;
+            use crate::hci::*;
+            use crate::hci::common::EnabledFeaturesIter;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
 
@@ -1580,7 +1560,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn ip_read_local_supported_features() {
@@ -1598,7 +1578,7 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_version_information {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedVersionInformation);
 
@@ -1664,7 +1644,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn ip_read_local_version_information_test() {
@@ -1681,7 +1661,7 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod reset {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
 
@@ -1704,7 +1684,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn reset_test() {
@@ -1722,7 +1702,7 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_commands {
 
-            use hci::*;
+            use crate::hci::*;
             use core::option::Option;
             use alloc::vec::Vec;
 
@@ -2363,7 +2343,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
                 use test::Bencher;
 
                 #[test]
@@ -2402,7 +2382,7 @@ pub mod le {
     pub mod transmitter {
         pub mod read_advertising_channel_tx_power {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadAdvertisingChannelTxPower);
 
@@ -2460,7 +2440,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn read_advertising_channel_tx_power_test() {
@@ -2497,8 +2477,8 @@ pub mod le {
         }
         pub mod transmitter_test{
 
-            use hci::*;
-            use hci::le::common::Frequency;
+            use crate::hci::*;
+            use crate::hci::le::common::Frequency;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TransmitterTest);
 
@@ -2565,9 +2545,9 @@ pub mod le {
             mod test {
 
                 use super::*;
-                use hci::le::mandatory::test_end;
+                use crate::hci::le::mandatory::test_end;
                 use std::{thread, time};
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 #[ignore]
@@ -2598,8 +2578,8 @@ pub mod le {
         }
         pub mod set_advertising_data {
 
-            use hci::*;
-            use gap::advertise::{IntoRaw,DataTooLargeError};
+            use crate::hci::*;
+            use crate::gap::advertise::{IntoRaw,DataTooLargeError};
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);
 
@@ -2716,12 +2696,12 @@ pub mod le {
             mod test {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn set_advertising_data_test() {
 
-                    use gap::advertise::{flags,local_name};
+                    use crate::gap::advertise::{flags,local_name};
 
                     let mut flags = flags::Flags::new();
 
@@ -2745,7 +2725,7 @@ pub mod le {
                 #[test]
                 fn advertising_data_try_from_test () {
 
-                    use gap::advertise::{flags,local_name};
+                    use crate::gap::advertise::{flags,local_name};
 
                     let mut flags = flags::Flags::new();
 
@@ -2765,7 +2745,7 @@ pub mod le {
 
                 #[test]
                 fn advertising_data_try_push_test () {
-                    use gap::advertise::local_name::LocalName;
+                    use crate::gap::advertise::local_name::LocalName;
                     use std::str::from_utf8;
 
                     let local_name_1 = LocalName::new("abcdefghijklm", true);
@@ -2785,7 +2765,7 @@ pub mod le {
         }
         pub mod set_advertising_enable {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingEnable);
 
@@ -2813,11 +2793,11 @@ pub mod le {
 
                 use super::*;
                 use super::super::set_advertising_data;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn set_advertising_enable_test() {
-                    use gap::advertise::local_name::LocalName;
+                    use crate::gap::advertise::local_name::LocalName;
 
                     let hci = HostInterface::default();
 
@@ -2848,8 +2828,8 @@ pub mod le {
         }
         pub mod set_advertising_parameters {
 
-            use hci::*;
-            use hci::le::common::OwnAddressType;
+            use crate::hci::*;
+            use crate::hci::le::common::OwnAddressType;
             use core::default::Default;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
@@ -2978,7 +2958,7 @@ pub mod le {
                 pub advertising_type: AdvertisingType,
                 pub own_address_type: OwnAddressType,
                 pub peer_address_type: PeerAddressType,
-                pub peer_address: ::BluetoothDeviceAddress,
+                pub peer_address: crate::BluetoothDeviceAddress,
                 pub advertising_channel_map: &'a[AdvertisingChannel],
                 pub advertising_filter_policy: AdvertisingFilterPolicy,
             }
@@ -3010,7 +2990,7 @@ pub mod le {
 
                 /// Create the default parameters except use the specified bluetooth device
                 /// address for the peer_address member
-                pub fn default_with_peer_address( addr: &'a ::BluetoothDeviceAddress) ->
+                pub fn default_with_peer_address( addr: &'a crate::BluetoothDeviceAddress) ->
                         AdvertisingParameters
                 {
                     let mut ap = AdvertisingParameters::default();
@@ -3029,7 +3009,7 @@ pub mod le {
                 _advertising_type: u8,
                 _own_address_type: u8,
                 _peer_address_type: u8,
-                _peer_address: ::BluetoothDeviceAddress,
+                _peer_address: crate::BluetoothDeviceAddress,
                 _advertising_channel_map: u8,
                 _advertising_filter_policy: u8,
             }
@@ -3071,7 +3051,7 @@ pub mod le {
 
                 use super::*;
                 use std::time::Duration;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn advertising_interval_test() {
@@ -3109,25 +3089,25 @@ pub mod le {
         }
         pub mod set_random_address {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
 
             impl_status_return!(COMMAND);
 
             struct Parameter {
-                rand_address: ::BluetoothDeviceAddress
+                rand_address: crate::BluetoothDeviceAddress
             }
 
             impl CommandParameters for Parameter {
-                type Parameter = ::BluetoothDeviceAddress;
+                type Parameter = crate::BluetoothDeviceAddress;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
                     self.rand_address
                 }
             }
 
-            pub fn send( hci: &HostInterface, rand_addr: ::BluetoothDeviceAddress ) ->
+            pub fn send( hci: &HostInterface, rand_addr: crate::BluetoothDeviceAddress ) ->
                 hci_return!()
             {
                 hci.send_command(Parameter{ rand_address: rand_addr }, events::Events::CommandComplete, Duration::from_secs(1) )
@@ -3137,7 +3117,7 @@ pub mod le {
             mod tests{
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn set_random_address_test() {
@@ -3160,8 +3140,8 @@ pub mod le {
     pub mod receiver {
         pub mod receiver_test {
 
-            use hci::*;
-            use hci::le::common::Frequency;
+            use crate::hci::*;
+            use crate::hci::le::common::Frequency;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReceiverTest);
 
@@ -3185,7 +3165,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 #[ignore]
@@ -3204,7 +3184,7 @@ pub mod le {
         }
         pub mod set_scan_enable {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanEnable);
 
@@ -3249,7 +3229,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn set_scan_enable_test() {
@@ -3292,8 +3272,8 @@ pub mod le {
         }
         pub mod set_scan_parameters {
 
-            use hci::*;
-            use hci::le::common::OwnAddressType;
+            use crate::hci::*;
+            use crate::hci::le::common::OwnAddressType;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanParameters);
 
@@ -3411,7 +3391,7 @@ pub mod le {
 
                 use super::*;
                 use std::time::Duration;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn scanning_interval_test() {
@@ -3497,8 +3477,8 @@ pub mod le {
 
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod disconnect {
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::Disconnect);
 
@@ -3593,7 +3573,7 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 fn disconnect_test() {
@@ -3630,8 +3610,8 @@ pub mod le {
             }
         }
         pub mod connection_update {
-            use hci::*;
-            use hci::common::{
+            use crate::hci::*;
+            use crate::hci::common::{
                 ConnectionHandle,
                 SupervisionTimeout,
             };
@@ -3685,9 +3665,9 @@ pub mod le {
             mod tests {
 
                 use super::*;
-                use hci::common;
+                use crate::hci::common;
                 use super::super::ConnectionInterval;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 /// This will likely fail with a timeout due to there being no connection to
                 /// a device.
@@ -3731,7 +3711,7 @@ pub mod le {
         }
         pub mod create_connection_cancel {
 
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnectionCancel);
 
@@ -3754,7 +3734,7 @@ pub mod le {
             mod test {
 
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 #[ignore]
@@ -3772,13 +3752,13 @@ pub mod le {
         pub mod create_connection {
 
             use super::{ConnectionEventLength, ConnectionIntervalBounds};
-            use hci::*;
-            use hci::common::{
+            use crate::hci::*;
+            use crate::hci::common::{
                 ConnectionLatency,
                 LEAddressType,
                 SupervisionTimeout,
             };
-            use hci::le::common::OwnAddressType;
+            use crate::hci::le::common::OwnAddressType;
             use core::time::Duration;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnection);
@@ -3805,7 +3785,7 @@ pub mod le {
                 scan_window : ScanningWindow,
                 initiator_filter_policy: InitiatorFilterPolicy,
                 peer_address_type: LEAddressType,
-                peer_address: ::BluetoothDeviceAddress,
+                peer_address: crate::BluetoothDeviceAddress,
                 own_address_type: OwnAddressType,
                 connection_interval: ConnectionIntervalBounds,
                 connection_latency: ConnectionLatency,
@@ -3819,7 +3799,7 @@ pub mod le {
                 _scan_window: u16,
                 _initiator_filter_policy: u8,
                 _peer_address_type: u8,
-                _peer_address: ::BluetoothDeviceAddress,
+                _peer_address: crate::BluetoothDeviceAddress,
                 _own_address_type: u8,
                 _conn_interval_min: u16,
                 _conn_interval_max: u16,
@@ -3857,7 +3837,7 @@ pub mod le {
                     scan_interval : ScanningInterval,
                     scan_window : ScanningWindow,
                     peer_address_type: LEAddressType,
-                    peer_address: ::BluetoothDeviceAddress,
+                    peer_address: crate::BluetoothDeviceAddress,
                     own_address_type: OwnAddressType,
                     connection_interval: ConnectionIntervalBounds,
                     connection_latency: ConnectionLatency,
@@ -3919,8 +3899,8 @@ pub mod le {
         }
         pub mod read_channel_map {
 
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
 
@@ -4017,8 +3997,8 @@ pub mod le {
         }
         pub mod read_remote_features {
 
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadRemoteFeatures);
 
@@ -4053,7 +4033,7 @@ pub mod le {
             }
         }
         pub mod set_host_channel_classification {
-            use hci::*;
+            use crate::hci::*;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetHostChannelClassification);
 
@@ -4136,7 +4116,7 @@ pub mod le {
                 #[test]
                 fn channel_map_test() {
                     unimplemented!();
-                    let expected_raw_map = [
+                    let _expected_raw_map = [
                         (1 << 3) | (1 << 7),
                         (1 << (9 - 8)) | (1 << (11 - 8)) | (1 << (13 - 8)),
                         0,
@@ -4144,14 +4124,14 @@ pub mod le {
                         0,
                     ];
 
-                    let map = ChannelMap::try_from(&[11,11,3,9,13,7]).unwrap();
+                    let _map = ChannelMap::try_from(&[11,11,3,9,13,7]).unwrap();
                 }
             }
         }
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_transmit_power_level {
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
 
@@ -4230,7 +4210,7 @@ pub mod le {
             #[cfg(test)]
             mod tests {
                 use super::*;
-                use hci::test_util::block_for_command_result;
+                use crate::hci::test_util::block_for_command_result;
 
                 #[test]
                 #[ignore]
@@ -4252,8 +4232,8 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_remote_version_information {
 
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::ReadRemoteVersionInformation);
 
@@ -4291,8 +4271,8 @@ pub mod le {
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_rssi {
 
-            use hci::*;
-            use hci::common::ConnectionHandle;
+            use crate::hci::*;
+            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::StatusParameters(opcodes::StatusParameters::ReadRSSI);
 

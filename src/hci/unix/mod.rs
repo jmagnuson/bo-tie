@@ -1,4 +1,4 @@
-use hci::events;
+use crate::hci::events;
 use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::default;
@@ -33,7 +33,7 @@ mod bluez {
     #[link(name = "bluetooth")]
     extern "C" {
         pub fn hci_open_dev(dev_id: i32) -> i32;
-        pub fn hci_get_route(bt_dev_addr: *mut ::BluetoothDeviceAddress) -> i32;
+        pub fn hci_get_route(bt_dev_addr: *mut crate::BluetoothDeviceAddress) -> i32;
         pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
     }
 
@@ -668,7 +668,7 @@ impl HCIAdapter {
     /// Unfortunately, some of what bluez did is magic to me.
     pub(super) fn send_command<CmdData>(&self, input: CmdData, expected_event: events::Events, timeout: Duration)
         -> Result<impl future::Future<Output=hci_future_output!()>, Error>
-        where CmdData: ::hci::CommandParameters
+        where CmdData: crate::hci::CommandParameters
     {
         use nix::errno::Errno;
         use std::mem::size_of;
@@ -770,7 +770,7 @@ mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task;
-    use hci::test_util::block_for_result;
+    use crate::hci::test_util::block_for_result;
     use std::future::Future;
 
     #[test]
@@ -785,10 +785,10 @@ mod tests {
     impl Future for TimeoutFuture {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, lw: &task::LocalWaker) -> task::Poll<Self::Output> {
+        fn poll(self: Pin<&mut Self>, lw: &task::Waker) -> task::Poll<Self::Output> {
             let mut waker = self.waker_token.lock().unwrap();
 
-            waker.set_waker(lw.clone().into_waker());
+            waker.set_waker(lw.clone());
 
             if waker.triggered() {
                 task::Poll::Ready(())

@@ -225,7 +225,7 @@ impl Debug for Error {
 
 impl From<u8> for Error {
     fn from(raw: u8) -> Self {
-        use hci::error::Error::*;
+        use crate::hci::error::Error::*;
 
         match raw {
             0x00 => NoError,

@@ -20,9 +20,7 @@
 #![feature(async_await)]
 #![feature(await_macro)]
 #![feature(futures_api)]
-#![feature(pin)]
-
-extern crate bo_tie;
+#![feature(gen_future)]
 
 use bo_tie::gap::advertise;
 use bo_tie::hci;
@@ -33,47 +31,47 @@ use bo_tie::hci::le::transmitter::{
     set_advertising_enable,
     set_random_address,
 };
-use std::future::Future;
-use std::sync::Arc;
 use std::task;
 use std::time::Duration;
 use std::thread;
 
-// All this does is just wake & sleep the current thread
-struct MainWaker {
-    thread: thread::Thread
+unsafe fn waker_clone(data: *const ()) -> task::RawWaker {
+    task::RawWaker::new( data, &RAW_WAKER_V_TABLE)
 }
 
-impl MainWaker {
-    fn new() -> Self {
-        MainWaker {
-            thread: thread::current()
-        }
-    }
-
-    fn sleep(&self) {
-        thread::park();
-    }
+unsafe fn waker_wake(data: *const ()) {
+    (*(data as *const thread::Thread)).unpark();
 }
 
-impl task::Wake for MainWaker {
-    fn wake(arc_self: &Arc<Self>) {
-        arc_self.thread.unpark();
-    }
-}
+unsafe fn waker_drop(_: *const ()) { }
+
+static RAW_WAKER_V_TABLE: task::RawWakerVTable = task::RawWakerVTable {
+    clone: waker_clone,
+    wake: waker_wake,
+    drop: waker_drop,
+};
 
 macro_rules! wait {
     ($gen_fut:expr) => {{
-        let main_waker = Arc::new(MainWaker::new());
-        let waker = ::std::task::local_waker_from_nonlocal(main_waker.clone());
-        let mut gen_fut = $gen_fut;
+        use std::future::Future;
+
+        let this_thread_handle = thread::current();
+
+        let waker = unsafe {
+            std::task::Waker::new_unchecked(
+                std::task::RawWaker::new(
+                    &this_thread_handle as *const thread::Thread as *const (),
+                    &RAW_WAKER_V_TABLE
+                )
+            )
+        };
+
+        let mut future = $gen_fut;
 
         loop {
-            let pin_fut = unsafe { ::std::pin::Pin::new_unchecked(&mut gen_fut) };
-
-            match pin_fut.poll(&waker) {
+            match unsafe { std::pin::Pin::new_unchecked(&mut future ).poll(&waker) }  {
                 task::Poll::Ready(val) => break val,
-                task::Poll::Pending => main_waker.sleep(),
+                task::Poll::Pending => thread::park(),
             }
         }
     }}
