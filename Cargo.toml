@@ -25,3 +25,4 @@ features = ["i128"]
 [dev-dependencies]
 simple-signal= "1.1.1"
 lazy_static = "^1.1"
+getopts = "^0.2"

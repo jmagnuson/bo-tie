@@ -116,15 +116,80 @@ fn handle_sig( flag: Arc<RwLock<bool>> ) {
     );
 }
 
+fn get_arg_options() -> getopts::Options {
+    let mut opts = getopts::Options::new();
+    opts.parsing_style(getopts::ParsingStyle::FloatingFrees);
+    opts.long_only(false);
+    opts.optflag("h", "help", "Print this help menu" );
+    opts.opt("s",
+            "service-uuid",
+            "Space-separated 128 bit service uuids to advertise with. The UUIDs must be in the \
+            format of XX:XX:XX:XX:XX:XX (From most significant to least significant byte)",
+            "UUIDs",
+            getopts::HasArg::Yes,
+            getopts::Occur::Multi);
+    opts
+}
+
+struct ParsedArgs {
+    advertising_data: set_advertising_data::AdvertisingData
+}
+
+fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
+    let options = get_arg_options();
+
+    let program_name = args.next().unwrap();
+
+    let matches = match options.parse( &args.collect::<Vec<_>>() ) {
+        Ok(all_match) => all_match,
+        Err(no_match) => panic!(no_match.to_string())
+    };
+
+    if matches.opt_present("h") {
+        print!("{}", options.usage(&format!("Usage: {} [options]", program_name)));
+        None
+    } else {
+        let mut advertising_data = set_advertising_data::AdvertisingData::new();
+
+        // Add service UUIDs to the advertising data
+        let services_128 = matches.opt_strs("s")
+            .into_iter()
+            .fold( bo_tie::gap::advertise::service_class_uuid::new_128(true), |mut services, str_uuid|
+            {
+                use std::convert::TryFrom;
+
+                let uuid = bo_tie::UUID::try_from(str_uuid.as_str()).expect("Invalid UUID");
+
+                services.insert(uuid.into());
+
+                services
+            }
+        );
+
+        if ! services_128.as_ref().is_empty() {
+            advertising_data.try_push(services_128).expect("Couldn't add services");
+        }
+
+        Some(
+            ParsedArgs {
+                advertising_data: advertising_data
+            }
+        )
+    }
+}
+
 fn main() {
 
     let adv_flag = Arc::new(RwLock::new(true));
 
     let interface = hci::HostInterface::default();
 
-    let adv_name = advertise::local_name::LocalName::new("Advertiser Test", false);
+    let adv_name = advertise::local_name::LocalName::new("Adv Test", false);
 
-    let mut adv_data = set_advertising_data::AdvertisingData::new();
+    let mut adv_data = match parse_args(std::env::args()) {
+        Some(parse_args) => parse_args.advertising_data,
+        None => set_advertising_data::AdvertisingData::new(),
+    };
 
     adv_data.try_push(adv_name).unwrap();
 
