@@ -147,7 +147,7 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
 
     if matches.opt_present("h") {
         print!("{}", options.usage(&format!("Usage: {} [options]", program_name)));
-        None
+        std::process::exit(0);
     } else {
         let mut advertising_data = set_advertising_data::AdvertisingData::new();
 

@@ -563,6 +563,15 @@ pub mod service_class_uuid {
         }
     }
 
+    impl<T> core::ops::Deref for Services<T> where T: Ord
+    {
+        type Target = BTreeSet<T>;
+
+        fn deref(&self) -> &Self::Target {
+            self.as_ref()
+        }
+    }
+
     impl<T> IntoIterator for Services<T> where T: ::std::cmp::Ord {
         type Item = T;
         type IntoIter = <BTreeSet<T> as IntoIterator>::IntoIter;
