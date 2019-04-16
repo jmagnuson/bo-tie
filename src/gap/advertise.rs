@@ -882,6 +882,8 @@ pub mod local_name {
     impl TryFromRaw for LocalName {
 
         fn try_from_raw(raw: &[u8]) -> Result<Self,Error> {
+            log::debug!("Trying to convert '{:X?}' to Local Name", raw);
+
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
                 use core::str::from_utf8;
 
