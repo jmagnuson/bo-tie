@@ -889,7 +889,7 @@ pub mod local_name {
 
                 Self {
                     name: ref_name.to_string(),
-                    is_short: raw[1] == Self::SHORTENED_TYPE.val(),
+                    is_short: raw[0] == Self::SHORTENED_TYPE.val(),
                 }
             })
         }
