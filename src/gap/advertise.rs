@@ -886,7 +886,7 @@ pub mod local_name {
                 use core::str::from_utf8;
 
                 let ref_name = if raw.len() > 1 {
-                    from_utf8(&raw[1..]).map_err(|e| super::Error::UTF8Error(e) )?;
+                    from_utf8(&raw[1..]).map_err(|e| super::Error::UTF8Error(e) )?
                 } else {
                     ""
                 };
