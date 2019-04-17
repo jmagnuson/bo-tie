@@ -165,7 +165,7 @@ pub trait TryFromRaw where Self: core::marker::Sized {
 /// $arr is assumed to be an array/slice where the first byte is the ad type.
 macro_rules! from_raw {
     ($arr:expr, $( $ad:path, )* $to_do:block) => {
-        if $arr.len() > 0 && $($arr[0] == $ad.val())||* {
+        if $arr.len() > 0 && ( $($arr[0] == $ad.val())||* ) {
             Ok($to_do)
         }
         else {
@@ -898,6 +898,35 @@ pub mod local_name {
                     is_short: raw[0] == Self::SHORTENED_TYPE.val(),
                 }
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn try_from_raw_test() {
+            let test_name_1 = [];
+            // data containing invalid utf8 (any value > 0x7F in a byte is invalid)
+            let test_name_2 = [AssignedTypes::CompleteLocalName.val(), 3, 12, 11, 0x80];
+            // 'hello world' as name
+            let test_name_3 = [AssignedTypes::CompleteLocalName.val(), 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64];
+            // 'hello wo' as name
+            let test_name_4 = [AssignedTypes::ShortenedLocalName.val(), 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f];
+            // Wrong AD type
+            let test_name_5 = [AssignedTypes::Flags.val(), 0x68, 0x65, 0x6c, 0x6c];
+
+            // The first two test names should return errors
+            assert!(LocalName::try_from_raw(&test_name_1).is_err());
+            assert!(LocalName::try_from_raw(&test_name_2).is_err());
+
+            // The next two test names should be valid
+            assert!(LocalName::try_from_raw(&test_name_3).is_ok());
+            assert!(LocalName::try_from_raw(&test_name_4).is_ok());
+
+            // Last one has wrong ad type
+            assert!(LocalName::try_from_raw(&test_name_5).is_err());
         }
     }
 }
