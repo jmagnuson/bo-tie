@@ -160,7 +160,7 @@ mod test_util {
     /// [`poll_with_tls_waker`](https://doc.rust-lang.org/nightly/std/future/fn.poll_with_tls_waker.html)
     /// on it, waiting forever until Poll::Ready(T) is returned.
     pub fn block_for_result<T> ( mut cmd_future: impl Future <Output=T> + Unpin ) -> T {
-        
+
         use std::task;
         use std::thread;
 
@@ -3919,8 +3919,6 @@ pub mod le {
 
             impl ChannelMapInfo {
                 fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
-                    use alloc::vec::Vec;
-
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {

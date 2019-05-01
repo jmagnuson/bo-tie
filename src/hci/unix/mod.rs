@@ -245,10 +245,11 @@ fn remove_timer_from_epoll( epoll_fd: ArcFileDesc, timer_fd: ArcFileDesc) -> Res
     Ok(())
 }
 
+#[derive(Clone,Debug)]
 struct Timeout {
     epoll_fd: ArcFileDesc,
     timer_fd: ArcFileDesc,
-    callback: Box<OnTimeout>,
+    callback: Box<dyn OnTimeout>,
 }
 
 impl Timeout {
@@ -265,6 +266,7 @@ impl Timeout {
     }
 }
 
+#[derive(Clone,Debug)]
 struct StopTimeout {
     epoll_fd: ArcFileDesc,
     timer_fd: ArcFileDesc,
@@ -282,14 +284,17 @@ impl StopTimeout {
     }
 }
 
-trait OnTimeout: Send {
+trait OnTimeout: Send + std::fmt::Debug + objekt::Clone {
     fn on_timeout(&self) -> Result<(), Error>;
 }
 
+objekt::clone_trait_object!(OnTimeout);
+
+#[derive(Clone,Debug)]
 pub struct TimeoutBuilder {
     epoll_fd: ArcFileDesc,
     timer_fd: ArcFileDesc,
-    callback: Option<Box<OnTimeout>>,
+    callback: Option<Box<dyn OnTimeout>>,
     timeout_manager: Arc<Mutex<TimeoutManager>>,
     time: Duration,
     id: u64,
@@ -328,7 +333,7 @@ impl TimeoutBuilder {
     }
 
     /// Must be called to set the function that is called when a timeout occurs.
-    fn set_timeout_callback(&mut self, callback: Box<OnTimeout>) {
+    fn set_timeout_callback(&mut self, callback: Box<dyn OnTimeout>) {
         self.callback = Some(callback);
     }
 
@@ -384,6 +389,7 @@ impl TimeoutBuilder {
     }
 }
 
+#[derive(Clone,Debug)]
 struct TimeoutManager {
     timeouts: BTreeMap<u64,Timeout>
 }
@@ -431,7 +437,6 @@ impl AdapterThread {
     fn ignore_eagain_and_eintr<F,R>( mut func: F ) -> Result<R, Error>
         where F: FnMut() -> Result<R, Error>
     {
-        use nix;
         use nix::errno::Errno;
 
         loop {
@@ -543,11 +548,11 @@ impl AdapterThread {
 ///
 /// Each Bluetooth adapter (if there is any) is assigned an identifier (just a number) by your
 /// system.
+#[derive(Clone,Debug)]
 pub struct HCIAdapter {
     adapter_fd: ArcFileDesc,
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
-    task_handle: Option<thread::JoinHandle<()>>,
     event_expecter: event::EventExpecter,
     timeout_manager: Arc<Mutex<TimeoutManager>>,
 }
@@ -604,7 +609,7 @@ impl From<i32> for HCIAdapter {
 
         let to_manager = Arc::new(Mutex::new(TimeoutManager::new()));
 
-        let thread_handle = AdapterThread {
+        AdapterThread {
             adapter_fd: arc_adapter_fd.clone(),
             exit_fd: arc_exit_fd.clone(),
             epoll_fd: arc_epoll_fd.clone(),
@@ -617,7 +622,6 @@ impl From<i32> for HCIAdapter {
             adapter_fd: arc_adapter_fd,
             exit_fd: arc_exit_fd,
             epoll_fd: arc_epoll_fd,
-            task_handle: Some(thread_handle),
             event_expecter: event_expecter,
             timeout_manager: to_manager,
         }
@@ -646,14 +650,9 @@ impl default::Default for HCIAdapter {
 impl Drop for HCIAdapter {
 
     fn drop(&mut self) {
-        use nix::unistd::write;
-
         // Send the exit signal.
         // The value sent doesn't really matter (just that it is 8 bytes, not 0, and not !0 )
-        match write( self.exit_fd.raw_fd(), &[1u8;8]) {
-            Ok(_) => self.task_handle.take().unwrap().join().expect("Couldn't join with thread"),
-            Err(e) => panic!("Couldn't exit adapter gracefully! err:{:?}", e),
-        };
+        nix::unistd::write( self.exit_fd.raw_fd(), &[1u8;8]).unwrap();
     }
 }
 
@@ -721,6 +720,7 @@ impl HCIAdapter {
 /// is received from the bluetooth controller
 ///
 /// An instance must be wrapped in Arc-Mutex/RwLock to be multi-thread safe (per the usual)
+#[derive(Clone,Debug)]
 struct WakerToken {
     waker: Option<task::Waker>,
     waker_triggered: bool,
@@ -736,7 +736,7 @@ impl WakerToken {
 
         self.waker_triggered = true;
 
-        if let Some(ref waker) = self.waker {
+        if let Some(waker) = self.waker.take() {
             waker.wake()
         }
     }

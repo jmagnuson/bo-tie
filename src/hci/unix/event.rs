@@ -130,7 +130,7 @@ impl From<events::Events> for EventFlag {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct EventFlags {
     adapter_fd: super::ArcFileDesc,
     flags: BTreeSet<EventFlag>,
@@ -183,6 +183,7 @@ impl EventFlags {
     }
 }
 
+#[derive(Clone,Debug)]
 struct ExpectedEvent {
     event: events::Events,
     waker_token: Arc<Mutex<WakerToken>>,
@@ -190,11 +191,13 @@ struct ExpectedEvent {
     stop_timer: Option<super::StopTimeout>,
 }
 
+#[derive(Clone,Debug)]
 pub struct EventExpecter {
     sender: mpsc::Sender<ExpectedEvent>,
     flags: Arc<Mutex<EventFlags>>,
 }
 
+#[derive(Clone,Debug)]
 struct TimeoutCallback {
     tx: mpsc::Sender<EventResponse>,
     flags: Arc<Mutex<EventFlags>>,
@@ -252,7 +255,7 @@ impl EventExpecter {
         impl future::Future for EventFuture {
             type Output = EventResponse;
 
-            fn poll (self: Pin<&mut Self>, lw: &task::Waker) ->
+            fn poll (self: Pin<&mut Self>, cx: &mut task::Context) ->
                 task::Poll<Self::Output>
             {
                 use self::task::Poll;
@@ -262,8 +265,6 @@ impl EventExpecter {
                     Err(e) => return task::Poll::Ready(Err(Error::Other(e.to_string()))),
                 };
 
-                waker.set_waker(lw.clone());
-
                 if waker.triggered() {
                     match self.events_response.try_recv() {
                         Ok(result) => Poll::Ready(result),
@@ -271,6 +272,9 @@ impl EventExpecter {
                     }
                 }
                 else {
+
+                    waker.set_waker(cx.waker().clone());
+
                     Poll::Pending
                 }
             }

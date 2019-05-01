@@ -1,22 +1,16 @@
-#![feature(futures_api)]
 #![feature(arbitrary_self_types)]
 #![feature(async_await)]
 #![feature(await_macro)]
-#![feature(alloc)]
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(test, feature(gen_future))]
 
 // These crates are used all the time
 extern crate alloc;
-extern crate serde;
 extern crate bincode as serializer;
 
 // test related
 #[cfg(test)]
 extern crate test;
-#[cfg(any(test))]
-#[macro_use]
-extern crate lazy_static;
 
 // So this library can be used with no_std targets
 #[cfg_attr(not(any(
@@ -24,10 +18,6 @@ extern crate lazy_static;
     unix,
 )), no_std)]
 extern crate core;
-
-// Nix crate for just unix targets
-#[cfg(all(unix, not(target_os = "android")))]
-extern crate nix;
 
 #[cfg(not(target_os = "android"))]
 pub mod hci;
