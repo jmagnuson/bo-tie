@@ -146,7 +146,7 @@ impl<'a> core::fmt::Display for UUIDFormatError<'a> {
 
 /// Create a UUID from its formatted type
 ///
-/// The format is a 16 octet UUID in the form of [8]-[4]-[4]-[4]-[12] where each number represents
+/// The format is a 16 octet UUID in the form of \[8\]-\[4\]-\[4\]-\[4\]-\[12\] where each number represents
 /// the number of characters for the field. An example UUID would be
 /// '68d82662-0305-4e6f-a679-6be1475f5e04'
 impl<'a> core::convert::TryFrom<&'a str> for UUID {
