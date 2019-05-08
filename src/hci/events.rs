@@ -73,7 +73,7 @@ macro_rules! impl_from_for_raw_packet {
 
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
-        impl<'a> ::core::convert::From<&'a [u8]> for $name {
+        impl<'a> core::convert::From<&'a [u8]> for $name {
             fn from( param: &'a [u8] ) -> Self {
                 let mut $param = param;
                 $inner
@@ -621,7 +621,7 @@ impl_from_for_raw_packet! {
 
 #[derive(Clone,Copy,PartialEq)]
 pub enum CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::core::fmt::Debug
+    where UnpackErrorType: core::fmt::Debug
 {
     /// If the api doesn't have a bug in it, then the controller is faulty if this error occurs
     RawDataLenTooSmall,
@@ -630,10 +630,10 @@ pub enum CommandDataErr<UnpackErrorType>
     UnpackError(UnpackErrorType),
 }
 
-impl<UnpackErrorType> ::core::fmt::Display for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::core::fmt::Debug
+impl<UnpackErrorType> core::fmt::Display for CommandDataErr<UnpackErrorType>
+    where UnpackErrorType: core::fmt::Debug
 {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         match *self {
             CommandDataErr::RawDataLenTooSmall => {
                 write!(f, "Command complete data error, the size of the data was too small for type")
@@ -648,16 +648,16 @@ impl<UnpackErrorType> ::core::fmt::Display for CommandDataErr<UnpackErrorType>
     }
 }
 
-impl<UnpackErrorType> ::core::fmt::Debug for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: ::core::fmt::Debug
+impl<UnpackErrorType> core::fmt::Debug for CommandDataErr<UnpackErrorType>
+    where UnpackErrorType: core::fmt::Debug
 {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
-        (self as &::core::fmt::Display).fmt(f)
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+        (self as &core::fmt::Display).fmt(f)
     }
 }
 
 pub(crate) trait DataResult
-where <Self as crate::hci::events::DataResult>::UnpackErrorType: ::core::fmt::Debug
+where <Self as crate::hci::events::DataResult>::UnpackErrorType: core::fmt::Debug + core::fmt::Display
 {
     type ReturnData;
     type UnpackErrorType;
@@ -771,8 +771,8 @@ macro_rules! impl_get_data_for_command {
 
         impl crate::hci::events::GetDataForCommand<$data> for crate::hci::events::CommandCompleteData {
             unsafe fn get_return(&self) ->
-                ::core::result::Result<
-                    ::core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
+                core::result::Result<
+                    core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
                     crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
                 >
             {
@@ -792,19 +792,19 @@ macro_rules! impl_get_data_for_command {
             }
 
             unsafe fn get_return_unchecked(&self) ->
-                ::core::result::Result<
-                    ::core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
+                core::result::Result<
+                    core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
                     crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
                 >
             {
                 use core::mem::size_of;
 
-                if self.raw_data.len() >= ::core::mem::size_of::<$packed_data>() {
+                if self.raw_data.len() >= core::mem::size_of::<$packed_data>() {
                     let mut buffer = [0u8;size_of::<$packed_data>()];
 
                     buffer.copy_from_slice(&(*self.raw_data));
 
-                    let p_data: $packed_data = ::core::mem::transmute(buffer);
+                    let p_data: $packed_data = core::mem::transmute(buffer);
 
                     match <$data>::try_from(p_data) {
                         Ok(val) => Ok(Some(val)),
@@ -3620,8 +3620,8 @@ macro_rules! events_markup {
         }
 
         #[cfg(not(test))]
-        impl ::core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+        impl core::fmt::Debug for crate::hci::events::$EnumDataName {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(crate::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
@@ -3629,8 +3629,8 @@ macro_rules! events_markup {
         }
 
         #[cfg(test)]
-        impl ::core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+        impl core::fmt::Debug for crate::hci::events::$EnumDataName {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(crate::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })

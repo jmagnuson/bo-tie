@@ -367,24 +367,26 @@ pub mod flags {
         fn into_raw(&self) -> Vec<u8> {
             let mut raw = new_raw_type(Self::AD_TYPE.val());
 
-            for ref flag in &self.set {
-                // only add flags that are currently enabled
-                if flag.val.get() {
-                    let octet = flag.position / 8;
-                    let bit   = flag.position % 8;
+            // The first two octets are number of flag octets and ad type, so the '+ 2' is to
+            // compensate for that)
+            let flag_data_offset = 2;
 
-                    // fillout the vec until the octet is reached
-                    while raw.len() <= octet {
-                        raw.push(0);
-                    }
+            // Iterate over only the currently enabled flags
+            for ref flag in self.set.iter().filter( |flag| flag.val.get() ) {
 
-                    raw[octet] |= 1 << bit;
+                let octet = flag.position / 8;
+                let bit   = flag.position % 8;
+
+                // Fillout the vec until the octet is reached
+                while raw.len() <= ( octet + flag_data_offset ) {
+                    raw.push(0);
                 }
+
+                raw[octet + flag_data_offset] |= 1 << bit;
             }
 
-            // Now set the length. One less because length is only for data type + flags. The
-            // first byte contains
-           set_len(&mut raw);
+            // Set the length
+            set_len(&mut raw);
 
             raw
         }
@@ -422,11 +424,11 @@ pub mod flags {
             let mut flags = Flags::new();
 
             flags.get_core(CoreFlags::LELimitedDiscoverableMode).enable();
-            flags.get_user(0).enable();
+            flags.get_user(2).enable();
 
             let raw = flags.into_raw();
 
-            assert_eq!(vec![1u8,1u8], raw);
+            assert_eq!(vec![3u8,1,1,1<<2], raw);
         }
 
         #[test]

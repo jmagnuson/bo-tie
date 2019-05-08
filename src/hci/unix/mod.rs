@@ -770,7 +770,6 @@ mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task;
-    use crate::hci::test_util::block_for_result;
     use std::future::Future;
 
     #[test]
@@ -785,10 +784,10 @@ mod tests {
     impl Future for TimeoutFuture {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, lw: &task::Waker) -> task::Poll<Self::Output> {
+        fn poll(self: Pin<&mut Self>, cx: &mut task::Context) -> task::Poll<Self::Output> {
             let mut waker = self.waker_token.lock().unwrap();
 
-            waker.set_waker(lw.clone());
+            waker.set_waker(cx.waker().clone());
 
             if waker.triggered() {
                 task::Poll::Ready(())
@@ -798,6 +797,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug,Clone)]
     struct TimeoutHappened {
         waker_token: Arc<Mutex<WakerToken>>
     }
@@ -831,6 +831,6 @@ mod tests {
 
         timeout_builder.enable_timer().unwrap();
 
-        assert_eq!( block_for_result(future), () );
+        assert_eq!( futures::executor::block_on(future), () );
     }
 }

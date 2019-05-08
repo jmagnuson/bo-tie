@@ -2,7 +2,7 @@
 //! the Bluetooth v5.0 Specification
 
 use core::convert::From;
-use core::fmt::{Debug, Formatter, Result};
+use core::fmt::{Debug, Display, Formatter, Result};
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub enum Error {
@@ -220,6 +220,150 @@ impl Debug for Error {
             LimitReached => write!(f, "LimitReached (0x{:X})", 0x43),
             OperationCancelledByHost => write!(f, "OperationCancelledByHost (0x{:X})", 0x44),
         }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "HCI Error: {}. See the error code section of the Bluetooth Specification \
+            (Version 5, Vol 2, Part D) for more information",
+            match self {
+                Error::NoError => {
+                    // This isn't part of the bluetooth spec and is used to indicate no error
+                    return write!(f, "No Error");
+                }
+                Error::UnknownHCICommand =>
+                    "Unknown HCI Command",
+                Error::UnknownConnectionIdentifier =>
+                    "Unknown Connection Identifier",
+                Error::HardwareFailure =>
+                    "Hardware Failure",
+                Error::PageTimeout =>
+                    "Page Timeout",
+                Error::AuthenticationFailure =>
+                    "Authentication Failure",
+                Error::PINorKeyMissing =>
+                    "PIN or Key Missing",
+                Error::MemoryCapacityExceeded =>
+                    "Memory Capacity Exceeded",
+                Error::ConnectionTimeout =>
+                    "Connection Timeout",
+                Error::ConnectionLimitExceeded =>
+                    "Connection Limit Exceeded",
+                Error::SynchronousConnectionLimitToADeviceExceeded =>
+                    "Synchronous Connection Limit To A Device Exceeded",
+                Error::ConnectionAlreadyExists =>
+                    "Connection Already Exists",
+                Error::CommandDisallowed =>
+                    "Command Disallowed",
+                Error::ConnectionRejectedDueToLimitedResources =>
+                    "Connection Rejected Due To Limited Resources",
+                Error::ConnectionRejectedDueToSecurityReasons =>
+                    "Connection Rejected Due To Security Reasons",
+                Error::ConnectionRejectedDueToUnacceptableBluetoothAddress =>
+                    "Connection Rejected Due To Unacceptable Bluetooth Address",
+                Error::ConnectionAcceptTimeoutExceeded =>
+                    "Connection Accept Timeout Exceeded",
+                Error::UnsupportedFeatureOrParameterValue =>
+                    "Unsupported Feature Or Parameter Value",
+                Error::InvalidHCICommandParameters =>
+                    "Invalid HCI Command Parameters",
+                Error::RemoteUserTerminatedConnection =>
+                    "Remote User Terminated Connection",
+                Error::RemoteDeviceTerminatedConnectionDueToLowResources =>
+                    "Remote Device Terminated Connection Due To Low Resources",
+                Error::RemoteDeviceTerminatedConnectionDueToPowerOff =>
+                    "Remote Device Terminated Connection Due To Power Off",
+                Error::ConnectionTerminatedByLocalHost =>
+                    "Connection Terminated By Local Host",
+                Error::RepeatedAttempts =>
+                    "Repeated Attempts",
+                Error::PairingNotAllowed =>
+                    "Pairing Not Allowed",
+                Error::UnknownLMPPDU =>
+                    "Unknown LMP PDU",
+                Error::UnsupportedRemoteFeatureOrUnsupportedLMPFeature =>
+                    "Unsupported Remote Feature / Unsupported LMP Feature",
+                Error::SCOOffsetRejected =>
+                    "SCO Offset Rejected",
+                Error::SCOIntervalRejected =>
+                    "SCO Interval Rejected",
+                Error::SCOAirModeRejected =>
+                    "SCO Air Mode Rejected",
+                Error::InvalidLMPParametersOrInvalidLLParameters =>
+                    "Invalid LMP Parameters / Invalid LL Parameters",
+                Error::UnspecifiedError =>
+                    "Unspecified Error",
+                Error::UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue =>
+                    "Unspported LMP Parameter Value / Unsupported LL Parameter V Alue",
+                Error::RoleChangeNotAllowed =>
+                    "Role Change Not Allowed",
+                Error::LMPResponseTimeoutOrLLResponseTimeout =>
+                    "LMP Response Timeout / LL Response Timeout",
+                Error::LPMErrorTransationCollisionOrLLProcedureColision =>
+                    "LPM Error Transation Collision / LL Procedure Colision",
+                Error::LMPPDUNotAllowed =>
+                    "LMP PDU Not Allowed",
+                Error::EncryptionModeNotAcceptable =>
+                    "Encryption Mode Not Acceptable",
+                Error::LinkKeyCannotBeChanged =>
+                    "Link Key Cannot Be Changed",
+                Error::RequestedQosNosSupported =>
+                    "Requested Qos Nos Supported",
+                Error::InstantPassed =>
+                    "Instant Passed",
+                Error::PairingWithUnitKeyNotSupported =>
+                    "Pairing With Unit Key Not Supported",
+                Error::DifferentTransactionCollision =>
+                    "Different Transaction Collision",
+                Error::QosUnacceptableParameter =>
+                    "Qos Unacceptable Parameter",
+                Error::QosRejected =>
+                    "Qos Rejected",
+                Error::ChannelAssessmetNotSupported =>
+                    "Channel Assessmet Not Supported",
+                Error::InsufficientSecurity =>
+                    "Insufficient Security",
+                Error::ParameterOutOfMandatorRange =>
+                    "Parameter Out Of Mandator Range",
+                Error::RoleSwitchPending =>
+                    "Role Switch Pending",
+                Error::ReservedSlotViolation =>
+                    "Reserved Slot Violation",
+                Error::RoleSwithFailed =>
+                    "Role Swith Failed",
+                Error::ExtendedInquiryResponseTooLarge =>
+                    "Extended Inquiry Response Too Large",
+                Error::SimplePairingNotSupportedByHost =>
+                    "Simple Pairing Not Supported By Host",
+                Error::HostBusyBecausePairing =>
+                    "Host Busy Because Pairing",
+                Error::ConnectionRejectedDueToNoSuitableChannelFound =>
+                    "Connection Rejected Due To No Suitable Channel Found",
+                Error::ControllerBusy =>
+                    "Controller Busy",
+                Error::UnacceptableConnectionParameters =>
+                    "Unacceptable Connection Parameters",
+                Error::AdvertisingTimeout =>
+                    "Advertising Timeout",
+                Error::ConnectionTerminatedDueToMICFailure =>
+                    "Connection Terminated Due To MIC Failure",
+                Error::ConnectionFailedToBeEstablished =>
+                    "Connection Failed To Be Established",
+                Error::MACConnectionFailed =>
+                    "MAC Connection Failed",
+                Error::CoarseClockAdjustmentRejectedButWillTryToAdjustUsingClockDragging =>
+                    "Coarse Clock Adjustment Rejected But Will Try To Adjust Using Clock Dragging",
+                Error::Type0SubmapNotDefined =>
+                    "Type0 Submap Not Defined",
+                Error::UnknownAdvertisingIdentifier =>
+                    "Unknown Advertising Identifier",
+                Error::LimitReached =>
+                    "Limit Reached",
+                Error::OperationCancelledByHost =>
+                    "Operation Cancelled By Host",
+            }
+        )
     }
 }
 
