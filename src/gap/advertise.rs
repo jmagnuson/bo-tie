@@ -794,7 +794,7 @@ pub mod service_data {
                 fn try_from_raw( raw: &[u8] ) -> Result<ServiceData<$type>,Error> {
                     let ad_type = $ad_type;
                     from_raw!{raw, ad_type, {
-                        use std::convert::TryInto;
+                        use core::convert::TryInto;
 
                         if raw.len() >= 3 {
                             let (uuid_raw, data) = raw.split_at(std::mem::size_of::<$type>());

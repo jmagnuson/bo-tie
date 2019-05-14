@@ -123,8 +123,18 @@ pub trait HostControllerInterface
     type ReceiveEventError: Debug + Display;
 
     /// Send a command from the Host to the Bluetooth Controller
-    fn send_command<D>(&self, cmd_data: D) -> Result<(), Self::SendCommandError>
-    where D: CommandParameter;
+    ///
+    /// This will return true if the command was sent to the bluetooth controller, and false if
+    /// the command couldn't be transferred to the controller yet. This doesn't mean that an error
+    /// occured (it generally means that the bluetooth controller buffer is full), but it does mean
+    /// that the command must be resent. If an error does occur then an Error will be returned.
+    ///
+    /// The `cmd_data` input contains all the HCI command information, where as the `waker` input
+    /// is used to wake the context for the command to be resent. The waker is optional so the
+    /// function can be used outside of a future.
+    fn send_command<D,W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
+    where D: CommandParameter,
+          W: Into<Option<core::task::Waker>>;
 
     /// Receive an event from the Bluetooth controller
     ///
@@ -190,9 +200,12 @@ where I: HostControllerInterface,
     fn fut_poll(&mut self, cx: &mut core::task::Context) -> Poll<Result<events::EventsData, SendCommandError<I>>> {
 
         // This will only done with the first call to fut_poll
-        if let Some(data) = self.command_data.take() {
-            if let Err(e) = self.interface.send_command(data) {
-                return Poll::Ready(Err(SendCommandError::Send(e)));
+        if let Some(ref data) = self.command_data {
+            match self.interface.send_command(data, cx.waker().clone() ) {
+                Err(e) => return Poll::Ready(Err(SendCommandError::Send(e))),
+                // False means the command wasn't sent
+                Ok(false) => return Poll::Pending,
+                Ok(true) => { self.command_data.take(); },
             }
         }
 
