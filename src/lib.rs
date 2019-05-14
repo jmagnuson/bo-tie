@@ -3,6 +3,7 @@
 #![feature(await_macro)]
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(test, feature(gen_future))]
+#![feature(trace_macros)]
 
 // These crates are used all the time
 extern crate alloc;

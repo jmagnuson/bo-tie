@@ -2,3 +2,4 @@
 **/*.rs.bk
 /temp
 /build/generated_bindings/*
+/crate-derivatives

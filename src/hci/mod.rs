@@ -4,80 +4,271 @@
 //! the bluetooth specification). This module is further broken up into modules for OGFs (OpCode
 //! group field(s)).
 
-
-macro_rules! hci_future_output {
-    () => { ::core::result::Result<crate::hci::events::EventsData, impl ::core::fmt::Display + ::core::fmt::Debug> }
-}
-
 mod opcodes;
 pub mod common;
 pub mod error;
 #[macro_use] pub mod events;
 
-#[cfg(unix)] mod unix;
-
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
 use core::time::Duration;
+use core::task::Poll;
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
 /// The type Parameter should be a packed structure of the command's parameters
-trait CommandParameters {
-    /// The command parameter to return
+pub trait CommandParameter {
+    /// Data for the parameter as specified by the Bluetooth Specification.
     type Parameter;
 
-    /// Command
+    /// The command to send to the Bluetooth Controller.
+    ///
+    /// This is the OGF & OCF pair.
     const COMMAND: opcodes::HCICommand;
 
+    /// Convert Self into the parameter form
+    ///
+    /// The returned parameter is the structure defined as the parameter part of the command packet
+    /// for the specific HCI command.
     fn get_parameter(&self) -> Self::Parameter;
+
+    /// Get the command packet to be sent to the controller
+    ///
+    /// # Note
+    /// This is not the entire packet sent to the interface as there may be additional information
+    /// that needs to be sent for the HCI transport layer (such as the HCI packet indicator).
+    fn as_command_packet<'a>(&self) -> Box<[u8]> {
+        use core::mem::size_of;
+
+        let parameter_size = size_of::<Self::Parameter>();
+
+        // Allocating a vector to the exact size of the packet. The 3 bytes come from the opcode
+        // field (2 bytes) and the length field (1 byte)
+        let mut buffer: Vec<u8> = alloc::vec::Vec::with_capacity( parameter_size + 3);
+
+        let parameter = self.get_parameter();
+
+        let p_bytes_p = &parameter as *const Self::Parameter as *const u8;
+
+        let parm_bytes = unsafe { core::slice::from_raw_parts( p_bytes_p, parameter_size ) };
+
+        let opcode_bytes = Self::COMMAND.as_opcode_pair().as_opcode().to_le();
+
+        buffer.extend_from_slice(&opcode_bytes.to_le_bytes());
+
+        buffer.push(parm_bytes.len() as u8);
+
+        buffer.extend_from_slice(parm_bytes);
+
+        buffer.into_boxed_slice()
+    }
 }
 
-/// This is a wrapper around the os HCI object
-#[derive(Clone,Debug)]
-pub struct HostInterface {
-    #[cfg(unix)]
-    interface: unix::HCIAdapter,
+/// A Pattern trait for matching received events
+///
+/// When receiving an event in a concurrent system, it can be unknown which context a received
+/// event should be propigated to. The event must be matched to determine this.
+pub trait Pattern {
+    /// Match the event data
+    fn match_event(&self, event_data: &events::EventsData ) -> bool;
 }
 
-/// Error type for hci commands/events
-#[derive(Debug,PartialEq,Clone)]
-pub enum CommandError<SysErr,SpecErr>
-    where SysErr  : Display + Debug + Clone ,
-          SpecErr : Display + Debug + Clone
+impl<F> Pattern for F where F: Fn( &events::EventsData ) -> bool + Sized {
+    fn match_event(&self, event_data: &events::EventsData) -> bool {
+        self(event_data)
+    }
+}
+
+/// Trait for interfacing with the controller
+///
+///
+/// # Implemenation
+///
+/// ## [send_command](#send_command)
+/// This is used for sending the command to the Bluetooth controller by the HostInterface object.
+/// It is provided with a input that implementes the
+/// `[CommandParameter](../index.html#CommandParameter)` which contains all the information required
+/// for sending the command packet to the Bluetooth controller. This information is not in the
+/// packet format and needs to be implemented as such.
+///
+/// The funciton should return Ok if there were no errors sending the command.
+///
+/// ## [receive_event](#receive_event)
+/// receive_event is used for implementing a future around the controller's event process. When
+/// called it needs to check if the event is available to the Host or not. If the event is not not
+/// immediately available, the implementation of receive_event needs to call wake on the provided
+/// Waker input when the event is accepted by the Host.
+///
+/// It is suggested, but not nessicary, for the implementor to provide a means of timing out while
+/// waiting for the event to be received by the host. The duration of the timeout shall be the
+/// input `timeout` if set to some value, otherwise there is no timeout when the value is None.
+/// When the timeout occurs, the wake function of the provided Waker input will be called. When
+/// receive_event is called the next time (with the same event), it will return an error to
+/// indicate a timeout.
+///
+/// If the timeout functionality isn't imeplemented, then the only value accepted should be None
+/// and any Duration value provided should cause the function to return an Error stating that
+/// timeouts are not available for this implementation.
+///
+/// Events need to be correctly propigated to the right context that is currently waiting for the
+/// requested event. Some events can be differeniated from themselves through the data passed with
+/// the event, but most do not have any discernable way to tell which context should receive which
+/// event. Its the responsibility of the implementor of `HostControllerInterface` to determine
+/// what event goes with what waker, along with matching events to a waker based on the provided
+/// matcher.
+pub trait HostControllerInterface
 {
-    /// System specific error
-    SystemError(SysErr),
-    /// An error generated by the bluetooth device. The value is the status returned by the
-    /// device to indicate the error. These errors are defined in the specification (v5 volume 2,
-    /// part D section 2)
-    HCI(error::Error),
-    /// An error that is specifically related to the command
-    Specific(SpecErr),
+    type SendCommandError: Debug + Display;
+    type ReceiveEventError: Debug + Display;
+
+    /// Send a command from the Host to the Bluetooth Controller
+    fn send_command<D>(&self, cmd_data: D) -> Result<(), Self::SendCommandError>
+    where D: CommandParameter;
+
+    /// Receive an event from the Bluetooth controller
+    ///
+    /// This is implemented as a non-blocking operation, the host has either received the event or
+    /// the event hasn't been send sent (or will never be sent) to the host. The function will
+    /// return the data associated with the event (or an error if it occurs) if the event has been
+    /// received or it will return None.
+    ///
+    /// The function requires a
+    /// `[Waker](https://doc.rust-lang.org/nightly/core/task/struct.Waker.html)` object because
+    /// it will call wake when the event has been received after the method is called or a timeout
+    /// occurs (if available). At which point the function must be called again to receive the
+    /// EventData.
+    fn receive_event<'p,P>(&self, event: events::Events, waker: core::task::Waker, matcher: &'p P, timeout: Option<Duration>)
+    -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+    where P: Pattern;
 }
 
-impl<SysErr, SpecErr> Display for CommandError<SysErr, SpecErr>
-where SysErr  : Display + Debug + Clone,
-      SpecErr : Display + Debug + Clone
-{
+enum SendCommandError<I> where I: HostControllerInterface {
+    Send(<I as HostControllerInterface>::SendCommandError),
+    Recv(<I as HostControllerInterface>::ReceiveEventError),
+}
+
+impl<I> Debug for SendCommandError<I> where I: HostControllerInterface {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            CommandError::SystemError(reason) => {
-                write!(f, "{}", reason)
-            }
-            CommandError::HCI(reason) => {
-                write!(f, "{}", reason)
-            }
-            CommandError::Specific(reason) => {
-                write!(f, "{}", reason)
-            }
+            SendCommandError::Send(err) => Debug::fmt(err, f),
+            SendCommandError::Recv(err) => Debug::fmt(err, f),
         }
     }
 }
 
-impl HostInterface {
+impl<I> Display for SendCommandError<I> where I: HostControllerInterface {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            SendCommandError::Send(err) => Display::fmt(err, f),
+            SendCommandError::Recv(err) => Display::fmt(err, f),
+        }
+    }
+}
 
+struct CommandFutureReturn<'a, I, CD>
+where I: HostControllerInterface,
+      CD: CommandParameter,
+{
+    interface: &'a I,
+    /// Parameter data sent with the command packet
+    ///
+    /// This must be set to Some(*data*) for a command to be sent to the controller. No command
+    /// will be sent to the controller if the `command_data` isn't set to Some.
+    command_data: Option<CD>,
+    event: events::Events,
+    timeout: Option<Duration>,
+}
+
+impl<'a, I, CD> CommandFutureReturn<'a, I, CD>
+where I: HostControllerInterface,
+      CD: CommandParameter + Unpin,
+{
+
+    /// This is just called within an implemenation of future created by the macro
+    /// `[impl_returned_future]`(../index.html#impl_returned_future)
+    fn fut_poll(&mut self, cx: &mut core::task::Context) -> Poll<Result<events::EventsData, SendCommandError<I>>> {
+
+        // This will only done with the first call to fut_poll
+        if let Some(data) = self.command_data.take() {
+            if let Err(e) = self.interface.send_command(data) {
+                return Poll::Ready(Err(SendCommandError::Send(e)));
+            }
+        }
+
+        let cmd_matcher = | ed: &events::EventsData | {
+
+            fn match_opcode<CD: CommandParameter>(opcode: Option<u16>) -> bool {
+                match opcode {
+                    Some(opcode) => {
+                        use core::convert::TryFrom;
+
+                        let expected_op_code =
+                            opcodes::HCICommand::try_from(<CD as CommandParameter>::COMMAND)
+                            .unwrap();
+
+                        let recv_oc_code = opcodes::HCICommand::try_from(
+                            opcodes::OpCodePair::from_opcode(opcode))
+                            .expect("Tried to process unknown HCI op code");
+
+                        expected_op_code == recv_oc_code
+                    }
+                    None => false,
+                }
+            }
+
+            match ed {
+                events::EventsData::CommandComplete(data) => match_opcode::<CD>(data.command_opcode),
+                events::EventsData::CommandStatus(data)   => match_opcode::<CD>(data.command_opcode),
+                _ => false
+            }
+        };
+
+        match self.interface.receive_event(self.event, cx.waker().clone(), &cmd_matcher, self.timeout) {
+            None => Poll::Pending,
+            Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
+        }
+    }
+}
+
+struct EventReturnFuture<'a, I, P> where I: HostControllerInterface, P: Pattern {
+    interface: &'a I,
+    event: events::Events,
+    matcher: &'a P,
+    timeout: Option<Duration>,
+}
+
+impl<'a, I, P> Future for EventReturnFuture<'a, I, P> where I: HostControllerInterface, P: Pattern {
+    type Output = Result<events::EventsData, I::ReceiveEventError>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
+        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher, self.timeout) {
+            Some(evnt_rspn) => Poll::Ready(evnt_rspn),
+            None => Poll::Pending,
+        }
+    }
+}
+
+/// The host interface
+///
+/// This is used by the host to interact with the interface between itself and the Bluetooth
+/// Controller.
+#[derive(Clone)]
+pub struct HostInterface<I> where I: HostControllerInterface
+{
+    interface: I
+}
+
+impl<I> From<I> for HostInterface<I> where I: HostControllerInterface
+{
+    fn from(interface: I) -> Self {
+        HostInterface { interface }
+    }
+}
+
+impl<I> HostInterface<I>
+where I: HostControllerInterface
+{
     /// Send a command to the controller
     ///
     /// The command data will be used in the command packet to determine what HCI command is sent
@@ -85,15 +276,19 @@ impl HostInterface {
     /// controller in response to the command, they should not be events that will come later as
     /// a timeout may occur before the event is sent from the controller.
     ///
-    /// A future is returned for waiting on the specified events from the controller.
-    fn send_command<CmdData>(
-        &self, cmd_data: CmdData,
-        event: events::Events,
-        timeout: Duration
-    ) -> Result< impl Future<Output=Result<events::EventsData, impl Display + Debug>>, CommandError<impl Display + Debug + Clone, impl Display + Debug + Clone>>
-        where CmdData: CommandParameters,
+    /// A future is returned for waiting on the event generated from the controller in *direct*
+    /// response to the sent command.
+    fn send_command<'a, CmdData, D>( &'a self, cmd_data: CmdData, event: events::Events, timeout: D )
+    -> CommandFutureReturn<'a, I, CmdData>
+    where CmdData: CommandParameter + Unpin + 'static,
+          D: Into<Option<Duration>>,
     {
-        self.interface.send_command(cmd_data, event, timeout ).or_else(|e| { Err(CommandError::from(e)) })
+        CommandFutureReturn {
+            interface: &self.interface,
+            command_data: Some(cmd_data),
+            event: event,
+            timeout: timeout.into(),
+        }
     }
 
     /// Specify an event to wait for
@@ -123,18 +318,25 @@ impl HostInterface {
     /// await!(set_advertising_enable::send(&host_interface, true).unwrap()).unwrap();
     ///
     /// // To have a future handle this event, wait_for_event must be called for the
-    pub fn wait_for_event(&self, events: events::Events, timeout: Duration)
-    -> Result< impl Future<Output=Result<events::EventsData, impl Display + Debug>>, CommandError<impl Display + Debug + Clone, impl Display + Debug + Clone>>
+    pub fn wait_for_event<'a,P,D>(&'a self, event: events::Events, matcher: &'a P, timeout: D)
+    -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
+    where P: Pattern,
+          D: Into<Option<Duration>>,
     {
-        self.interface.wait_for_event(events, timeout).or_else(|e| { Err(CommandError::from(e)) })
+        EventReturnFuture {
+            interface: &self.interface,
+            event: event,
+            matcher: matcher,
+            timeout: timeout.into(),
+        }
     }
 }
 
-impl ::core::default::Default for HostInterface {
+impl<T> ::core::default::Default for HostInterface<T> where T: HostControllerInterface + Default {
 
     #[cfg(unix)]
     fn default() -> Self {
-        HostInterface { interface: unix::HCIAdapter::default() }
+        HostInterface { interface: <T as Default>::default() }
     }
 }
 
@@ -162,47 +364,40 @@ macro_rules! impl_status_return {
     }
 }
 
-trait DisplayAndDebug: Display + Debug {}
-impl<T: Display + Debug> DisplayAndDebug for T {}
-
-#[derive(Debug)]
-enum OutputErr<SendErr, ResponseErr, CmDErr>
-where SendErr: Display + Debug,
-      ResponseErr: Display + Debug,
-      CmDErr: Display + Debug,
+ #[derive(Debug)]
+enum OutputErr<TargErr, CmdErr>
+where TargErr: Display + Debug,
+      CmdErr: Display + Debug,
 {
-    CommandSendErr(SendErr),
-    EventResponseError(ResponseErr),
+    /// An error occured at the target specific HCI implementation
+    TargetSpecificErr(TargErr),
+    /// Cannot convert the data from the HCI packed form into its useable form.
+    CommandDataConversionError(CmdErr),
     /// The first item is the received event and the second item is the event expected
     ReceivedIncorrectEvent(crate::hci::events::Events, crate::hci::events::Events),
-    CommandDataConversionError(CmDErr),
     /// This is used when either the 'command complete' or 'command status' events contain no data
     /// and are used to indicate the maximum number of HCI command packets that can be queued by
     /// the controller.
     ResponseHasNoAssociatedCommand,
+    /// The command status event returned with this error
     CommandStatusErr(error::Error),
 }
 
-impl<SendErr, ResponseErr, CmDErr> Display for OutputErr<SendErr, ResponseErr, CmDErr>
-where SendErr: Display + Debug,
-      ResponseErr: Display + Debug,
-      CmDErr: Display + Debug,
+impl<TargErr, CmdErr> Display for OutputErr<TargErr, CmdErr>
+where TargErr: Display + Debug,
+      CmdErr: Display + Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            OutputErr::CommandSendErr(reason) => {
-                core::write!(f, "Error occured when trying to send HCI command, {}", reason)
+            OutputErr::TargetSpecificErr(reason) => {
+                core::write!(f, "{}", reason)
             },
-            OutputErr::EventResponseError(reason) => {
-                core::write!(f, "Error occured with expected HCI event in response to command, {}",
-                    reason)
+            OutputErr::CommandDataConversionError(reason) => {
+                core::write!(f, "{}", reason)
             },
             OutputErr::ReceivedIncorrectEvent(received_event, expected_event) => {
                 core::write!(f, "Received unexpected event '{:?}' from the bluetooth controller, \
                     expected event {:?}", received_event, expected_event )
-            },
-            OutputErr::CommandDataConversionError(reason) => {
-                core::write!(f, "{}", reason)
             },
             OutputErr::ResponseHasNoAssociatedCommand => {
                 core::write!(f,"Event Response contains no data and is not associated with \
@@ -232,41 +427,33 @@ macro_rules! impl_returned_future {
     // these inputs match the inputs from crate::hci::events::impl_get_data_for_command
     ($return_type: ty, $event: path, $data:pat, $error:ty, $to_do: block) => {
 
-        struct ReturnedFuture<T,SE,RE>( Result<T, SE> )
-        where SE: core::fmt::Display + core::fmt::Debug + core::marker::Unpin + core::clone::Clone,
-              RE: core::fmt::Display + core::fmt::Debug,
-              T: Future<Output = Result<crate::hci::events::EventsData, RE>> + Unpin;
+        struct ReturnedFuture<'a, I, CD>( CommandFutureReturn<'a, I, CD> )
+        where I: HostControllerInterface,
+              CD: CommandParameter + Unpin;
 
-        impl<T,SE,RE> core::future::Future for ReturnedFuture<T,SE,RE>
-        where SE: core::fmt::Display + core::fmt::Debug + core::marker::Unpin + core::clone::Clone,
-              RE: core::fmt::Display + core::fmt::Debug,
-              T:  Future<Output = core::result::Result<crate::hci::events::EventsData, RE>>
-                  + core::marker::Unpin
+        impl<'a, I, CD> core::future::Future for ReturnedFuture<'a, I, CD>
+        where I: HostControllerInterface,
+              CD: CommandParameter + Unpin,
         {
-            type Output = core::result::Result< $return_type, crate::hci::OutputErr<SE,RE,$error>>;
+            type Output = core::result::Result< $return_type, crate::hci::OutputErr<SendCommandError<I>,$error>>;
 
             fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-                match &mut self.get_mut().0 {
-                    Ok(future) => {
-                        if let core::task::Poll::Ready(result) = core::pin::Pin::new(future).poll(cx) {
-                            match result {
-                                Ok( event_pattern_creator!($event, $data) ) => $to_do,
-                                Ok(event @ _) => {
-                                    let expected_event = crate::hci::events::Events::CommandComplete;
-                                    let received_event = event.get_enum_name();
+                if let core::task::Poll::Ready(result) = self.get_mut().0.fut_poll(cx) {
+                    match result {
+                        Ok( event_pattern_creator!($event, $data) ) => $to_do,
+                        Ok(event @ _) => {
+                            let expected_event = crate::hci::events::Events::CommandComplete;
+                            let received_event = event.get_enum_name();
 
-                                    let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(expected_event, received_event));
+                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(expected_event, received_event));
 
-                                    core::task::Poll::Ready(ret)
-                                },
-                                Err(reason) =>
-                                    core::task::Poll::Ready(Err(crate::hci::OutputErr::EventResponseError(reason))),
-                            }
-                        } else {
-                            core::task::Poll::Pending
-                        }
-                    },
-                    Err(reason) => core::task::Poll::Ready(Err(crate::hci::OutputErr::CommandSendErr(reason.clone())))
+                            core::task::Poll::Ready(ret)
+                        },
+                        Err(reason) =>
+                            core::task::Poll::Ready(Err(crate::hci::OutputErr::TargetSpecificErr(reason))),
+                    }
+                } else {
+                    core::task::Poll::Pending
                 }
             }
         }
@@ -615,10 +802,11 @@ pub mod le {
 
                 impl_status_return!( $command );
 
-                pub fn send( hci: &HostInterface,
+                pub fn send<'a, T>( hci: &'a HostInterface<T>,
                     at: AddressType,
                     addr: crate::BluetoothDeviceAddress )
-                -> impl core::future::Future<Output=Result<(), impl Display + Debug>>
+                -> impl core::future::Future<Output=Result<(), impl Display + Debug>> + 'a
+                where T: HostControllerInterface
                 {
                     let parameter = CommandPrameter {
                         _address_type: at.to_value(),
@@ -628,7 +816,7 @@ pub mod le {
                     ReturnedFuture( hci.send_command(parameter, Events::CommandComplete, Duration::from_secs(1) ) )
                 }
 
-                impl CommandParameters for CommandPrameter {
+                impl CommandParameter for CommandPrameter {
                     type Parameter = Self;
                     const COMMAND: opcodes::HCICommand = $command;
                     fn get_parameter(&self) -> Self::Parameter { *self }
@@ -712,7 +900,7 @@ pub mod le {
             #[derive(Clone, Copy)]
             struct Prameter;
 
-            impl CommandParameters for Prameter {
+            impl CommandParameter for Prameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -720,7 +908,8 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send( hci: &HostInterface ) -> impl Future<Output=Result<(), impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command(Prameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
@@ -801,7 +990,7 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -857,7 +1046,8 @@ pub mod le {
 
             impl_command_data_future!(BufferSize, error::Error);
 
-            pub fn send( hci: &HostInterface ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
@@ -913,14 +1103,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<EnabledLEFeaturesItr, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<EnabledLEFeaturesItr, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1126,14 +1317,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<Vec<StatesAndRoles>, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<Vec<StatesAndRoles>, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1192,14 +1384,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<usize, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1356,7 +1549,7 @@ pub mod le {
                 _mask: [u8;8]
             }
 
-            impl CommandParameters for CmdParameter {
+            impl CommandParameter for CmdParameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
@@ -1373,8 +1566,9 @@ pub mod le {
             /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
             /// send(&host_interface, events);
             /// ```
-            pub fn send( hi: &HostInterface, enabled_events: Vec<LEMeta>)
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hi: &'a HostInterface<T>, enabled_events: Vec<LEMeta>)
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let command_pram = CmdParameter {
@@ -1447,7 +1641,7 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
@@ -1455,8 +1649,9 @@ pub mod le {
 
             /// This will return a future with its type 'Output' being the number of packets
             /// received during what ever test was done
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<usize, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1520,14 +1715,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
             /// Returns the bluetooth device address for the device
-            pub fn send( hci: &HostInterface ) -> impl Future<Output=Result<BluetoothDeviceAddress, impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BluetoothDeviceAddress, impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 use events::Events::CommandComplete;
 
                 let cmd_rslt = hci.send_command(Parameter, CommandComplete, Duration::from_secs(1) );
@@ -1637,14 +1833,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<EnabledFeaturesIter, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<EnabledFeaturesIter, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1722,14 +1919,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<VersionInformation, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1759,13 +1957,14 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            pub fn send( hci: &HostInterface ) -> impl Future<Output=Result<(), impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
@@ -2416,14 +2615,16 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<Vec<SupportedCommands>, impl Display + Debug>>  {
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<Vec<SupportedCommands>, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
@@ -2513,14 +2714,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send( hci: &HostInterface )
-            -> impl Future<Output=Result<TxPower, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -2605,18 +2807,19 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            impl CommandParameters for CmdParameter {
+            impl CommandParameter for CmdParameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send(
-                hci: &HostInterface,
+            pub fn send<'a, T>(
+                hci: &'a HostInterface<T>,
                 channel: Frequency,
                 payload: TestPayload,
                 payload_length: u8 )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let parameters = CmdParameter {
@@ -2667,7 +2870,8 @@ pub mod le {
             type Payload = [u8;31];
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _length: u8,
                 _data: [u8;31],
             }
@@ -2756,21 +2960,22 @@ pub mod le {
                 }
             }
 
-            impl CommandParameters for AdvertisingData{
+            impl CommandParameter for AdvertisingData {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
                     CmdParameter {
                         _length: self.length as u8,
-                        _data: self.payload,
+                        _data: self.payload
                     }
                 }
             }
 
             impl_status_return!(COMMAND);
 
-            pub fn send( hci: &HostInterface, adv_data: AdvertisingData )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, adv_data: AdvertisingData )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(adv_data, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -2855,7 +3060,7 @@ pub mod le {
                 enable: bool
             }
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = u8;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -2863,7 +3068,8 @@ pub mod le {
                 }
             }
 
-            pub fn send( hci: &HostInterface, enable: bool ) -> impl Future<Output=Result<(), impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, enable: bool ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command(Parameter{ enable: enable }, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
@@ -3080,7 +3286,7 @@ pub mod le {
                 _advertising_filter_policy: u8,
             }
 
-            impl CommandParameters for CmdParameter{
+            impl CommandParameter for CmdParameter{
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -3088,8 +3294,9 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send( hci: &HostInterface, params: AdvertisingParameters )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let parameter = CmdParameter {
@@ -3164,7 +3371,7 @@ pub mod le {
                 rand_address: crate::BluetoothDeviceAddress
             }
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = crate::BluetoothDeviceAddress;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3172,8 +3379,9 @@ pub mod le {
                 }
             }
 
-            pub fn send( hci: &HostInterface, rand_addr: crate::BluetoothDeviceAddress )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter{ rand_address: rand_addr }, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -3208,7 +3416,7 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            impl CommandParameters for Frequency
+            impl CommandParameter for Frequency
             {
                 type Parameter = u8;
                 const COMMAND: opcodes::HCICommand = COMMAND;
@@ -3217,8 +3425,9 @@ pub mod le {
                 }
             }
 
-            pub fn send( hci: &HostInterface, frequency: Frequency )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, frequency: Frequency )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete , Duration::from_secs(1) ) )
             }
@@ -3259,7 +3468,7 @@ pub mod le {
                 filter_duplicates: bool,
             }
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3272,8 +3481,9 @@ pub mod le {
 
             /// The command has the ability to enable/disable scanning and filter duplicate
             /// advertisement.
-            pub fn send( hci: &HostInterface, enable: bool, filter_duplicates: bool)
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, enable: bool, filter_duplicates: bool)
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 let cmd_param = Parameter {
                     enable: enable,
@@ -3396,7 +3606,8 @@ pub mod le {
             impl_status_return!(COMMAND);
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _scan_type: u8,
                 _scan_interval: u16,
                 _scan_window: u16,
@@ -3404,7 +3615,7 @@ pub mod le {
                 _filter_policy: u8,
             }
 
-            impl CommandParameters for ScanningParameters {
+            impl CommandParameter for ScanningParameters {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3418,8 +3629,9 @@ pub mod le {
                 }
             }
 
-            pub fn send( hci: &HostInterface, sp: ScanningParameters )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, sp: ScanningParameters )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(sp, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -3577,7 +3789,8 @@ pub mod le {
             }
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _handle: u16,
                 _reason: u8,
             }
@@ -3587,7 +3800,7 @@ pub mod le {
                 pub disconnect_reason: DisconnectReason,
             }
 
-            impl CommandParameters for DisconnectParameters {
+            impl CommandParameter for DisconnectParameters {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3600,8 +3813,9 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send( hci: &HostInterface, dp: DisconnectParameters )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, dp: DisconnectParameters )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus, Duration::from_secs(1) ) )
             }
@@ -3640,7 +3854,8 @@ pub mod le {
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ConnectionUpdate);
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _handle: u16,
                 _conn_interval_min: u16,
                 _conn_interval_max: u16,
@@ -3659,7 +3874,7 @@ pub mod le {
             }
 
 
-            impl CommandParameters for ConnectionUpdate {
+            impl CommandParameter for ConnectionUpdate {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3687,8 +3902,9 @@ pub mod le {
 
             /// The event expected to be returned is the LEMeta event carrying a Connection Update
             /// Complete lE event
-            pub fn send( hci: &HostInterface, cu: ConnectionUpdate, timeout: Duration)
-            -> impl Future<Output=Result<crate::hci::events::LEConnectionUpdateCompleteData, impl Display + Debug>> {
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, cu: ConnectionUpdate, timeout: Duration)
+            -> impl Future<Output=Result<crate::hci::events::LEConnectionUpdateCompleteData, impl Display + Debug>> + 'a where T: HostControllerInterface
+            {
                 ReturnedFuture( hci.send_command( cu, events::Events::LEMeta( events::LEMeta::ConnectionUpdateComplete ), timeout ) )
             }
 
@@ -3739,14 +3955,15 @@ pub mod le {
             #[derive(Clone,Copy)]
             struct Parameter;
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            pub fn send( hci: &HostInterface)
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>)
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -3811,7 +4028,8 @@ pub mod le {
             }
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _scan_interval: u16,
                 _scan_window: u16,
                 _initiator_filter_policy: u8,
@@ -3826,7 +4044,7 @@ pub mod le {
                 _maximum_ce_length: u16,
             }
 
-            impl CommandParameters for ConnectionParameters {
+            impl CommandParameter for ConnectionParameters {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -3903,8 +4121,9 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send( hci: &HostInterface, cp: ConnectionParameters )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus , Duration::from_secs(1) ) )
             }
@@ -3982,7 +4201,7 @@ pub mod le {
                 _connection_handle: u16
             }
 
-            impl CommandParameters for CmdParameter {
+            impl CommandParameter for CmdParameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -3997,8 +4216,9 @@ pub mod le {
 
             impl_command_data_future!(ChannelMapInfo, error::Error);
 
-            pub fn send( hci: &HostInterface, handle: ConnectionHandle )
-            -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let parameter = CmdParameter {
@@ -4031,7 +4251,7 @@ pub mod le {
                 _connection_handle: u16
             }
 
-            impl CommandParameters for CmdParameter {
+            impl CommandParameter for CmdParameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -4039,8 +4259,9 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send( hci: HostInterface, handle: ConnectionHandle )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let parameter = CmdParameter {
@@ -4065,7 +4286,8 @@ pub mod le {
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetHostChannelClassification);
 
             #[repr(packed)]
-            pub(crate) struct CmdParemeter {
+            #[doc(hidden)]
+            pub struct CmdParemeter {
                 _channel_map: [u8;5]
             }
 
@@ -4104,7 +4326,7 @@ pub mod le {
                 }
             }
 
-            impl CommandParameters for ChannelMap {
+            impl CommandParameter for ChannelMap {
                 type Parameter = CmdParemeter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -4125,8 +4347,9 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send( hci: HostInterface, map: ChannelMap )
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, map: ChannelMap )
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command( map, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -4165,7 +4388,8 @@ pub mod le {
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
 
             #[repr(packed)]
-            pub(crate) struct CmdParameter {
+            #[doc(hidden)]
+            pub struct CmdParameter {
                 _connection_handle: u16,
                 _level_type: u8,
             }
@@ -4215,12 +4439,12 @@ pub mod le {
                 MaximumPowerLevel,
             }
 
-            pub struct CommandParameter {
+            pub struct Parameter {
                 pub connection_handle: ConnectionHandle,
                 pub level_type: TransmitPowerLevelType,
             }
 
-            impl CommandParameters for CommandParameter {
+            impl CommandParameter for Parameter {
                 type Parameter = CmdParameter;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter {
@@ -4234,8 +4458,9 @@ pub mod le {
                 }
             }
 
-            pub fn send( hci: &HostInterface, parameter: CommandParameter )
-            -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, parameter: Parameter )
+            -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -4248,7 +4473,7 @@ pub mod le {
                 #[test]
                 #[ignore]
                 fn read_transmit_power_level_test() {
-                    let parameter = CommandParameter {
+                    let parameter = Parameter {
                         connection_handle: ConnectionHandle::try_from(0x00FF).unwrap(),
                         level_type: TransmitPowerLevelType::CurrentPowerLevel,
                     };
@@ -4272,7 +4497,7 @@ pub mod le {
                 _connection_handle: u16
             }
 
-            impl CommandParameters for CmdParameter {
+            impl CommandParameter for CmdParameter {
                 type Parameter = Self;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { *self }
@@ -4280,8 +4505,9 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send( hci: &HostInterface, handle: ConnectionHandle)
-            -> impl Future<Output=Result<(), impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle)
+            -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
 
                 let parameter = CmdParameter {
@@ -4320,7 +4546,7 @@ pub mod le {
                 handle: u16
             }
 
-            impl CommandParameters for Parameter {
+            impl CommandParameter for Parameter {
                 type Parameter = u16;
                 const COMMAND: opcodes::HCICommand = COMMAND;
                 fn get_parameter(&self) -> Self::Parameter { self.handle }
@@ -4356,8 +4582,9 @@ pub mod le {
 
             impl_command_data_future!(RSSIInfo, error::Error);
 
-            pub fn send( hci: &HostInterface, handle: ConnectionHandle )
-            -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>>
+            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
+            where T: HostControllerInterface
             {
                 let parameter = Parameter {
                     handle: handle.get_raw_handle()

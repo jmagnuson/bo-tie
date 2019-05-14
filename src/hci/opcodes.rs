@@ -1,3 +1,6 @@
+use core::convert::TryFrom;
+
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum HCICommand {
     LinkControl(LinkControl),
     ControllerAndBaseband(ControllerAndBaseband),
@@ -20,10 +23,54 @@ impl HCICommand {
 
 /// An type for the pair of OGF (OpCode Group Field) and OCF (OpCode Command Field)
 pub struct OpCodePair {
-    pub ogf: u16,
-    pub ocf: u16,
+    pub(crate) ogf: u16,
+    pub(crate) ocf: u16,
 }
 
+impl OpCodePair {
+
+    /// Get the OpCode Command Field value
+    pub fn get_ogf(&self) -> u16 { self.ogf }
+
+    /// Get the OpCode Group Field value
+    pub fn get_ocf(&self) -> u16 { self.ocf }
+
+    /// Convert the OpCodePair into the opcode
+    ///
+    /// The returned value is the OpCode used with building a HCI command Packet.
+    pub fn as_opcode(&self) -> u16 {
+        // The first 10 bits of the OpCode is the OCF field and the last 6 bits is the OGF field.
+        ((self.ocf & 0x3FFu16) | (self.ogf << 10)).to_le()
+    }
+
+    /// Convert the HCI command packet Op Code into an OpCodePair
+    pub fn from_opcode(val: u16) -> Self {
+        let value = <u16>::from_le(val);
+        OpCodePair {
+            ogf: value & 0x3FFu16,
+            ocf: value >> 10,
+        }
+    }
+}
+
+impl TryFrom<OpCodePair> for HCICommand {
+    type Error = alloc::string::String;
+
+    fn try_from(opc_pair: OpCodePair) -> Result<Self, Self::Error> {
+        match opc_pair.ogf {
+            0 => Ok(HCICommand::LinkControl( LinkControl::try_from(opc_pair.ocf)? )),
+            1 => Ok(HCICommand::ControllerAndBaseband( ControllerAndBaseband::try_from(opc_pair.ocf)? )),
+            2 => Ok(HCICommand::InformationParameters( InformationParameters::try_from(opc_pair.ocf)? )),
+            3 => Ok(HCICommand::StatusParameters( StatusParameters::try_from(opc_pair.ocf)? )),
+            4 => Ok(HCICommand::LEController( LEController::try_from(opc_pair.ocf)? )),
+            _ => Err(format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
+        }
+    }
+}
+
+macro_rules! ocf_error{ () => { "OpCode Group Field '{}' doesn't have the Op Code Field 0x{:x}" }; }
+
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum LinkControl {
     Disconnect,
     ReadRemoteVersionInformation,
@@ -44,8 +91,17 @@ impl LinkControl {
             }
         }
     }
+
+    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+        match ocf {
+            0x6  => Ok(LinkControl::Disconnect),
+            0x1d => Ok(LinkControl::ReadRemoteVersionInformation),
+            _ => Err(format!(ocf_error!(), "Link Control", ocf)),
+        }
+    }
 }
 
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum ControllerAndBaseband {
     Reset,
     ReadTransmitPowerLevel,
@@ -66,8 +122,17 @@ impl ControllerAndBaseband {
             }
         }
     }
+
+    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+        match ocf {
+            0x3  => Ok(ControllerAndBaseband::Reset),
+            0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
+            _ => Err(format!(ocf_error!(), "Controller and Baseband", ocf)),
+        }
+    }
 }
 
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum InformationParameters {
     ReadLocalSupportedVersionInformation,
     ReadLocalSupportedCommands,
@@ -92,8 +157,19 @@ impl InformationParameters {
             }
         }
     }
+
+    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+        match ocf {
+            0x1 => Ok(InformationParameters::ReadLocalSupportedVersionInformation),
+            0x2 => Ok(InformationParameters::ReadLocalSupportedCommands),
+            0x3 => Ok(InformationParameters::ReadLocalSupportedFeatures),
+            0x9 => Ok(InformationParameters::ReadBD_ADDR),
+            _ => Err(format!(ocf_error!(), "Information Parameters", ocf)),
+        }
+    }
 }
 
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum StatusParameters {
     ReadRSSI,
 }
@@ -112,33 +188,42 @@ impl StatusParameters {
             }
         }
     }
+
+    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+        match ocf {
+            0x5 => Ok(StatusParameters::ReadRSSI),
+            _ => Err(format!(ocf_error!(), "Status Parameters", ocf)),
+        }
+    }
 }
 
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum LEController {
-    AddDeviceToWhiteList,
-    ClearWhiteList,
+    SetEventMask,
     ReadBufferSize,
     ReadLocalSupportedFeatures,
-    ReadSupportedStates,
-    ReadWhiteListSize,
-    RemoveDeviceFromWhiteList,
-    SetEventMask,
-    TestEnd,
-    ReceiverTest,
-    SetScanEnable,
-    SetScanParameters,
+    SetRandomAddress,
+    SetAdvertisingParameters,
     ReadAdvertisingChannelTxPower,
     SetAdvertisingData,
+    SetScanResponseData,
     SetAdvertisingEnable,
-    SetAdvertisingParameters,
-    SetRandomAddress,
-    TransmitterTest,
-    ConnectionUpdate,
+    SetScanParameters,
+    SetScanEnable,
     CreateConnection,
     CreateConnectionCancel,
+    ReadWhiteListSize,
+    ClearWhiteList,
+    AddDeviceToWhiteList,
+    RemoveDeviceFromWhiteList,
+    ConnectionUpdate,
+    SetHostChannelClassification,
     ReadChannelMap,
     ReadRemoteFeatures,
-    SetHostChannelClassification,
+    ReadSupportedStates,
+    ReceiverTest,
+    TransmitterTest,
+    TestEnd,
 }
 
 impl LEController {
@@ -151,31 +236,76 @@ impl LEController {
         OpCodePair {
             ogf: LEController::OGF,
             ocf: match *self {
-                AddDeviceToWhiteList => 0x11,
-                ClearWhiteList => 0x10,
+                SetEventMask => 0x1,
                 ReadBufferSize => 0x2,
                 ReadLocalSupportedFeatures => 0x3,
-                ReadSupportedStates => 0x1c,
-                ReadWhiteListSize => 0xf,
-                RemoveDeviceFromWhiteList => 0x12,
-                SetEventMask => 0x1,
-                TestEnd => 0x1f,
-                ReceiverTest => 0x1d,
-                SetScanEnable => 0x5,
-                SetScanParameters => 0xb,
+                SetRandomAddress => 0x5,
+                SetAdvertisingParameters => 0x6,
                 ReadAdvertisingChannelTxPower => 0x7,
                 SetAdvertisingData => 0x8,
+                SetScanResponseData => 0x9,
                 SetAdvertisingEnable => 0xa,
-                SetAdvertisingParameters => 0x6,
-                SetRandomAddress => 0x5,
-                TransmitterTest => 0x1e,
-                ConnectionUpdate => 0x13,
-                CreateConnection => 0x5,
+                SetScanParameters => 0xb,
+                SetScanEnable => 0xC,
+                CreateConnection => 0xD,
                 CreateConnectionCancel => 0xe,
+                ReadWhiteListSize => 0xf,
+                ClearWhiteList => 0x10,
+                AddDeviceToWhiteList => 0x11,
+                RemoveDeviceFromWhiteList => 0x12,
+                ConnectionUpdate => 0x13,
+                SetHostChannelClassification => 0x14,
                 ReadChannelMap => 0x15,
                 ReadRemoteFeatures => 0x16,
-                SetHostChannelClassification => 0x14,
+                ReadSupportedStates => 0x1c,
+                ReceiverTest => 0x1d,
+                TransmitterTest => 0x1e,
+                TestEnd => 0x1f,
             }
         }
+    }
+
+    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+        match ocf {
+            0x1  => Ok(LEController::SetEventMask),
+            0x2  => Ok(LEController::ReadBufferSize),
+            0x3  => Ok(LEController::ReadLocalSupportedFeatures),
+            0x5  => Ok(LEController::SetRandomAddress),
+            0x6  => Ok(LEController::SetAdvertisingParameters),
+            0x7  => Ok(LEController::ReadAdvertisingChannelTxPower),
+            0x8  => Ok(LEController::SetAdvertisingData),
+            0x9  => Ok(LEController::SetScanResponseData),
+            0xa  => Ok(LEController::SetAdvertisingEnable),
+            0xb  => Ok(LEController::SetScanParameters),
+            0xC  => Ok(LEController::SetScanEnable),
+            0xD  => Ok(LEController::CreateConnection),
+            0xe  => Ok(LEController::CreateConnectionCancel),
+            0xf  => Ok(LEController::ReadWhiteListSize),
+            0x10 => Ok(LEController::ClearWhiteList),
+            0x11 => Ok(LEController::AddDeviceToWhiteList),
+            0x12 => Ok(LEController::RemoveDeviceFromWhiteList),
+            0x13 => Ok(LEController::ConnectionUpdate),
+            0x14 => Ok(LEController::SetHostChannelClassification),
+            0x15 => Ok(LEController::ReadChannelMap),
+            0x16 => Ok(LEController::ReadRemoteFeatures),
+            0x1c => Ok(LEController::ReadSupportedStates),
+            0x1d => Ok(LEController::ReceiverTest),
+            0x1e => Ok(LEController::TransmitterTest),
+            0x1f => Ok(LEController::TestEnd),
+            _ => Err(format!(ocf_error!(), "LE Controller", ocf)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn op_code_test() {
+        let ogf = 4;
+        let ocf = 0xa;
+        let oc  = HCICommand::LeController(LeController::SetAdvertisingEnable);
+
+        assert_eq!( oc, HCIComand::from( OpCodePair{ ogf, ocf } ));
     }
 }
