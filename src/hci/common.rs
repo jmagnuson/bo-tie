@@ -611,7 +611,7 @@ impl Iterator for ExtendedInquiryResponseDataItr {
 
 #[derive(Clone)]
 pub struct ExtendedAdvertisingAndScanResponseDataItr {
-    data: Box<[u8]>,
+    data: alloc::boxed::Box<[u8]>,
     indexer: usize,
 }
 

@@ -63,7 +63,7 @@ impl TryFrom<OpCodePair> for HCICommand {
             2 => Ok(HCICommand::InformationParameters( InformationParameters::try_from(opc_pair.ocf)? )),
             3 => Ok(HCICommand::StatusParameters( StatusParameters::try_from(opc_pair.ocf)? )),
             4 => Ok(HCICommand::LEController( LEController::try_from(opc_pair.ocf)? )),
-            _ => Err(format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
+            _ => Err(alloc::format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
         }
     }
 }
@@ -96,7 +96,7 @@ impl LinkControl {
         match ocf {
             0x6  => Ok(LinkControl::Disconnect),
             0x1d => Ok(LinkControl::ReadRemoteVersionInformation),
-            _ => Err(format!(ocf_error!(), "Link Control", ocf)),
+            _ => Err(alloc::format!(ocf_error!(), "Link Control", ocf)),
         }
     }
 }
@@ -127,7 +127,7 @@ impl ControllerAndBaseband {
         match ocf {
             0x3  => Ok(ControllerAndBaseband::Reset),
             0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
-            _ => Err(format!(ocf_error!(), "Controller and Baseband", ocf)),
+            _ => Err(alloc::format!(ocf_error!(), "Controller and Baseband", ocf)),
         }
     }
 }
@@ -164,7 +164,7 @@ impl InformationParameters {
             0x2 => Ok(InformationParameters::ReadLocalSupportedCommands),
             0x3 => Ok(InformationParameters::ReadLocalSupportedFeatures),
             0x9 => Ok(InformationParameters::ReadBD_ADDR),
-            _ => Err(format!(ocf_error!(), "Information Parameters", ocf)),
+            _ => Err(alloc::format!(ocf_error!(), "Information Parameters", ocf)),
         }
     }
 }
@@ -192,7 +192,7 @@ impl StatusParameters {
     fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
         match ocf {
             0x5 => Ok(StatusParameters::ReadRSSI),
-            _ => Err(format!(ocf_error!(), "Status Parameters", ocf)),
+            _ => Err(alloc::format!(ocf_error!(), "Status Parameters", ocf)),
         }
     }
 }
@@ -292,7 +292,7 @@ impl LEController {
             0x1d => Ok(LEController::ReceiverTest),
             0x1e => Ok(LEController::TransmitterTest),
             0x1f => Ok(LEController::TestEnd),
-            _ => Err(format!(ocf_error!(), "LE Controller", ocf)),
+            _ => Err(alloc::format!(ocf_error!(), "LE Controller", ocf)),
         }
     }
 }

@@ -38,14 +38,14 @@ pub trait CommandParameter {
     /// # Note
     /// This is not the entire packet sent to the interface as there may be additional information
     /// that needs to be sent for the HCI transport layer (such as the HCI packet indicator).
-    fn as_command_packet<'a>(&self) -> Box<[u8]> {
+    fn as_command_packet<'a>(&self) -> alloc::boxed::Box<[u8]> {
         use core::mem::size_of;
 
         let parameter_size = size_of::<Self::Parameter>();
 
         // Allocating a vector to the exact size of the packet. The 3 bytes come from the opcode
         // field (2 bytes) and the length field (1 byte)
-        let mut buffer: Vec<u8> = alloc::vec::Vec::with_capacity( parameter_size + 3);
+        let mut buffer:alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity( parameter_size + 3);
 
         let parameter = self.get_parameter();
 
@@ -856,7 +856,7 @@ pub mod le {
                     let test_address_1 = BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
                     let test_address_2 = BluetoothDeviceAddress::from([0x12,0x34,0x56,0x78,0x9A,0xBC]);
 
-                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_1[5],
                         test_address_1[4],
                         test_address_1[3],
@@ -865,7 +865,7 @@ pub mod le {
                         test_address_1[0]
                     );
 
-                    let test_address_2_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_2_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_2[5],
                         test_address_2[4],
                         test_address_2[3],
@@ -941,7 +941,7 @@ pub mod le {
                     let test_address_1 = crate::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
                     let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
 
-                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_1[5],
                         test_address_1[4],
                         test_address_1[3],
@@ -949,7 +949,7 @@ pub mod le {
                         test_address_1[1],
                         test_address_1[0],
                     );
-                    let test_address_2_str =format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_2_str =alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_2[5],
                         test_address_2[4],
                         test_address_2[3],
@@ -1147,7 +1147,6 @@ pub mod le {
 
             use crate::hci::*;
             use alloc::collections::BTreeSet;
-            use alloc::vec::Vec;
             use core::mem::size_of_val;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
@@ -1186,91 +1185,91 @@ pub mod le {
                 /// This function doesn't return all available states and roles of a device
                 /// (since devices can set multiple of these bits indicating the available
                 /// roles) so it doesn't return the special type name.
-                fn get_states_for_bit_val( bit_val: usize) -> Vec<Self> {
+                fn get_states_for_bit_val( bit_val: usize) ->alloc::vec::Vec<Self> {
                     use self::StatesAndRoles::*;
 
                     match bit_val {
-                        0  => vec![ NonConnectableAdvertisingState],
-                        1  => vec![ ScannableAdvertisingState],
-                        2  => vec![ ConnectableAdvertisingState],
-                        3  => vec![ HighDutyCyleDirectedAdvertisingState],
-                        4  => vec![ PassiveScanningState],
-                        5  => vec![ ActiveScanningState],
-                        6  => vec![ InitiatingState],
-                        7  => vec![ ConnectionStateSlaveRole],
-                        8  => vec![ NonConnectableAdvertisingState,
+                        0  => alloc::vec![ NonConnectableAdvertisingState],
+                        1  => alloc::vec![ ScannableAdvertisingState],
+                        2  => alloc::vec![ ConnectableAdvertisingState],
+                        3  => alloc::vec![ HighDutyCyleDirectedAdvertisingState],
+                        4  => alloc::vec![ PassiveScanningState],
+                        5  => alloc::vec![ ActiveScanningState],
+                        6  => alloc::vec![ InitiatingState],
+                        7  => alloc::vec![ ConnectionStateSlaveRole],
+                        8  => alloc::vec![ NonConnectableAdvertisingState,
                                     PassiveScanningState],
-                        9  => vec![ ScannableAdvertisingState,
+                        9  => alloc::vec![ ScannableAdvertisingState,
                                     PassiveScanningState],
-                        10 => vec![ ConnectableAdvertisingState,
+                        10 => alloc::vec![ ConnectableAdvertisingState,
                                     PassiveScanningState],
-                        11 => vec![ HighDutyCyleDirectedAdvertisingState,
+                        11 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
                                     PassiveScanningState],
-                        12 => vec![ NonConnectableAdvertisingState,
+                        12 => alloc::vec![ NonConnectableAdvertisingState,
                                     ActiveScanningState],
-                        13 => vec![ ScannableAdvertisingState,
+                        13 => alloc::vec![ ScannableAdvertisingState,
                                     ActiveScanningState],
-                        14 => vec![ ConnectableAdvertisingState,
+                        14 => alloc::vec![ ConnectableAdvertisingState,
                                     ActiveScanningState],
-                        15 => vec![ HighDutyCyleDirectedAdvertisingState,
+                        15 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
                                     ActiveScanningState],
-                        16 => vec![ NonConnectableAdvertisingState,
+                        16 => alloc::vec![ NonConnectableAdvertisingState,
                                     InitiatingState],
-                        17 => vec![ ScannableAdvertisingState,
+                        17 => alloc::vec![ ScannableAdvertisingState,
                                     InitiatingState],
-                        18 => vec![ NonConnectableAdvertisingState,
+                        18 => alloc::vec![ NonConnectableAdvertisingState,
                                     ConnectionStateMasterRole],
-                        19 => vec![ ScannableAdvertisingState,
+                        19 => alloc::vec![ ScannableAdvertisingState,
                                     ConnectionStateMasterRole],
-                        20 => vec![ NonConnectableAdvertisingState,
+                        20 => alloc::vec![ NonConnectableAdvertisingState,
                                     ConnectionStateSlaveRole],
-                        21 => vec![ ScannableAdvertisingState,
+                        21 => alloc::vec![ ScannableAdvertisingState,
                                     ConnectionStateSlaveRole],
-                        22 => vec![ PassiveScanningState,
+                        22 => alloc::vec![ PassiveScanningState,
                                     InitiatingState],
-                        23 => vec![ ActiveScanningState,
+                        23 => alloc::vec![ ActiveScanningState,
                                     InitiatingState],
-                        24 => vec![ PassiveScanningState,
+                        24 => alloc::vec![ PassiveScanningState,
                                     ConnectionStateMasterRole],
-                        25 => vec![ ActiveScanningState,
+                        25 => alloc::vec![ ActiveScanningState,
                                     ConnectionStateMasterRole],
-                        26 => vec![ PassiveScanningState,
+                        26 => alloc::vec![ PassiveScanningState,
                                     ConnectionStateSlaveRole],
-                        27 => vec![ ActiveScanningState,
+                        27 => alloc::vec![ ActiveScanningState,
                                     ConnectionStateSlaveRole],
-                        28 => vec![ InitiatingState,
+                        28 => alloc::vec![ InitiatingState,
                                     ConnectionStateMasterRole],
-                        29 => vec![ LowDutyCycleDirectedAdvertisingState ],
-                        30 => vec![ LowDutyCycleDirectedAdvertisingState,
+                        29 => alloc::vec![ LowDutyCycleDirectedAdvertisingState ],
+                        30 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
                                     PassiveScanningState],
-                        31 => vec![ LowDutyCycleDirectedAdvertisingState,
+                        31 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
                                     ActiveScanningState],
-                        32 => vec![ ConnectableAdvertisingState,
+                        32 => alloc::vec![ ConnectableAdvertisingState,
                                     InitiatingState],
-                        33 => vec![ HighDutyCyleDirectedAdvertisingState,
+                        33 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
                                     InitiatingState],
-                        34 => vec![ LowDutyCycleDirectedAdvertisingState,
+                        34 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
                                     InitiatingState],
-                        35 => vec![ ConnectableAdvertisingState,
+                        35 => alloc::vec![ ConnectableAdvertisingState,
                                     ConnectionStateMasterRole],
-                        36 => vec![ HighDutyCyleDirectedAdvertisingState,
+                        36 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
                                     ConnectionStateMasterRole],
-                        37 => vec![ LowDutyCycleDirectedAdvertisingState,
+                        37 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
                                     ConnectionStateMasterRole],
-                        38 => vec![ ConnectableAdvertisingState,
+                        38 => alloc::vec![ ConnectableAdvertisingState,
                                     ConnectionStateSlaveRole],
-                        39 => vec![ HighDutyCyleDirectedAdvertisingState,
+                        39 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
                                     ConnectionStateSlaveRole],
-                        40 => vec![ LowDutyCycleDirectedAdvertisingState,
+                        40 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
                                     ConnectionStateSlaveRole],
-                        41 => vec![ InitiatingState,
+                        41 => alloc::vec![ InitiatingState,
                                     ConnectionStateSlaveRole],
-                        _  => vec![],
+                        _  => alloc::vec![],
                     }
                 }
 
-                fn collect_to_vec( bts: BTreeSet<StatesAndRoles> ) -> Vec<Self> {
-                    let mut retval = Vec::<Self>::with_capacity(
+                fn collect_to_vec( bts: BTreeSet<StatesAndRoles> ) ->alloc::vec::Vec<Self> {
+                    let mut retval =alloc::vec::Vec::<Self>::with_capacity(
                         StatesAndRoles::get_count()
                     );
 
@@ -1282,7 +1281,7 @@ pub mod le {
                 }
 
                 /// This function will return all the supported states
-                fn get_supported_states( rss: &CmdReturn) -> Vec<Self> {
+                fn get_supported_states( rss: &CmdReturn) ->alloc::vec::Vec<Self> {
 
                     let mut set = BTreeSet::new();
 
@@ -1305,7 +1304,7 @@ pub mod le {
                     StatesAndRoles::collect_to_vec(set)
                 }
 
-                fn try_from(packed: CmdReturn) -> Result<Vec<Self>, error::Error> {
+                fn try_from(packed: CmdReturn) -> Result<alloc::vec::Vec<Self>, error::Error> {
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
@@ -1321,11 +1320,11 @@ pub mod le {
                 COMMAND,
                 CmdReturn,
                 StatesAndRoles,
-                Vec<StatesAndRoles>,
+               alloc::vec::Vec<StatesAndRoles>,
                 error::Error
             );
 
-            impl_command_data_future!(StatesAndRoles, Vec<StatesAndRoles>, error::Error);
+            impl_command_data_future!(StatesAndRoles,alloc::vec::Vec<StatesAndRoles>, error::Error);
 
             #[derive(Clone,Copy)]
             struct Parameter;
@@ -1337,7 +1336,7 @@ pub mod le {
             }
 
             pub fn send<'a, T>( hci: &'a HostInterface<T> )
-            -> impl Future<Output=Result<Vec<StatesAndRoles>, impl Display + Debug>> + 'a
+            -> impl Future<Output=Result<alloc::vec::Vec<StatesAndRoles>, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
@@ -1425,7 +1424,7 @@ pub mod le {
                         .output()
                         .expect("failed to execute process");
 
-                    let hcitool_cnt = String::from_utf8_lossy(&output.stdout)
+                    let hcitool_cnt = alloc::string::String::from_utf8_lossy(&output.stdout)
                             .trim_start_matches("White list size: ")
                             .trim_end()
                             .parse::<usize>()
@@ -1459,7 +1458,7 @@ pub mod le {
                     let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
                     let test_address_3 = crate::BluetoothDeviceAddress::from([0xff,0xee,0xdd,0xcc,0xbb,0xaa]);
 
-                    let test_address_1_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_1[5],
                         test_address_1[4],
                         test_address_1[3],
@@ -1467,7 +1466,7 @@ pub mod le {
                         test_address_1[1],
                         test_address_1[0],
                     );
-                    let test_address_2_str = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    let test_address_2_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                         test_address_2[5],
                         test_address_2[4],
                         test_address_2[3],
@@ -1508,7 +1507,6 @@ pub mod le {
         pub mod set_event_mask {
 
             use crate::hci::*;
-            use alloc::vec::Vec;
             use crate::hci::events::LEMeta;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
@@ -1540,7 +1538,7 @@ pub mod le {
                     }
                 }
 
-                fn build_mask( events: Vec<Self>) -> [u8;8] {
+                fn build_mask( events:alloc::vec::Vec<Self>) -> [u8;8] {
                     let mut mask = <[u8;8]>::default();
 
                     for event in events {
@@ -1574,12 +1572,12 @@ pub mod le {
             /// # use bo_tie_linux::hci::le::mandatory::set_event_mask::*;
             /// # let host_interface = bo_tie_linux::hci::HostInterface::default();
             ///
-            /// let events = vec!(Events::LEConnectionComplete,Events::LEAdvertisingReport);
+            /// let events = alloc::vec!(Events::LEConnectionComplete,Events::LEAdvertisingReport);
             ///
             /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
             /// send(&host_interface, events);
             /// ```
-            pub fn send<'a, T>( hi: &'a HostInterface<T>, enabled_events: Vec<LEMeta>)
+            pub fn send<'a, T>( hi: &'a HostInterface<T>, enabled_events:alloc::vec::Vec<LEMeta>)
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1603,7 +1601,7 @@ pub mod le {
 
                     let hi = HostInterface::default();
 
-                    let enabled_events = vec! [
+                    let enabled_events = alloc::vec! [
                         LEMeta::ConnectionComplete,
                         LEMeta::AdvertisingReport,
                         LEMeta::ConnectionUpdateComplete,
@@ -1790,7 +1788,7 @@ pub mod le {
                         .expect("failed to execute process");
 
                     let mut hcitool_bdaddr: BluetoothDeviceAddress =
-                        String::from_utf8_lossy(&output.stdout)
+                        alloc::string::String::from_utf8_lossy(&output.stdout)
                             .trim_start_matches(|c: char| c != '0')
                             .trim_start_matches("0")
                             .trim()
@@ -2000,8 +1998,6 @@ pub mod le {
         pub mod ip_read_local_supported_commands {
 
             use crate::hci::*;
-            use core::option::Option;
-            use alloc::vec::Vec;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedCommands);
 
@@ -2587,13 +2583,13 @@ pub mod le {
                 }
 
                 // TODO re-make this private
-                pub(crate) fn try_from( packed: CmdReturn ) -> Result<Vec<Self>, error::Error> {
+                pub(crate) fn try_from( packed: CmdReturn ) -> Result<alloc::vec::Vec<Self>, error::Error> {
 
                     let status = error::Error::from(packed.status);
 
                     if let error::Error::NoError = status {
 
-                        let mut sup_commands = Vec::new();
+                        let mut sup_commands =alloc::vec::Vec::new();
 
                         let raw = &packed.supported_commands;
 
@@ -2619,11 +2615,11 @@ pub mod le {
                 COMMAND,
                 CmdReturn,
                 SupportedCommands,
-                Vec<SupportedCommands>,
+               alloc::vec::Vec<SupportedCommands>,
                 error::Error
             );
 
-            impl_command_data_future!(SupportedCommands, Vec<SupportedCommands>, error::Error);
+            impl_command_data_future!(SupportedCommands,alloc::vec::Vec<SupportedCommands>, error::Error);
 
             #[derive(Clone,Copy)]
             struct Parameter;
@@ -2635,7 +2631,7 @@ pub mod le {
             }
 
             pub fn send<'a, T>( hci: &'a HostInterface<T> )
-            -> impl Future<Output=Result<Vec<SupportedCommands>, impl Display + Debug>> + 'a
+            -> impl Future<Output=Result<alloc::vec::Vec<SupportedCommands>, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
@@ -2764,7 +2760,7 @@ pub mod le {
                     };
 
                     let dbg_out = | act, exp | {
-                        format!("act: {:?}, exp: {:?}, fudge: {:?}", act, exp, fudge_factor)
+                        alloc::format!("act: {:?}, exp: {:?}, fudge: {:?}", act, exp, fudge_factor)
                     };
 
                     for (dbm, exp_mw) in test_data.iter() {
@@ -4181,7 +4177,7 @@ pub mod le {
 
                         let mut count = 0;
 
-                        let mut mapped_channels = Vec::with_capacity(channel_count);
+                        let mut mapped_channels =alloc::vec::Vec::with_capacity(channel_count);
 
                         'outer: for byte in packed.channel_map.iter() {
                             for bit in 0..8 {

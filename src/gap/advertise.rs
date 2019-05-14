@@ -118,6 +118,8 @@ pub enum Error {
 
 impl fmt::Display for Error where {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use alloc::string::ToString;
+
         match *self {
             Error::IncorrectDataType => write!(f, "Incorrect Data Type Field"),
             Error::IncorrectLength => write!(f, "The length of this type is larger than the remaining bytes in the packet"),
@@ -132,8 +134,8 @@ impl fmt::Display for Error where {
 /// Create a new raw buffer for a data type
 ///
 /// This method is use d for initialize a raw vector with the length & type fields
-fn new_raw_type( ad_type: u8 ) -> Vec<u8> {
-    vec![0, ad_type]
+fn new_raw_type( ad_type: u8 ) ->alloc::vec::Vec<u8> {
+    alloc::vec![0, ad_type]
 }
 
 fn set_len( buf: &mut [u8] ) {
@@ -145,7 +147,7 @@ pub trait IntoRaw where Self: core::marker::Sized {
     /// Convert the data into a vector of bytes
     ///
     /// This converts the data into the form that will be passed from devices over the air
-    fn into_raw(&self) -> Vec<u8>;
+    fn into_raw(&self) ->alloc::vec::Vec<u8>;
 }
 
 /// A trait for attempting to convert a slice of bytes into an Advertising Data Structure
@@ -364,7 +366,7 @@ pub mod flags {
     }
 
     impl IntoRaw for Flags {
-        fn into_raw(&self) -> Vec<u8> {
+        fn into_raw(&self) ->alloc::vec::Vec<u8> {
             let mut raw = new_raw_type(Self::AD_TYPE.val());
 
             // The first two octets are number of flag octets and ad type, so the '+ 2' is to
@@ -428,7 +430,7 @@ pub mod flags {
 
             let raw = flags.into_raw();
 
-            assert_eq!(vec![3u8,1,1,1<<2], raw);
+            assert_eq!(alloc::vec![3u8,1,1,1<<2], raw);
         }
 
         #[test]
@@ -574,7 +576,7 @@ pub mod service_class_uuid {
         }
     }
 
-    impl<T> IntoIterator for Services<T> where T: ::std::cmp::Ord {
+    impl<T> IntoIterator for Services<T> where T: core::cmp::Ord {
         type Item = T;
         type IntoIter = <BTreeSet<T> as IntoIterator>::IntoIter;
 
@@ -641,7 +643,7 @@ pub mod service_class_uuid {
         ( $type:tt ) => {
             impl IntoRaw for Services<$type> {
 
-                fn into_raw(&self) -> Vec<u8> {
+                fn into_raw(&self) ->alloc::vec::Vec<u8> {
 
                     let data_type = if self.set.is_empty() || self.complete {
                         Self::COMPLETE
@@ -734,7 +736,7 @@ pub mod service_data {
     #[derive(Clone, Debug)]
     pub struct ServiceData<UuidType> {
         uuid: UuidType,
-        pub(crate) serialized_data: Vec<u8>,
+        pub(crate) serialized_data:alloc::vec::Vec<u8>,
     }
 
     impl<UuidType> ServiceData<UuidType>
@@ -767,7 +769,7 @@ pub mod service_data {
         }
 
         /// Consume self and get the serialized data
-        pub fn into_serialized_data(self) -> Box<[u8]> {
+        pub fn into_serialized_data(self) -> alloc::boxed::Box<[u8]> {
             self.serialized_data.into_boxed_slice()
         }
     }
@@ -776,7 +778,7 @@ pub mod service_data {
         ( $type:tt, $ad_type:path ) => {
             impl IntoRaw for ServiceData<$type> {
 
-                fn into_raw(&self) -> Vec<u8> {
+                fn into_raw(&self) ->alloc::vec::Vec<u8> {
                     let mut raw = new_raw_type(Self::AD_TYPE.val());
 
                     raw.extend_from_slice(&self.uuid.to_le_bytes());
@@ -797,12 +799,12 @@ pub mod service_data {
                         use core::convert::TryInto;
 
                         if raw.len() >= 3 {
-                            let (uuid_raw, data) = raw.split_at(std::mem::size_of::<$type>());
+                            let (uuid_raw, data) = raw.split_at(core::mem::size_of::<$type>());
                             let err = crate::gap::advertise::Error::LeBytesConversionError;
 
                             ServiceData {
                                 uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
-                                serialized_data: Vec::from(data),
+                                serialized_data:alloc::vec::Vec::from(data),
                             }
                         }
                         else {
@@ -824,7 +826,7 @@ pub mod local_name {
     use super::*;
 
     pub struct LocalName {
-        name: String,
+        name: alloc::string::String,
         is_short: bool,
     }
 
@@ -836,7 +838,7 @@ pub mod local_name {
         ///
         /// If the name is 'short' then set the `short` parameter to true.
         /// See the Bluetooth Core Supplement Spec. section 1.2.1 for more details.
-        pub fn new<T>(name: T, short: bool) -> Self where T: Into<String>{
+        pub fn new<T>(name: T, short: bool) -> Self where T: Into<alloc::string::String>{
             Self {
                 name: name.into(),
                 is_short: short,
@@ -854,14 +856,14 @@ pub mod local_name {
         }
     }
 
-    impl From<LocalName> for String {
-        fn from( ln: LocalName) -> String {
+    impl From<LocalName> for alloc::string::String {
+        fn from( ln: LocalName) -> alloc::string::String {
             ln.name
         }
     }
 
     impl IntoRaw for LocalName {
-        fn into_raw(&self) -> Vec<u8> {
+        fn into_raw(&self) ->alloc::vec::Vec<u8> {
 
 
             let data_type = if self.is_short {
@@ -884,6 +886,8 @@ pub mod local_name {
     impl TryFromRaw for LocalName {
 
         fn try_from_raw(raw: &[u8]) -> Result<Self,Error> {
+            use alloc::string::ToString;
+
             log::debug!("Trying to convert '{:X?}' to Local Name", raw);
 
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {

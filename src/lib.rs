@@ -4,6 +4,8 @@
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(test, feature(gen_future))]
 
+#![no_std]
+
 // These crates are used all the time
 extern crate alloc;
 extern crate bincode as serializer;
@@ -12,11 +14,11 @@ extern crate bincode as serializer;
 #[cfg(test)]
 extern crate test;
 
-// So this library can be used with no_std targets
+// So this library can be used with no_core targets
 #[cfg_attr(not(any(
     test,
     unix,
-)), no_std)]
+)), no_core)]
 extern crate core;
 
 #[cfg(not(target_os = "android"))]
@@ -50,8 +52,8 @@ pub fn bluetooth_address_from_string( addr: &str ) -> Result<BluetoothDeviceAddr
     }
 }
 
-pub fn bluetooth_address_into_string( addr: BluetoothDeviceAddress ) -> String {
-    format!("{}:{}:{}:{}:{}:{}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
+pub fn bluetooth_address_into_string( addr: BluetoothDeviceAddress ) -> alloc::string::String {
+    alloc::format!("{}:{}:{}:{}:{}:{}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
 }
 
 /// Universially Unique Identifier
@@ -197,7 +199,7 @@ impl From<UUID> for u128 {
     }
 }
 
-impl std::convert::TryFrom<UUID> for u32 {
+impl core::convert::TryFrom<UUID> for u32 {
     type Error = ();
 
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
@@ -210,7 +212,7 @@ impl std::convert::TryFrom<UUID> for u32 {
     }
 }
 
-impl std::convert::TryFrom<UUID> for u16 {
+impl core::convert::TryFrom<UUID> for u16 {
     type Error = ();
 
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is

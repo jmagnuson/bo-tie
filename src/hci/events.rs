@@ -74,7 +74,7 @@ macro_rules! impl_try_from_for_raw_packet {
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
         impl<'a> core::convert::TryFrom<&'a [u8]> for $name {
-            type Error = String;
+            type Error = alloc::string::String;
             fn try_from( param: &'a [u8] ) -> Result<Self, Self::Error> {
                 let mut $param = param;
                 $inner
@@ -176,14 +176,14 @@ pub enum PageScanRepitionMode {
 }
 
 impl PageScanRepitionMode {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         use self::PageScanRepitionMode::*;
 
         match raw {
             0x00 => Ok(R0),
             0x01 => Ok(R1),
             0x02 => Ok(R2),
-            _ => Err(format!("Unkown Page Scan Repitition Mode: {}", raw)),
+            _ => Err(alloc::format!("Unkown Page Scan Repitition Mode: {}", raw)),
         }
     }
 }
@@ -220,14 +220,14 @@ pub enum LinkType {
 }
 
 impl LinkType {
-    fn try_from(raw:u8) -> Result<Self, String> {
+    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
         use self::LinkType::*;
 
         match raw {
             0x00 => Ok(SCOConnection),
             0x01 => Ok(ACLConnection),
             0x02 => Ok(ESCOConnection),
-            _ => Err(format!("Unknown Link Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown Link Type: {}", raw)),
         }
     }
 }
@@ -239,13 +239,13 @@ pub enum LinkLevelEncryptionEnabled {
 }
 
 impl LinkLevelEncryptionEnabled {
-    fn try_from(raw:u8) -> core::result::Result<Self, String> {
+    fn try_from(raw:u8) -> core::result::Result<Self, alloc::string::String> {
         use self::LinkLevelEncryptionEnabled::*;
 
         match raw {
             0x00 => Ok(Yes),
             0x01 => Ok(No),
-            _ => Err(format!("Unknown Link Level Encryption Enabled: {}", raw)),
+            _ => Err(alloc::format!("Unknown Link Level Encryption Enabled: {}", raw)),
         }
     }
 }
@@ -292,13 +292,13 @@ pub enum KeyFlag {
 }
 
 impl KeyFlag {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         use self::KeyFlag::*;
 
         match raw  {
             0x00 => Ok(SemiPermanentLinkKey),
             0x01 => Ok(TemporaryLinkKey),
-            _    => Err(format!("Unknown Key Flag: {}", raw)),
+            _    => Err(alloc::format!("Unknown Key Flag: {}", raw)),
         }
     }
 }
@@ -311,13 +311,13 @@ pub enum ServiceType {
 }
 
 impl ServiceType {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         use self::ServiceType::*;
         match raw {
             0x00 => Ok(NoTrafficAvailable),
             0x01 => Ok(BestEffortAvailable),
             0x02 => Ok(GuaranteedAvailable),
-            _    => Err(format!("Unknown Service Type: {}", raw)),
+            _    => Err(alloc::format!("Unknown Service Type: {}", raw)),
         }
     }
 }
@@ -344,7 +344,7 @@ pub struct InquiryResultData {
 }
 
 impl_try_from_for_raw_packet!{
-    Multiple<[Result<InquiryResultData, String>]>,
+    Multiple<[Result<InquiryResultData, alloc::string::String>]>,
     packet,
     {
         Ok(Multiple {
@@ -368,7 +368,7 @@ impl_try_from_for_raw_packet!{
                             clock_offset: chew_u16!(chunk),
                         })
                     })
-                    .collect::<Vec<Result<InquiryResultData, String>>>();
+                    .collect::<alloc::vec::Vec<Result<InquiryResultData, alloc::string::String>>>();
 
                 vec.truncate(packet[0] as usize);
 
@@ -471,15 +471,13 @@ impl_try_from_for_raw_packet! {
     RemoteNameRequestCompleteData,
     packet,
     {
-        use alloc::string::String;
-
         Ok(RemoteNameRequestCompleteData {
             status: Error::from(chew!(packet)),
             bluetooth_address: chew_baddr!(packet),
             remote_name: {
-                let raw_msg = packet.iter().take_while(|v| **v != 0).map(|v| *v).collect::<Vec<u8>>();
+                let raw_msg = packet.iter().take_while(|v| **v != 0).map(|v| *v).collect::<alloc::vec::Vec<u8>>();
 
-                String::from_utf8(raw_msg).map_err(|e| ::alloc::sync::Arc::new(e))
+                alloc::string::String::from_utf8(raw_msg).map_err(|e| ::alloc::sync::Arc::new(e))
             }
         })
     }
@@ -729,7 +727,7 @@ pub struct CommandCompleteData {
 /// # let command_data = events::EventsData::CommandComplete {
 /// #   number_of_hci_command_packets: 0,
 /// #   command_opcode: None,
-/// #   raw_data: vec![1,2,3,4,5,6,7,8,9,10].into_boxed_slice(),
+/// #   raw_data: alloc::vec![1,2,3,4,5,6,7,8,9,10].into_boxed_slice(),
 /// # };
 /// # let ocf = 0;
 /// # let ogf = 0;
@@ -907,13 +905,13 @@ pub enum NewRole {
 }
 
 impl NewRole {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         use self::NewRole::*;
 
         match raw {
             0x00 => Ok(NowMaster),
             0x01 => Ok(NowSlave),
-            _    => Err(format!("Unknown New Role: {}", raw)),
+            _    => Err(alloc::format!("Unknown New Role: {}", raw)),
         }
     }
 }
@@ -958,7 +956,7 @@ impl_try_from_for_raw_packet! {
                         number_of_completed_packets: chew_u16!(chunk),
                     }
                 })
-                .collect::<Vec<NumberOfCompletedPacketsData>>();
+                .collect::<alloc::vec::Vec<NumberOfCompletedPacketsData>>();
                 vec.truncate(packet[0] as usize);
                 vec.into_boxed_slice()
             },
@@ -974,7 +972,7 @@ pub enum CurrentMode {
 }
 
 impl CurrentMode {
-    fn try_from( raw: &[u8] ) -> Result<Self, String> {
+    fn try_from( raw: &[u8] ) -> Result<Self, alloc::string::String> {
         match raw[0] {
             0x00 => Ok(CurrentMode::ActiveMode),
             0x01 => Ok(CurrentMode::HoldMode (
@@ -983,7 +981,7 @@ impl CurrentMode {
             0x02 => Ok(CurrentMode::SniffMode (
                 CurrentModeInterval::try_from ( u16::from_le( raw[1] as u16 | (raw[2] as u16) << 8 ) )? )
             ),
-            _    => Err(format!("Unknown Current Mode: {}", raw[0])),
+            _    => Err(alloc::format!("Unknown Current Mode: {}", raw[0])),
         }
     }
 }
@@ -998,14 +996,14 @@ impl CurrentModeInterval {
     const MAX: u16 = 0xFFFE;
     const CVT: u64 = 625; // conversion between raw to ms
 
-    fn try_from( raw: u16 ) -> Result<Self, String> {
+    fn try_from( raw: u16 ) -> Result<Self, alloc::string::String> {
         if raw >= Self::MIN && raw <= Self::MAX {
             Ok(CurrentModeInterval {
                 interval: raw
             })
         }
         else {
-            Err(String::from("Current Mode Interval out of bounds"))
+            Err(alloc::string::String::from("Current Mode Interval out of bounds"))
         }
     }
 
@@ -1061,7 +1059,7 @@ impl_try_from_for_raw_packet! {
                         link_key: [0u8;16], // per the specification, this is always 0's
                     }
                 })
-                .collect::<Vec<ReturnLinkKeysData>>();
+                .collect::<alloc::vec::Vec<ReturnLinkKeysData>>();
                 vec.truncate(packet[0] as usize);
                 vec.into_boxed_slice()
             },
@@ -1113,7 +1111,7 @@ pub enum LinkKeyType {
 }
 
 impl LinkKeyType {
-    fn try_from( raw: u8) -> Result<Self, String> {
+    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
         use self::LinkKeyType::*;
 
         match raw {
@@ -1126,7 +1124,7 @@ impl LinkKeyType {
             0x06 => Ok(ChangedCombinationKey),
             0x07 => Ok(UnauthenticatedCombinationKeyGeneratedFromP256),
             0x08 => Ok(AuthenticatedCombinationKeyGeneratedFromP256),
-            _    => Err(format!("Unknown Link Key Type {}", raw)),
+            _    => Err(alloc::format!("Unknown Link Key Type {}", raw)),
         }
     }
 }
@@ -1180,11 +1178,11 @@ pub enum LinkTypeOverflow {
 }
 
 impl LinkTypeOverflow {
-    fn try_from( raw: u8) -> Result<Self, String> {
+    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LinkTypeOverflow::SynchronousBufferOverflow),
             0x01 => Ok(LinkTypeOverflow::ACLBufferOverflow),
-            _    => Err(format!("Unknown Link Type (buffer) Overflow {}", raw)),
+            _    => Err(alloc::format!("Unknown Link Type (buffer) Overflow {}", raw)),
         }
     }
 }
@@ -1211,12 +1209,12 @@ pub enum LMPMaxSlots {
 }
 
 impl LMPMaxSlots {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LMPMaxSlots::One),
             0x03 => Ok(LMPMaxSlots::Three),
             0x05 => Ok(LMPMaxSlots::Five),
-            _    => Err(format!("Unknown LMP Max Slots: {}", raw))
+            _    => Err(alloc::format!("Unknown LMP Max Slots: {}", raw))
         }
     }
 
@@ -1399,11 +1397,11 @@ pub enum FlowDirection {
 }
 
 impl FlowDirection {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(FlowDirection::OutgoingFlow),
             0x01 => Ok(FlowDirection::IncomingFlow),
-            _    => Err(format!("Unknown {}", raw)),
+            _    => Err(alloc::format!("Unknown {}", raw)),
         }
     }
 }
@@ -1447,7 +1445,7 @@ pub struct InquiryResultWithRSSIData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<[Result<InquiryResultWithRSSIData, String>]>,
+    Multiple<[Result<InquiryResultWithRSSIData, alloc::string::String>]>,
     packet,
     {
         Ok(Multiple {
@@ -1467,7 +1465,7 @@ impl_try_from_for_raw_packet! {
                         rssi: chew!(chunk) as i8,
                     })
                 })
-                .collect::<Vec<Result<InquiryResultWithRSSIData, String>>>();
+                .collect::<alloc::vec::Vec<Result<InquiryResultWithRSSIData, alloc::string::String>>>();
                 vec.truncate(packet[0] as usize);
                 vec.into_boxed_slice()
             }
@@ -1522,13 +1520,13 @@ pub enum AirMode {
 }
 
 impl AirMode {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(AirMode::MicroLawLog),
             0x01 => Ok(AirMode::ALawLog),
             0x02 => Ok(AirMode::CVSD),
             0x03 => Ok(AirMode::TransparentData),
-            _    => Err(format!("Unknown Air Mode: {}", raw)),
+            _    => Err(alloc::format!("Unknown Air Mode: {}", raw)),
         }
     }
 }
@@ -1684,13 +1682,13 @@ pub enum IOCapability {
 }
 
 impl IOCapability {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(IOCapability::DisplayOnly),
             0x01 => Ok(IOCapability::DisplayYesNo),
             0x02 => Ok(IOCapability::KeyboardOnly),
             0x03 => Ok(IOCapability::NoInputNoOutput),
-            _    => Err(format!("Unknown IO Capability: {}", raw)),
+            _    => Err(alloc::format!("Unknown IO Capability: {}", raw)),
         }
     }
 }
@@ -1702,11 +1700,11 @@ pub enum OOBDataPresent {
 }
 
 impl OOBDataPresent {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(OOBDataPresent::OOBAuthenticationDataNotPresent),
             0x01 => Ok(OOBDataPresent::OOBAuthenticationDataFromRemoteDevicePresent),
-            _    => Err(format!("Unknown OOB Data Present: {}", raw)),
+            _    => Err(alloc::format!("Unknown OOB Data Present: {}", raw)),
         }
     }
 }
@@ -1722,7 +1720,7 @@ pub enum AuthenticationRequirements {
 }
 
 impl AuthenticationRequirements {
-    fn try_from(raw:u8) -> Result<Self, String> {
+    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredNoBonding),
             0x01 => Ok(AuthenticationRequirements::MITMProtectionRequiredNoBonding),
@@ -1730,7 +1728,7 @@ impl AuthenticationRequirements {
             0x03 => Ok(AuthenticationRequirements::MITMProtectionRequiredDedicatedBonding),
             0x04 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredGeneralBonding),
             0x05 => Ok(AuthenticationRequirements::MITMProtectionRequiredGeneralBonding),
-            _    => Err(format!("Unknown Authentication Requirement: {}", raw)),
+            _    => Err(alloc::format!("Unknown Authentication Requirement: {}", raw)),
         }
     }
 }
@@ -1878,14 +1876,14 @@ pub enum KeypressNotificationType {
 }
 
 impl KeypressNotificationType {
-    fn try_from(raw:u8) -> Result<Self, String> {
+    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(KeypressNotificationType::PasskeyEntrystarted),
             1 => Ok(KeypressNotificationType::PasskeyDigitEntered),
             2 => Ok(KeypressNotificationType::PasskeyDigitErased),
             3 => Ok(KeypressNotificationType::PasskeyCleared),
             4 => Ok(KeypressNotificationType::PasskeyEntryCompleted),
-            _ => Err(format!("Unkown {}", raw)),
+            _ => Err(alloc::format!("Unkown {}", raw)),
         }
     }
 }
@@ -1989,14 +1987,14 @@ pub enum LinkLossReason {
 }
 
 impl LinkLossReason {
-    fn try_from(raw:u8) -> Result<Self, String> {
+    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(LinkLossReason::Unknown),
             1 => Ok(LinkLossReason::RangeRelated),
             2 => Ok(LinkLossReason::BandwidthRelated),
             3 => Ok(LinkLossReason::ResolvingConflict),
             4 => Ok(LinkLossReason::Interference),
-            _ => Err(format!("Unknown Link Loss Reason: {}", raw)),
+            _ => Err(alloc::format!("Unknown Link Loss Reason: {}", raw)),
         }
     }
 }
@@ -2143,7 +2141,7 @@ impl_try_from_for_raw_packet! {
                         completed_blocks: chew_u16!(chunk),
                     }
                 })
-                .collect::<Vec<CompletedDataPacketsAndBlocks>>();
+                .collect::<alloc::vec::Vec<CompletedDataPacketsAndBlocks>>();
                 vec.truncate(handle_cnt);
                 vec.into_boxed_slice()
             }
@@ -2158,11 +2156,11 @@ pub enum ShortRangeModeState {
 }
 
 impl ShortRangeModeState {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(ShortRangeModeState::Enabled),
             1 => Ok(ShortRangeModeState::Disabled),
-            _ => Err(format!("Unknown Short Range Mode State {}", raw)),
+            _ => Err(alloc::format!("Unknown Short Range Mode State {}", raw)),
         }
     }
 }
@@ -2245,11 +2243,11 @@ pub enum AMPReceiverReportDataEventType {
 }
 
 impl AMPReceiverReportDataEventType {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(AMPReceiverReportDataEventType::FramesReceivedReport),
             1 => Ok(AMPReceiverReportDataEventType::FramesReceivedAndBitsInRrrorReport),
-            _ => Err(format!("Unknown {}", raw)),
+            _ => Err(alloc::format!("Unknown {}", raw)),
         }
     }
 }
@@ -2288,11 +2286,11 @@ pub enum LERole {
 }
 
 impl LERole {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LERole::Master),
             0x01 => Ok(LERole::Slave),
-            _    => Err(format!("Unknown Le Role: {}", raw)),
+            _    => Err(alloc::format!("Unknown Le Role: {}", raw)),
         }
     }
 }
@@ -2304,11 +2302,11 @@ pub enum LEConnectionAddressType {
 }
 
 impl LEConnectionAddressType {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEConnectionAddressType::PublicDeviceAddress),
             0x01 => Ok(LEConnectionAddressType::RandomDeviceAddress),
-            _    => Err(format!("Unknown Le Connection Address Type: {}", raw)),
+            _    => Err(alloc::format!("Unknown Le Connection Address Type: {}", raw)),
         }
     }
 }
@@ -2326,7 +2324,7 @@ pub enum ClockAccuracy {
 }
 
 impl ClockAccuracy {
-    fn try_from(raw: u8) -> Result<Self, String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(ClockAccuracy::_500ppm),
             0x01 => Ok(ClockAccuracy::_250ppm),
@@ -2336,7 +2334,7 @@ impl ClockAccuracy {
             0x05 => Ok(ClockAccuracy::_50ppm),
             0x06 => Ok(ClockAccuracy::_30ppm),
             0x07 => Ok(ClockAccuracy::_20ppm),
-            _    => Err(format!("Unknown Clock Accuracy: {}", raw)),
+            _    => Err(alloc::format!("Unknown Clock Accuracy: {}", raw)),
         }
     }
 }
@@ -2356,7 +2354,7 @@ pub struct LEConnectionCompleteData {
 
 impl LEConnectionCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self,String> {
+    fn try_from( data: &[u8] ) -> Result<Self,alloc::string::String> {
         let mut packet = data;
         Ok(LEConnectionCompleteData {
             status: Error::from(chew!(packet)),
@@ -2382,14 +2380,14 @@ pub enum LEEventType {
 }
 
 impl LEEventType {
-    fn try_from( raw: u8) -> Result<Self, String> {
+    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEEventType::ConnectableAndScannableUndirectedAdvertising),
             0x01 => Ok(LEEventType::ConnectableDirectedAdvertising),
             0x02 => Ok(LEEventType::ScannableUndirectedAdvertising),
             0x03 => Ok(LEEventType::NonConnectableUndirectedAdvertising),
             0x04 => Ok(LEEventType::ScanResponse),
-            _    => Err(format!("Unknown LE Event Type: {}", raw)),
+            _    => Err(alloc::format!("Unknown LE Event Type: {}", raw)),
         }
     }
 }
@@ -2398,7 +2396,7 @@ pub struct ReportDataIter<'a> {
     data: &'a [u8]
 }
 
-impl<'a> ::std::iter::Iterator for ReportDataIter<'a> {
+impl<'a> core::iter::Iterator for ReportDataIter<'a> {
     type Item = Result<&'a [u8], crate::gap::advertise::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2450,13 +2448,13 @@ impl LEAdvertisingReportData {
         }
     }
 
-    fn buf_from(data: &[u8]) -> BufferType<[Result<Self, String>]> {
+    fn buf_from(data: &[u8]) -> BufferType<[Result<Self, alloc::string::String>]> {
         let mut packet = data;
 
         // The value of 127 indicates no rssi functionality
         fn get_rssi( val: u8 ) -> Option<i8> { if val != 127 { Some(val as i8) } else { None } }
 
-        let mut reports = Vec::with_capacity(chew!(packet) as usize);
+        let mut reports =alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         for _ in 0..reports.capacity() {
             // packet[index + 8] is the data length value as given by the controller
@@ -2492,7 +2490,7 @@ pub struct LEConnectionUpdateCompleteData {
 
 impl LEConnectionUpdateCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, String> {
+    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEConnectionUpdateCompleteData {
@@ -2514,7 +2512,7 @@ pub struct LEReadRemoteFeaturesCompleteData {
 
 impl LEReadRemoteFeaturesCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, String> {
+    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEReadRemoteFeaturesCompleteData {
@@ -2583,13 +2581,13 @@ pub struct LERemoteConnectionParameterRequestData {
 
 impl LERemoteConnectionParameterRequestData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, String> {
+    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
-            minimum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| String::from(e))?,
-            maximum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| String::from(e))?,
+            minimum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| alloc::string::String::from(e))?,
+            maximum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| alloc::string::String::from(e))?,
             latency: ConnectionLatency::from( chew_u16!(packet) ),
             timeout: LEConnectionTimeout::from( chew_u16!(packet) ),
         })
@@ -2639,7 +2637,7 @@ pub struct LEDataLengthChangeData {
 
 impl LEDataLengthChangeData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, String> {
+    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEDataLengthChangeData {
@@ -2714,7 +2712,7 @@ pub struct LEEnhancedConnectionCompleteData {
 
 impl LEEnhancedConnectionCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, String> {
+    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         let peer_address_type: LEAddressType;
@@ -2759,10 +2757,10 @@ pub enum LEAdvertisingEventType {
 }
 
 impl LEAdvertisingEventType {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LEAdvertisingEventType::ConnectableDirectedLegacyAdvertising),
-            _ => Err(format!("Unknown LE Advertising Event Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Advertising Event Type: {}", raw)),
         }
     }
 }
@@ -2777,14 +2775,14 @@ pub enum LEDirectAddressType {
 }
 
 impl LEDirectAddressType {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEDirectAddressType::PublicDeviceAddress),
             0x01 => Ok(LEDirectAddressType::RandomDeviceAddress),
             0x02 => Ok(LEDirectAddressType::PublicIdentityAddress),
             0x03 => Ok(LEDirectAddressType::RandomIdentityAddress),
             0xFE => Ok(LEDirectAddressType::UnresolvableRandomDeviceAddress),
-            _ => Err(format!("Unknown LE Direct Address Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Direct Address Type: {}", raw)),
         }
     }
 }
@@ -2801,7 +2799,7 @@ pub struct LEDirectedAdvertisingReportData {
 
 impl LEDirectedAdvertisingReportData {
     #[allow(unused_assignments)]
-    fn buf_from( data: &[u8] ) -> BufferType<[Result<Self, String>]> {
+    fn buf_from( data: &[u8] ) -> BufferType<[Result<Self, alloc::string::String>]> {
         let mut packet = data;
 
         let report_count = chew!(packet) as usize;
@@ -2821,7 +2819,7 @@ impl LEDirectedAdvertisingReportData {
                 }
             })
         })
-        .collect::<Vec<Result<Self, String>>>();
+        .collect::<alloc::vec::Vec<Result<Self, alloc::string::String>>>();
 
         vec.truncate(report_count);
 
@@ -2837,12 +2835,12 @@ pub enum LEPhy {
 }
 
 impl LEPhy {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LEPhy::_1M),
             0x02 => Ok(LEPhy::_2M),
             0x03 => Ok(LEPhy::Coded),
-            _ => Err(format!("Unknown LE Phy: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Phy: {}", raw)),
         }
     }
 }
@@ -2857,7 +2855,7 @@ pub struct LEPHYUpdateCompleteData {
 
 impl LEPHYUpdateCompleteData {
     #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
         Ok(LEPHYUpdateCompleteData {
             status: Error::from(chew!(packet)),
@@ -2879,12 +2877,12 @@ pub enum LEDataStatus {
 }
 
 impl LEDataStatus {
-    fn try_from( raw: u8 ) -> Result<Self, String> {
+    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(LEDataStatus::Complete),
             1 => Ok(LEDataStatus::Incomplete),
             2 => Ok(LEDataStatus::IncompleteTruncated),
-            _ => Err(format!("Unknown LE Data Status: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Data Status: {}", raw)),
         }
     }
 }
@@ -2938,7 +2936,7 @@ impl LEExtAdvEventType {
         self.raw & (1 << 4) != 0
     }
 
-    pub fn data_status(&self) -> Result<LEDataStatus, String> {
+    pub fn data_status(&self) -> Result<LEDataStatus, alloc::string::String> {
         LEDataStatus::try_from( ((self.raw >> 5) & 3) as u8)
     }
 
@@ -3006,10 +3004,10 @@ pub struct LEExtendedAdvertisingReportData {
 }
 
 impl LEExtendedAdvertisingReportData {
-    fn buf_from( data: &[u8] ) -> BufferType<[Result<LEExtendedAdvertisingReportData, String>]> {
+    fn buf_from( data: &[u8] ) -> BufferType<[Result<LEExtendedAdvertisingReportData, alloc::string::String>]> {
         let mut packet = data;
 
-        let mut reports = Vec::with_capacity(chew!(packet) as usize);
+        let mut reports =alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         let mut process_packet = || {
             Ok( LEExtendedAdvertisingReportData {
@@ -3109,7 +3107,7 @@ pub struct LEPeriodicAdvertisingSyncEstablishedData {
 
 impl LEPeriodicAdvertisingSyncEstablishedData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, String> {
+    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEPeriodicAdvertisingSyncEstablishedData {
@@ -3135,7 +3133,7 @@ pub struct LEPeriodicAdvertisingReportData {
 }
 
 impl LEPeriodicAdvertisingReportData {
-    fn try_from( data: &[u8]) -> Result<Self, String> {
+    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
         Ok(LEPeriodicAdvertisingReportData {
             sync_handle: chew_handle!(packet),
@@ -3212,7 +3210,7 @@ pub struct LEScanRequestReceivedData {
 
 impl LEScanRequestReceivedData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, String> {
+    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEScanRequestReceivedData {
@@ -3230,11 +3228,11 @@ pub enum LEChannelSelectionAlgorithm {
 }
 
 impl LEChannelSelectionAlgorithm {
-    fn try_from( raw: u8) -> Result<Self, String> {
+    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEChannelSelectionAlgorithm::Algorithm1),
             0x01 => Ok(LEChannelSelectionAlgorithm::Algorithm2),
-            _ => Err(format!("Unknown LE Channel Selection Algorithm: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Channel Selection Algorithm: {}", raw)),
         }
     }
 }
@@ -3247,7 +3245,7 @@ pub struct LEChannelSelectionAlgorithmData {
 
 impl LEChannelSelectionAlgorithmData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, String> {
+    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEChannelSelectionAlgorithmData {
@@ -3279,7 +3277,7 @@ enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
     pub enum LEMeta ( #[derive(Clone)] enum LEMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
-        AdvertisingReport{BufferType<[Result<LEAdvertisingReportData, String>]>},
+        AdvertisingReport{BufferType<[Result<LEAdvertisingReportData, alloc::string::String>]>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
         ReadRemoteFeaturesComplete{LEReadRemoteFeaturesCompleteData},
         LongTermKeyRequest{LELongTermKeyRequestData},
@@ -3288,9 +3286,9 @@ enumerate_split! {
         ReadLocalP256PublicKeyComplete{LEReadLocalP256PublicKeyCompleteData},
         GenerateDHKeyComplete{LEGenerateDHKeyCompleteData},
         EnhancedConnectionComplete{LEEnhancedConnectionCompleteData},
-        DirectedAdvertisingReport{BufferType<[Result<LEDirectedAdvertisingReportData, String>]>},
+        DirectedAdvertisingReport{BufferType<[Result<LEDirectedAdvertisingReportData, alloc::string::String>]>},
         PHYUpdateComplete{LEPHYUpdateCompleteData},
-        ExtendedAdvertisingReport{BufferType<[Result<LEExtendedAdvertisingReportData, String>]>},
+        ExtendedAdvertisingReport{BufferType<[Result<LEExtendedAdvertisingReportData, alloc::string::String>]>},
         PeriodicAdvertisingSyncEstablished{LEPeriodicAdvertisingSyncEstablishedData},
         PeriodicAdvertisingReport{LEPeriodicAdvertisingReportData},
         PeriodicAdvertisingSyncLost{LEPeriodicAdvertisingSyncLostData},
@@ -3302,7 +3300,7 @@ enumerate_split! {
 }
 
 impl LEMeta {
-    pub fn try_from( raw: u8 ) -> Result<LEMeta, String> {
+    pub fn try_from( raw: u8 ) -> Result<LEMeta, alloc::string::String> {
         match raw {
             0x01 => Ok(LEMeta::ConnectionComplete),
             0x02 => Ok(LEMeta::AdvertisingReport),
@@ -3324,7 +3322,7 @@ impl LEMeta {
             0x12 => Ok(LEMeta::AdvertisingSetTerminated),
             0x13 => Ok(LEMeta::ScanRequestReceived),
             0x14 => Ok(LEMeta::ChannelSelectionAlgorithm),
-            _    => Err(format!("Unknown LE Meta: {}", raw)),
+            _    => Err(alloc::format!("Unknown LE Meta: {}", raw)),
         }
     }
 }
@@ -3382,7 +3380,7 @@ impl_try_from_for_raw_packet! {
             0x12 => Ok(AdvertisingSetTerminated(LEAdvertisingSetTerminatedData::from(packet))),
             0x13 => Ok(ScanRequestReceived(LEScanRequestReceivedData::try_from(packet)?)),
             0x14 => Ok(ChannelSelectionAlgorithm(LEChannelSelectionAlgorithmData::try_from(packet)?)),
-            _    => Err(format!("Unknown LE meta event ID: {}", packet[0])),
+            _    => Err(alloc::format!("Unknown LE meta event ID: {}", packet[0])),
         }
     }
 }
@@ -3549,10 +3547,10 @@ macro_rules! events_markup {
             /// The from raw normaly only needs to have the first val (`vals.0`) for determining the
             /// enum conversion. But in the case where the first val matches LEMeta, the second
             /// value (`vals.1`) is used to determine the LEMeta sub event.
-            pub fn from_raw( vals: (u8, u8) ) -> core::result::Result<crate::hci::events::$EnumName, String> {
+            pub fn from_raw( vals: (u8, u8) ) -> core::result::Result<crate::hci::events::$EnumName, alloc::string::String> {
                 match vals.0 {
                     $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(vals.1)?)* ))* ), )*
-                    _ => Err(format!("Unknown Event ID: {}", vals.0)),
+                    _ => Err(alloc::format!("Unknown Event ID: {}", vals.0)),
                 }
             }
         }
@@ -3573,7 +3571,7 @@ macro_rules! events_markup {
                 }
             }
 
-            pub fn from_packet( data: &[u8] ) -> Result<Self, String> {
+            pub fn from_packet( data: &[u8] ) -> Result<Self, alloc::string::String> {
 
                 use core::convert::TryFrom;
 
@@ -3617,7 +3615,7 @@ macro_rules! events_markup {
                     $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
                         Ok(crate::hci::events::$EnumDataName::$name(
                             crate::hci::events::$data::<$( $type ),*>::try_from(packet)?,
-                            ::std::vec::Vec::from(data).into_boxed_slice()
+                            core::vec::Vec::from(data).into_boxed_slice()
                         )),
                     )*
                     Err(e) => Err(err),
@@ -3627,7 +3625,7 @@ macro_rules! events_markup {
 
         #[cfg(not(test))]
         impl core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(crate::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
@@ -3636,7 +3634,7 @@ macro_rules! events_markup {
 
         #[cfg(test)]
         impl core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(crate::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
@@ -3648,7 +3646,7 @@ macro_rules! events_markup {
 events_markup! {
     pub enum Events(EventsData) {
         InquiryComplete{InquiryCompleteData} -> 0x01,
-        InquiryResult{Multiple<[Result<InquiryResultData,String>]>} -> 0x02,
+        InquiryResult{Multiple<[Result<InquiryResultData,alloc::string::String>]>} -> 0x02,
         ConnectionComplete{ConnectionCompleteData} -> 0x03,
         ConnectionRequest{ConnectionRequestData} -> 0x04,
         DisconnectionComplete{DisconnectionCompleteData} -> 0x05,
@@ -3679,7 +3677,7 @@ events_markup! {
         QoSViolation{QoSViolationData} -> 0x1E,
         PageScanRepitionModeChange{PageScanRepitionModeChangeData} -> 0x20,
         FlowSpecificationComplete{FlowSpecificationCompleteData} -> 0x21,
-        InquiryResultWithRSSI{Multiple<[Result<InquiryResultWithRSSIData,String>]>} -> 0x22,
+        InquiryResultWithRSSI{Multiple<[Result<InquiryResultWithRSSIData,alloc::string::String>]>} -> 0x22,
         ReadRemoteExtendedFeaturesComplete{ReadRemoteExtendedFeaturesCompleteData} -> 0x23,
         SynchronousConnectionComplete{SynchronousConnectionCompleteData} -> 0x2C,
         SynchronousConnectionChanged{SynchronousConnectionChangedData} -> 0x2D,
