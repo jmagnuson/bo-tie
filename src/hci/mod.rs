@@ -9,9 +9,11 @@ pub mod common;
 pub mod error;
 #[macro_use] pub mod events;
 
+use alloc::sync::Arc;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
+use core::pin::Pin;
 use core::time::Duration;
 use core::task::Poll;
 
@@ -65,16 +67,16 @@ pub trait CommandParameter {
     }
 }
 
-/// A Pattern trait for matching received events
+/// A trait for matching received events
 ///
 /// When receiving an event in a concurrent system, it can be unknown which context a received
 /// event should be propigated to. The event must be matched to determine this.
-pub trait Pattern {
+pub trait EventMatcher: Sync + Send {
     /// Match the event data
     fn match_event(&self, event_data: &events::EventsData ) -> bool;
 }
 
-impl<F> Pattern for F where F: Fn( &events::EventsData ) -> bool + Sized {
+impl<F> EventMatcher for F where F: Fn( &events::EventsData ) -> bool + Sized + Sync + Send {
     fn match_event(&self, event_data: &events::EventsData) -> bool {
         self(event_data)
     }
@@ -143,14 +145,18 @@ pub trait HostControllerInterface
     /// return the data associated with the event (or an error if it occurs) if the event has been
     /// received or it will return None.
     ///
+    /// If None is returned, the waker will be used to indicate that the event was received. But to
+    /// get the events data, the exact same event and matcher reference (the matcher may be cloned)
+    /// must be used to gaurentee that the event data is returned.
+    ///
     /// The function requires a
     /// `[Waker](https://doc.rust-lang.org/nightly/core/task/struct.Waker.html)` object because
     /// it will call wake when the event has been received after the method is called or a timeout
     /// occurs (if available). At which point the function must be called again to receive the
     /// EventData.
-    fn receive_event<'p,P>(&self, event: events::Events, waker: core::task::Waker, matcher: &'p P, timeout: Option<Duration>)
+    fn receive_event<P>(&self, event: events::Events, waker: core::task::Waker, matcher: Pin<Arc<P>>, timeout: Option<Duration>)
     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
-    where P: Pattern;
+    where P: EventMatcher + Send + Sync + 'static;
 }
 
 enum SendCommandError<I> where I: HostControllerInterface {
@@ -176,9 +182,10 @@ impl<I> Display for SendCommandError<I> where I: HostControllerInterface {
     }
 }
 
-struct CommandFutureReturn<'a, I, CD>
+struct CommandFutureReturn<'a, I, CD, P>
 where I: HostControllerInterface,
       CD: CommandParameter,
+      P: EventMatcher + Send + Sync + 'static,
 {
     interface: &'a I,
     /// Parameter data sent with the command packet
@@ -187,19 +194,20 @@ where I: HostControllerInterface,
     /// will be sent to the controller if the `command_data` isn't set to Some.
     command_data: Option<CD>,
     event: events::Events,
+    matcher: Pin<Arc<P>>,
     timeout: Option<Duration>,
 }
 
-impl<'a, I, CD> CommandFutureReturn<'a, I, CD>
+impl<'a, I, CD, P> CommandFutureReturn<'a, I, CD, P>
 where I: HostControllerInterface,
       CD: CommandParameter + Unpin,
+      P: EventMatcher + Send + Sync + 'static,
 {
 
     /// This is just called within an implemenation of future created by the macro
     /// `[impl_returned_future]`(../index.html#impl_returned_future)
     fn fut_poll(&mut self, cx: &mut core::task::Context) -> Poll<Result<events::EventsData, SendCommandError<I>>> {
 
-        // This will only done with the first call to fut_poll
         if let Some(ref data) = self.command_data {
             match self.interface.send_command(data, cx.waker().clone() ) {
                 Err(e) => return Poll::Ready(Err(SendCommandError::Send(e))),
@@ -209,53 +217,31 @@ where I: HostControllerInterface,
             }
         }
 
-        let cmd_matcher = | ed: &events::EventsData | {
-
-            fn match_opcode<CD: CommandParameter>(opcode: Option<u16>) -> bool {
-                match opcode {
-                    Some(opcode) => {
-                        use core::convert::TryFrom;
-
-                        let expected_op_code =
-                            opcodes::HCICommand::try_from(<CD as CommandParameter>::COMMAND)
-                            .unwrap();
-
-                        let recv_oc_code = opcodes::HCICommand::try_from(
-                            opcodes::OpCodePair::from_opcode(opcode))
-                            .expect("Tried to process unknown HCI op code");
-
-                        expected_op_code == recv_oc_code
-                    }
-                    None => false,
-                }
-            }
-
-            match ed {
-                events::EventsData::CommandComplete(data) => match_opcode::<CD>(data.command_opcode),
-                events::EventsData::CommandStatus(data)   => match_opcode::<CD>(data.command_opcode),
-                _ => false
-            }
-        };
-
-        match self.interface.receive_event(self.event, cx.waker().clone(), &cmd_matcher, self.timeout) {
+        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher.clone(), self.timeout) {
             None => Poll::Pending,
             Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
         }
     }
 }
 
-struct EventReturnFuture<'a, I, P> where I: HostControllerInterface, P: Pattern {
+struct EventReturnFuture<'a, I, P>
+where I: HostControllerInterface,
+      P: EventMatcher + Sync + Send + 'static
+{
     interface: &'a I,
     event: events::Events,
-    matcher: &'a P,
+    matcher: Pin<Arc<P>>,
     timeout: Option<Duration>,
 }
 
-impl<'a, I, P> Future for EventReturnFuture<'a, I, P> where I: HostControllerInterface, P: Pattern {
+impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
+where I: HostControllerInterface,
+P: EventMatcher + Send + Sync + 'static
+{
     type Output = Result<events::EventsData, I::ReceiveEventError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
-        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher, self.timeout) {
+        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher.clone(), self.timeout) {
             Some(evnt_rspn) => Poll::Ready(evnt_rspn),
             None => Poll::Pending,
         }
@@ -291,15 +277,44 @@ where I: HostControllerInterface
     ///
     /// A future is returned for waiting on the event generated from the controller in *direct*
     /// response to the sent command.
-    fn send_command<'a, CmdData, D>( &'a self, cmd_data: CmdData, event: events::Events, timeout: D )
-    -> CommandFutureReturn<'a, I, CmdData>
-    where CmdData: CommandParameter + Unpin + 'static,
+    fn send_command<'a, CD, D>( &'a self, cmd_data: CD, event: events::Events, timeout: D )
+    -> CommandFutureReturn<'a, I, CD, impl EventMatcher + Send + Sync + 'static>
+    where CD: CommandParameter + Unpin + 'static,
           D: Into<Option<Duration>>,
     {
+        let cmd_matcher = | ed: &events::EventsData | {
+
+            fn match_opcode<CD: CommandParameter>(opcode: Option<u16>) -> bool {
+                match opcode {
+                    Some(opcode) => {
+                        use core::convert::TryFrom;
+
+                        let expected_op_code =
+                            opcodes::HCICommand::try_from(<CD as CommandParameter>::COMMAND)
+                            .unwrap();
+
+                        let recv_oc_code = opcodes::HCICommand::try_from(
+                            opcodes::OpCodePair::from_opcode(opcode))
+                            .expect("Tried to process unknown HCI op code");
+
+                        expected_op_code == recv_oc_code
+                    }
+                    None => false,
+                }
+            }
+
+            match ed {
+                events::EventsData::CommandComplete(data) => match_opcode::<CD>(data.command_opcode),
+                events::EventsData::CommandStatus(data)   => match_opcode::<CD>(data.command_opcode),
+                _ => false
+            }
+        };
+
         CommandFutureReturn {
             interface: &self.interface,
             command_data: Some(cmd_data),
             event: event,
+            matcher: Arc::pin(cmd_matcher),
             timeout: timeout.into(),
         }
     }
@@ -331,15 +346,15 @@ where I: HostControllerInterface
     /// await!(set_advertising_enable::send(&host_interface, true).unwrap()).unwrap();
     ///
     /// // To have a future handle this event, wait_for_event must be called for the
-    pub fn wait_for_event<'a,P,D>(&'a self, event: events::Events, matcher: &'a P, timeout: D)
+    pub fn wait_for_event<'a,P,D>(&'a self, event: events::Events, matcher: P, timeout: D)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where P: Pattern,
+    where P: EventMatcher + Send + Sync + 'static,
           D: Into<Option<Duration>>,
     {
         EventReturnFuture {
             interface: &self.interface,
             event: event,
-            matcher: matcher,
+            matcher: Arc::pin(matcher),
             timeout: timeout.into(),
         }
     }
@@ -347,7 +362,6 @@ where I: HostControllerInterface
 
 impl<T> ::core::default::Default for HostInterface<T> where T: HostControllerInterface + Default {
 
-    #[cfg(unix)]
     fn default() -> Self {
         HostInterface { interface: <T as Default>::default() }
     }
@@ -440,13 +454,15 @@ macro_rules! impl_returned_future {
     // these inputs match the inputs from crate::hci::events::impl_get_data_for_command
     ($return_type: ty, $event: path, $data:pat, $error:ty, $to_do: block) => {
 
-        struct ReturnedFuture<'a, I, CD>( CommandFutureReturn<'a, I, CD> )
-        where I: HostControllerInterface,
-              CD: CommandParameter + Unpin;
-
-        impl<'a, I, CD> core::future::Future for ReturnedFuture<'a, I, CD>
+        struct ReturnedFuture<'a, I, CD, P>( CommandFutureReturn<'a, I, CD, P> )
         where I: HostControllerInterface,
               CD: CommandParameter + Unpin,
+              P: EventMatcher + Send + Sync + 'static;
+
+        impl<'a, I, CD, P> core::future::Future for ReturnedFuture<'a, I, CD, P>
+        where I: HostControllerInterface,
+              CD: CommandParameter + Unpin,
+              P: EventMatcher + Send + Sync + 'static,
         {
             type Output = core::result::Result< $return_type, crate::hci::OutputErr<SendCommandError<I>,$error>>;
 
@@ -815,7 +831,7 @@ pub mod le {
 
                 impl_status_return!( $command );
 
-                pub fn send<'a, T>( hci: &'a HostInterface<T>,
+                pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>,
                     at: AddressType,
                     addr: crate::BluetoothDeviceAddress )
                 -> impl core::future::Future<Output=Result<(), impl Display + Debug>> + 'a
@@ -921,7 +937,7 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Prameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1059,7 +1075,7 @@ pub mod le {
 
             impl_command_data_future!(BufferSize, error::Error);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a where T: HostControllerInterface
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -1122,7 +1138,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<EnabledLEFeaturesItr, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1335,7 +1351,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<alloc::vec::Vec<StatesAndRoles>, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1402,7 +1418,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1577,7 +1593,7 @@ pub mod le {
             /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
             /// send(&host_interface, events);
             /// ```
-            pub fn send<'a, T>( hi: &'a HostInterface<T>, enabled_events:alloc::vec::Vec<LEMeta>)
+            pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events:alloc::vec::Vec<LEMeta>)
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1660,7 +1676,7 @@ pub mod le {
 
             /// This will return a future with its type 'Output' being the number of packets
             /// received during what ever test was done
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1733,7 +1749,7 @@ pub mod le {
             }
 
             /// Returns the bluetooth device address for the device
-            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BluetoothDeviceAddress, impl Display + Debug>> + 'a where T: HostControllerInterface
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BluetoothDeviceAddress, impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 use events::Events::CommandComplete;
 
@@ -1850,7 +1866,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<EnabledFeaturesIter, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1936,7 +1952,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -1974,7 +1990,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -2630,7 +2646,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<alloc::vec::Vec<SupportedCommands>, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -2729,7 +2745,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T> )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
             -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -2822,7 +2838,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter {*self}
             }
 
-            pub fn send<'a, T>(
+            pub fn send<'a, T: 'static>(
                 hci: &'a HostInterface<T>,
                 channel: Frequency,
                 payload: TestPayload,
@@ -2982,7 +2998,7 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, adv_data: AdvertisingData )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, adv_data: AdvertisingData )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3077,7 +3093,7 @@ pub mod le {
                 }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, enable: bool ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command(Parameter{ enable: enable }, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
@@ -3303,7 +3319,7 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3388,7 +3404,7 @@ pub mod le {
                 }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3434,7 +3450,7 @@ pub mod le {
                 }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, frequency: Frequency )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, frequency: Frequency )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3490,7 +3506,7 @@ pub mod le {
 
             /// The command has the ability to enable/disable scanning and filter duplicate
             /// advertisement.
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, enable: bool, filter_duplicates: bool)
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool, filter_duplicates: bool)
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3638,7 +3654,7 @@ pub mod le {
                 }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, sp: ScanningParameters )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, sp: ScanningParameters )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3822,7 +3838,7 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, dp: DisconnectParameters )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, dp: DisconnectParameters )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -3911,7 +3927,7 @@ pub mod le {
 
             /// The event expected to be returned is the LEMeta event carrying a Connection Update
             /// Complete lE event
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, cu: ConnectionUpdate, timeout: Duration)
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate, timeout: Duration)
             -> impl Future<Output=Result<crate::hci::events::LEConnectionUpdateCompleteData, impl Display + Debug>> + 'a where T: HostControllerInterface
             {
                 ReturnedFuture( hci.send_command( cu, events::Events::LEMeta( events::LEMeta::ConnectionUpdateComplete ), timeout ) )
@@ -3970,7 +3986,7 @@ pub mod le {
                 fn get_parameter(&self) -> Self::Parameter { *self }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>)
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>)
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4130,7 +4146,7 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4225,7 +4241,7 @@ pub mod le {
 
             impl_command_data_future!(ChannelMapInfo, error::Error);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
             -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4268,7 +4284,7 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4356,7 +4372,7 @@ pub mod le {
 
             impl_status_return!(COMMAND);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, map: ChannelMap )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, map: ChannelMap )
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4467,7 +4483,7 @@ pub mod le {
                 }
             }
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, parameter: Parameter )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter )
             -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4514,7 +4530,7 @@ pub mod le {
 
             impl_command_status_future!();
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle)
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle)
             -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
@@ -4591,7 +4607,7 @@ pub mod le {
 
             impl_command_data_future!(RSSIInfo, error::Error);
 
-            pub fn send<'a, T>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
+            pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
             -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
             where T: HostControllerInterface
             {
