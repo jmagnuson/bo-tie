@@ -467,7 +467,9 @@ impl AdapterThread {
                                     panic!("Received a command message, the HCI adapter task should \
                                         only receive ACL, Syncronous, or Event Data from a controller")
                                 },
-                                CtrlMsgType::Event => { self.event_processor.process(&buffer[..len]) },
+                                CtrlMsgType::Event => {
+                                    self.event_processor.process(&buffer[..len])
+                                },
                                 CtrlMsgType::ACLData => {unimplemented!()},
                                 CtrlMsgType::SyncData => {unimplemented!()},
                             }
@@ -623,6 +625,8 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
         use nix::errno::Errno;
         use std::mem::size_of;
 
+        log::debug!("Sending command {:?}", D::COMMAND);
+
         let oc_pair = D::COMMAND.as_opcode_pair();
 
         // send the command
@@ -690,6 +694,7 @@ impl WakerToken {
         self.waker_triggered = true;
 
         if let Some(waker) = self.waker.take() {
+            log::debug!("Invoking Context waker");
             waker.wake()
         }
     }

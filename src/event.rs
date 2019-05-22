@@ -311,6 +311,8 @@ impl EventExpecter {
         match gaurd.expected.get(&event).and_then(|map| map.get(&pat_key) )
         {
             None => {
+                log::debug!("Seting up expectation for event {:?}", event);
+
                 let waker_token = WakerToken::from(waker);
 
                 let mutex_clone = mutex.clone();
@@ -356,6 +358,8 @@ impl EventExpecter {
                 None
             }
             Some(ref val) => {
+                log::debug!("Retreiving data for event {:?}", event);
+
                 if val.waker_token.triggered() {
 
                     let expected = gaurd.remove_expected_event(event, &pat_key).unwrap();
@@ -394,9 +398,14 @@ impl EventProcessor {
                     .expected.get_mut(&received_event)
                 {
                     for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
-
                         if dyn_matcher.matcher.match_event(&event_data) {
-                            exp_event_info.waker_token.trigger()
+
+                            log::debug!("Matched event {:?}", received_event);
+
+                            exp_event_info.data = Some(Ok(event_data));
+                            exp_event_info.waker_token.trigger();
+
+                            break;
                         }
                     }
 
