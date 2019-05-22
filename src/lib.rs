@@ -4,7 +4,7 @@
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(test, feature(gen_future))]
 
-#![no_std]
+#![cfg_attr(not(test),no_std)]
 
 // These crates are used all the time
 extern crate alloc;

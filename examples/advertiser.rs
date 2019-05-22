@@ -23,12 +23,12 @@ use bo_tie::hci::le::transmitter::{
 use std::sync::{ Arc, atomic::{AtomicBool,Ordering} };
 
 async fn advertise_setup (
-    hi: &hci::HostInterface,
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     data: set_advertising_data::AdvertisingData,
     flag: Arc<AtomicBool> )
 {
 
-    println!("Advertsinging Setup:");
+    println!("Advertising Setup:");
 
     await!(set_advertising_enable::send(&hi, false)).unwrap();
 
@@ -51,7 +51,7 @@ async fn advertise_setup (
     println!("{:5>}", "Advertising Enabled");
 }
 
-async fn advertise_teardown(hi: &hci::HostInterface) {
+async fn advertise_teardown(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
     await!(set_advertising_enable::send(&hi, false)).unwrap();
 }
 
@@ -132,6 +132,8 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
 fn main() {
 
     use futures::executor;
+
+    simple_logging::log_to_stderr(log::LevelFilter::Info);
 
     let adv_flag = Arc::new(AtomicBool::new(true));
 

@@ -50,8 +50,13 @@ async fn scan_for_local_name<'a>( hi: &'a hci::HostInterface, name: &'a str )
     await!(set_scan_enable::send(&hi, true, true)).unwrap();
 
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = await!(hi.wait_for_event(le_event.into(), Duration::from_secs(5)).unwrap())
-    {
+    while let Ok(event) = await!(
+        hi.wait_for_event(
+            le_event,
+            |_| true,
+            Duration::from_secs(5)
+        )
+    ) {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
             for report in reports.iter() {
                 for data_rsl in report.data_iter() {

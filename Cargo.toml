@@ -7,14 +7,6 @@ categories = ["asynchronous"]
 license = "MIT"
 edition = "2018"
 
-[features]
-bluetooth_4 = [] # 4.* devices
-bluetooth_5_0 = [] # 5.0 devices
-default = ["bluetooth_5_0"]
-
-[target.'cfg(unix)'.dependencies]
-nix = "~0.11.0"
-
 [dependencies]
 serde = "1.0.85"
 log = "0.4.6"
@@ -29,3 +21,10 @@ simple-signal= "1.1.1"
 lazy_static = "^1.1"
 getopts = "^0.2"
 futures-preview = { version = "0.3.0-alpha.15" }
+simple-logging = "2.0.2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+bo-tie-linux = { path = "crate-derivatives/bo-tie-linux"}
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = "0.13.0"

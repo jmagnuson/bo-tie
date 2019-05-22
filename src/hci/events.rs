@@ -3521,19 +3521,10 @@ macro_rules! events_markup {
         $( $name:tt $(( $($enum_val:tt),* ))* {$data:ident $(< $type:ty >)*} -> $val:expr, )*
     } ) => (
 
-        #[cfg(not(test))]
         enumerate_split! {
             #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
             pub enum $EnumName ( enum $EnumDataName ){
                 $( $name $(( $($enum_val),* ))* {$data $(< $type >)*}, )*
-            }
-        }
-
-        #[cfg(test)]
-        enumerate_split! {
-            #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-            pub enum $EnumName ( enum $EnumDataName ){
-                $( $name $(( $($enum_val),* ))* {$data $(< $type >)* , BufferType<[u8]> }, )*
             }
         }
 
@@ -3601,7 +3592,6 @@ macro_rules! events_markup {
                     full data: {:?}",
                     event_code, event_len, data);
 
-                #[cfg(not(test))]
                 match event_code {
                     $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
                         Ok(crate::hci::events::$EnumDataName::$name(
@@ -3609,34 +3599,13 @@ macro_rules! events_markup {
                     )*
                     Err(err) => Err(err),
                 }
-
-                #[cfg(test)]
-                match event_code {
-                    $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
-                        Ok(crate::hci::events::$EnumDataName::$name(
-                            crate::hci::events::$data::<$( $type ),*>::try_from(packet)?,
-                            core::vec::Vec::from(data).into_boxed_slice()
-                        )),
-                    )*
-                    Err(e) => Err(err),
-                }
             }
         }
 
-        #[cfg(not(test))]
         impl core::fmt::Debug for crate::hci::events::$EnumDataName {
             fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
                 write!( f, "{}", match *self {
                     $(crate::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
-                })
-            }
-        }
-
-        #[cfg(test)]
-        impl core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
-                write!( f, "{}", match *self {
-                    $(crate::hci::events::$EnumDataName::$name(_, _) => stringify!(::hci::events::$EnumDataName::$name) ),*
                 })
             }
         }

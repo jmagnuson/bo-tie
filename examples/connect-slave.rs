@@ -29,8 +29,12 @@ use bo_tie::hci::le::transmitter::{
     set_advertising_enable,
     set_random_address,
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Duration;
+
+/// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
+/// from the controller to the user.
+const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
 fn get_address() -> Result<Option<bo_tie::BluetoothDeviceAddress>, String> {
     use std::io::stdin;
@@ -72,7 +76,7 @@ fn get_address() -> Result<Option<bo_tie::BluetoothDeviceAddress>, String> {
 
 /// This sets up the advertising and waits for the connection complete event
 async fn advertise_setup<'a>(
-    hi: &'a hci::HostInterface,
+    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
     local_name: &'a str,
     rand_address: Option<bo_tie::BluetoothDeviceAddress> )
 {
@@ -114,18 +118,18 @@ async fn advertise_setup<'a>(
 
 // For simplicity, I've left the race condition in here. There could be a case where the connection
 // is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection<'a>(hi: &'a hci::HostInterface) {
+async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>)
+-> Result<hci::common::ConnectionHandle, impl std::fmt::Display>
+{
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let evt_rsl = await!(hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).unwrap());
+    let evt_rsl = await!(hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)));
 
     await!(set_advertising_enable::send(&hi, false)).unwrap();
 
-    let return_value = match evt_rsl {
+    match evt_rsl {
         Ok(event) => {
             use bo_tie::hci::events::{EventsData,LEMetaData};
-
-            state.store(BluetoothState::Connected, Ordering::Release);
 
             println!("Connection Made!");
 
@@ -133,21 +137,19 @@ async fn wait_for_connection<'a>(hi: &'a hci::HostInterface) {
                 Ok(le_conn_comp_event.connection_handle)
             }
             else {
-                println!("Received the incorrect event {:?}", event);
-                Err(())
+                Err(format!("Received the incorrect event {:?}", event))
             }
         }
         Err(e) => {
-            println!("Timeout Occured: {:?}", e);
-
-            Err(())
+            Err(format!("Timeout Occured: {:?}", e))
         }
     }
-
-    return_value
 }
 
-async fn disconnect(hi: &hci::HostInterface, connection_handle: hci::common::ConnectionHandle ) {
+async fn disconnect(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    connection_handle: hci::common::ConnectionHandle )
+{
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
@@ -155,48 +157,58 @@ async fn disconnect(hi: &hci::HostInterface, connection_handle: hci::common::Con
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    await!(disconnect::send(&hi, prams)).unwrap();
+    await!(disconnect::send(&hi, prams)).expect("Failed to disconnect");
 }
 
-#[cfg(unix)]
 fn handle_sig(
-    exit: Arc<AtomicBool>,
-    handle: Arc<Mutex<>>,
-    hi: hci::HostInterface )
+    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
+    raw_handle: Arc<AtomicU16> )
 {
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
         move |_| {
             // Cancel advertising if advertising (there is no consequence if not advertising)
             futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
-            executor::block_on(disconnect(&hi, handle)).unwrap();
-            exit.store(true, Ordering::Release);
+
+            // todo fix the race condition where a connection is made but the handle hasn't been
+            // stored here yet
+            let handle_val = raw_handle.load(Ordering::SeqCst);
+
+            if handle_val != INVALID_CONNECTION_HANDLE {
+
+                let handle = bo_tie::hci::common::ConnectionHandle::try_from(handle_val).expect("Incorrect Handle");
+
+                futures::executor::block_on(disconnect(&hi, handle));
+            }
         }
     );
 }
 
-#[cfg(not(any(unix)))]
-fn handle_sig( flag: Arc<AtomicUsize> ) {
-    unimplemented!("handle_sig needs to be implemented for this platform");
-}
-
 fn main() {
-    use std::thread;
     use futures::executor;
+
+    simple_logging::log_to_stderr(log::LevelFilter::Info);
 
     let address = get_address().unwrap();
 
-    let adv_flag = Arc::new(AtomicBool::new(false));
-    let exit_flag = Arc::new(AtomicBool::new(false));
+    let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = hci::HostInterface::default();
+    let interface = Arc::new(hci::HostInterface::default());
 
-    handle_sig(bluetooth_state.clone(), interface.clone());
+    handle_sig(interface.clone(), raw_connection_handle.clone());
 
-    executor::block_on(advertise_setup(&interface, "Connection Test", address, handle)) {
+    // Its fine for the setup to be blocked on b/c its fast to the user
+    executor::block_on(advertise_setup(&interface, "Connection Test", address));
 
-    println!("Device Connected! (use ctrl-c to disconnect and exit)");
+    // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
+    // on a different thread.
+    match executor::block_on(wait_for_connection(&interface)) {
+        Ok(handle) => {
+            raw_connection_handle.store(handle.get_raw_handle(), Ordering::SeqCst);
 
-    while exit_flag.load(Ordering::Acquire) {
-        std::thread::park();
-    }
+            println!("Device Connected! (use ctrl-c to disconnect and exit)");
+
+            loop { std::thread::park(); }
+        },
+        Err(err) => println!("Error: {}", err),
+    };
 }

@@ -1,6 +1,6 @@
 use core::convert::TryFrom;
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum HCICommand {
     LinkControl(LinkControl),
     ControllerAndBaseband(ControllerAndBaseband),
@@ -47,8 +47,8 @@ impl OpCodePair {
     pub fn from_opcode(val: u16) -> Self {
         let value = <u16>::from_le(val);
         OpCodePair {
-            ogf: value & 0x3FFu16,
-            ocf: value >> 10,
+            ogf: value >> 10,
+            ocf: value & 0x3FFu16,
         }
     }
 }
@@ -58,11 +58,11 @@ impl TryFrom<OpCodePair> for HCICommand {
 
     fn try_from(opc_pair: OpCodePair) -> Result<Self, Self::Error> {
         match opc_pair.ogf {
-            0 => Ok(HCICommand::LinkControl( LinkControl::try_from(opc_pair.ocf)? )),
-            1 => Ok(HCICommand::ControllerAndBaseband( ControllerAndBaseband::try_from(opc_pair.ocf)? )),
-            2 => Ok(HCICommand::InformationParameters( InformationParameters::try_from(opc_pair.ocf)? )),
-            3 => Ok(HCICommand::StatusParameters( StatusParameters::try_from(opc_pair.ocf)? )),
-            4 => Ok(HCICommand::LEController( LEController::try_from(opc_pair.ocf)? )),
+            0x1 => Ok(HCICommand::LinkControl( LinkControl::try_from(opc_pair.ocf)? )),
+            0x3 => Ok(HCICommand::ControllerAndBaseband( ControllerAndBaseband::try_from(opc_pair.ocf)? )),
+            0x4 => Ok(HCICommand::InformationParameters( InformationParameters::try_from(opc_pair.ocf)? )),
+            0x5 => Ok(HCICommand::StatusParameters( StatusParameters::try_from(opc_pair.ocf)? )),
+            0x8 => Ok(HCICommand::LEController( LEController::try_from(opc_pair.ocf)? )),
             _ => Err(alloc::format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
         }
     }
@@ -70,7 +70,7 @@ impl TryFrom<OpCodePair> for HCICommand {
 
 macro_rules! ocf_error{ () => { "OpCode Group Field '{}' doesn't have the Op Code Field 0x{:x}" }; }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum LinkControl {
     Disconnect,
     ReadRemoteVersionInformation,
@@ -101,7 +101,7 @@ impl LinkControl {
     }
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum ControllerAndBaseband {
     Reset,
     ReadTransmitPowerLevel,
@@ -132,7 +132,7 @@ impl ControllerAndBaseband {
     }
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum InformationParameters {
     ReadLocalSupportedVersionInformation,
     ReadLocalSupportedCommands,
@@ -169,7 +169,7 @@ impl InformationParameters {
     }
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum StatusParameters {
     ReadRSSI,
 }
@@ -197,7 +197,7 @@ impl StatusParameters {
     }
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum LEController {
     SetEventMask,
     ReadBufferSize,
@@ -299,13 +299,14 @@ impl LEController {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn op_code_test() {
         let ogf = 4;
         let ocf = 0xa;
-        let oc  = HCICommand::LeController(LeController::SetAdvertisingEnable);
+        let oc  = HCICommand::LeController(LEController::SetAdvertisingEnable);
 
-        assert_eq!( oc, HCIComand::from( OpCodePair{ ogf, ocf } ));
+        assert_eq!( oc, HCICommand::from( OpCodePair{ ogf, ocf } ));
     }
 }

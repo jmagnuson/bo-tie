@@ -132,8 +132,7 @@ pub trait HostControllerInterface
     /// that the command must be resent. If an error does occur then an Error will be returned.
     ///
     /// The `cmd_data` input contains all the HCI command information, where as the `waker` input
-    /// is used to wake the context for the command to be resent. The waker is optional so the
-    /// function can be used outside of a future.
+    /// is used to wake the context for the command to be resent.
     fn send_command<D,W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
     where D: CommandParameter,
           W: Into<Option<core::task::Waker>>;
@@ -268,6 +267,13 @@ impl<I> From<I> for HostInterface<I> where I: HostControllerInterface
 impl<I> HostInterface<I>
 where I: HostControllerInterface
 {
+    /// Get the native interface to the Bluetooth HCI
+    ///
+    /// This is the same interface that was used to create this HostInterface instance.
+    pub fn get_native_interface(&self) -> &I {
+        &self.interface
+    }
+
     /// Send a command to the controller
     ///
     /// The command data will be used in the command packet to determine what HCI command is sent
@@ -294,10 +300,18 @@ where I: HostControllerInterface
                             .unwrap();
 
                         let recv_oc_code = opcodes::HCICommand::try_from(
-                            opcodes::OpCodePair::from_opcode(opcode))
-                            .expect("Tried to process unknown HCI op code");
+                            opcodes::OpCodePair::from_opcode(opcode)
+                        );
 
-                        expected_op_code == recv_oc_code
+                        match recv_oc_code {
+                            Ok(code) => {
+                                expected_op_code == code
+                            },
+                            Err(reason) => {
+                                log::error!("{}", reason);
+                                false
+                            }
+                        }
                     }
                     None => false,
                 }
@@ -319,34 +333,54 @@ where I: HostControllerInterface
         }
     }
 
-    /// Specify an event to wait for
+    /// Get a future for a Bluetooth Event
     ///
-    /// This will return a future for waiting on an events from the controller. A timeout is needed
-    /// to specify how long to wait for for the event.
+    /// The event provided to the method will be the event to waited upon, and an optional timeout
+    /// can be provided for the case were the event isn't gaurenteed to be returned to the Host.
     ///
-    /// This should be used for any events that are not directly caused by sending a command from
-    /// the host to the controller. Events like CommandStatus and CommandComplete are handled by
-    /// the future returned when sending a command to the controller. However later events that are
-    /// not directly the result of a command from the host should be waited on by using this method.
-    /// No error will return (except for an eventual timeout) if an event
+    /// # Limitations
+    /// Calling this multiple times with the same event is OK only when the returned future is
+    /// polled to completion before the next call to this method *with the same event* is made.
+    /// Not doing this with multiple events results in undefined behavior.
     ///
-    /// ```rust
-    /// # use bo_tie::hci::HostInterface;
-    /// # use bo_tie::hci::le::transmitter::{set_advertising_parameters, set_advertising_enable};
-    /// let host_interface = HostInterface::default();
+    /// If multiple of the same event need to be made, use
+    /// `[wait_for_event_with_matcher](#wait_for_event_with_matcher)` to match the data returned
+    /// with the event.
+    pub fn wait_for_event<'a,D>(&'a self, event: events::Events, timeout: D)
+    -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
+    where D: Into<Option<Duration>>,
+    {
+        fn default_matcher(_: &events::EventsData) -> bool { true }
+
+        EventReturnFuture {
+            interface: &self.interface,
+            event: event,
+            matcher: Arc::pin(default_matcher),
+            timeout: timeout.into(),
+        }
+    }
+
+    /// Get a future for a *more* specific Bluetooth Event
     ///
-    /// // This will set advertising to be connectable and scannable undirected advertising
-    /// let adv_prams = set_advertising_parameters::AdvertisingParameters::default();
+    /// This is the same as the function
+    /// `[wait_for_event](#wait_for_event)` except an additional matcher is used to filter same
+    /// events based on the data sent with the event. See
+    /// `[EventMatcher](../EventMatcher/index.html)`
+    /// for information on implementing a matcher, but you can use a closure that borrows
+    /// `[EventsData](/hci/events/EventsData)`
+    /// as an input and returns a `bool` as a matcher.
     ///
-    /// // The future returned by the send method is actually waiting on the CommandComplete event.
-    /// await!(set_advertising_parameters::send(&host_interface, adv_prams).unwrap()).unwrap();
+    /// # Limitations
+    /// While this can be used to further specify what event data gets returned by a future, its
+    /// really just further filters the event data. The same exact limitation scenerio happens when
+    /// muliple futures are created to wait upon the same event with matchers that *possibly* have
+    /// the same functionality. **Two matchers will have the same functionality if for a given
+    /// event data, the method `match_event` returns true.**
     ///
-    /// // Again, the CommandComplete event is what the returned future is waiting on, but the
-    /// // LEConnectionComplete event is not handled handled here.
-    /// await!(set_advertising_enable::send(&host_interface, true).unwrap()).unwrap();
-    ///
-    /// // To have a future handle this event, wait_for_event must be called for the
-    pub fn wait_for_event<'a,P,D>(&'a self, event: events::Events, matcher: P, timeout: D)
+    /// Using a matcher that always returns true results in `wait_for_event_with_matcher`
+    /// functioning the same way as
+    /// `[wait_for_event](#wait_for_event)`
+    pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where P: EventMatcher + Send + Sync + 'static,
           D: Into<Option<Duration>>,
@@ -438,16 +472,9 @@ where TargErr: Display + Debug,
     }
 }
 
-#[cfg(not(test))]
 macro_rules! event_pattern_creator {
     ( $event_path:path, $( $data:pat ),+ ) => { $event_path ( $($data),+ ) };
     ( $event_path:path ) => { $event_path };
-}
-
-#[cfg(test)]
-macro_rules! event_pattern_creator {
-    ( $event_path:path, $( $data:pat ),+ ) => { $event_path ( $($data,)+ _) };
-    ( $event_path:path ) => { $event_path(_) };
 }
 
 macro_rules! impl_returned_future {
@@ -545,10 +572,17 @@ mod test_util {
 
     use std::future::Future;
     use std::sync::{Arc,Mutex};
+    use super::*;
 
     lazy_static::lazy_static! {
 
         pub static ref TEST_EXCLUSION: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
+    }
+
+    fn get_adapter() -> super::HostInterface<bo_tie_linux::HCIAdapter> {
+        let adapter = bo_tie_linux::HCIAdapter::default();
+
+        bo_tie::hci::HostInterface::from(adapter)
     }
 
     /// Wrapper around whatever is the future executor du jour
@@ -890,7 +924,7 @@ pub mod le {
                         test_address_2[0],
                     );
 
-                    let adapter = HostInterface::default();
+                    let adapter = crate::hci::test_util::get_adapter();
 
                     block_for_result( send(&adapter, AddressType::PublicDeviceAddress, test_address_1))
                         .unwrap();
@@ -974,7 +1008,7 @@ pub mod le {
                         test_address_2[0],
                     );
 
-                    let host_interface = HostInterface::default();
+                    let host_interface = crate::hci::test_util::get_adapter();
 
                     Command::new("hcitool")
                         .args(&["lewladd", &test_address_1_str])
@@ -1089,7 +1123,7 @@ pub mod le {
                 #[test]
                 fn read_buffer_size_test() {
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -1154,7 +1188,7 @@ pub mod le {
                 #[test]
                 fn read_local_supported_features_test() {
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -1367,7 +1401,7 @@ pub mod le {
                 #[test]
                 fn read_supported_states_test() {
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -1446,7 +1480,7 @@ pub mod le {
                             .parse::<usize>()
                             .expect("Couldn't convert string to number");
 
-                    let hci_result = block_for_result(send(&HostInterface::default())).unwrap();
+                    let hci_result = block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                     assert_eq!(hcitool_cnt, hci_result);
                 }
@@ -1491,7 +1525,7 @@ pub mod le {
                         test_address_2[0],
                     );
 
-                    let hi = HostInterface::default();
+                    let hi = crate::hci::test_util::get_adapter();
 
                     Command::new("hcitool")
                         .args(&["lewladd", &test_address_1_str])
@@ -1586,7 +1620,7 @@ pub mod le {
             ///
             /// ```rust
             /// # use bo_tie_linux::hci::le::mandatory::set_event_mask::*;
-            /// # let host_interface = bo_tie_linux::hci::HostInterface::default();
+            /// # let host_interface = bo_tie_linux::hci::crate::hci::test_util::get_adapter();
             ///
             /// let events = alloc::vec!(Events::LEConnectionComplete,Events::LEAdvertisingReport);
             ///
@@ -1615,7 +1649,7 @@ pub mod le {
                 #[test]
                 fn set_event_mask_test() {
 
-                    let hi = HostInterface::default();
+                    let hi = crate::hci::test_util::get_adapter();
 
                     let enabled_events = alloc::vec! [
                         LEMeta::ConnectionComplete,
@@ -1693,7 +1727,7 @@ pub mod le {
                 #[should_panic]
                 fn test_end_test() {
 
-                    block_for_result(send( &HostInterface::default() )).unwrap();
+                    block_for_result(send( &crate::hci::test_util::get_adapter() )).unwrap();
 
                 }
             }
@@ -1815,7 +1849,7 @@ pub mod le {
 
                     hcitool_bdaddr.reverse();
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -1882,7 +1916,7 @@ pub mod le {
                 #[test]
                 fn ip_read_local_supported_features() {
 
-                    block_for_result(send(&HostInterface::default()))
+                    block_for_result(send(&crate::hci::test_util::get_adapter()))
                         .unwrap();
 
                 }
@@ -1967,7 +2001,7 @@ pub mod le {
 
                 #[test]
                 fn ip_read_local_version_information_test() {
-                    block_for_result( send(&HostInterface::default()) ).unwrap();
+                    block_for_result( send(&crate::hci::test_util::get_adapter()) ).unwrap();
                 }
             }
         }
@@ -2004,7 +2038,7 @@ pub mod le {
                 #[test]
                 fn reset_test() {
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -2662,13 +2696,13 @@ pub mod le {
 
                 #[test]
                 fn ip_read_local_supported_commands_test() {
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
 
                 #[bench]
                 fn ip_read_local_supported_commands_bench( b: &mut Bencher ) {
-                    let hci = HostInterface::default();
+                    let hci = crate::hci::test_util::get_adapter();
 
                     b.iter(|| block_for_result(send(&hci)));
                 }
@@ -2760,7 +2794,7 @@ pub mod le {
 
                 #[test]
                 fn read_advertising_channel_tx_power_test() {
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
 
@@ -2867,7 +2901,7 @@ pub mod le {
                 #[test]
                 #[ignore]
                 fn transmitter_test_test() {
-                    let hi = HostInterface::default();
+                    let hi = crate::hci::test_util::get_adapter();
 
                     let payload = TestPayload::Repeat11110000;
                     let frequency = Frequency::new( 2460 ).unwrap();
@@ -2879,7 +2913,7 @@ pub mod le {
 
                     thread::sleep(sleep_duration);
 
-                    block_for_result(test_end::send(&HostInterface::default()))
+                    block_for_result(test_end::send(&crate::hci::test_util::get_adapter()))
                         .unwrap();
                 }
             }
@@ -3027,7 +3061,7 @@ pub mod le {
                     ad.try_push(flags).unwrap();
                     ad.try_push(local_name).unwrap();
 
-                    block_for_result(send(&HostInterface::default(), ad)).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), ad)).unwrap();
 
                 }
 
@@ -3109,7 +3143,7 @@ pub mod le {
                 fn set_advertising_enable_test() {
                     use crate::gap::advertise::local_name::LocalName;
 
-                    let hci = HostInterface::default();
+                    let hci = crate::hci::test_util::get_adapter();
 
                     let mut payload = set_advertising_data::AdvertisingData::new();
 
@@ -3377,7 +3411,7 @@ pub mod le {
                 fn set_advertising_parameters_test() {
                     let params = AdvertisingParameters::default_with_peer_address(&[0x12;6]);
 
-                    block_for_result(send( &HostInterface::default(), params)).unwrap();
+                    block_for_result(send( &crate::hci::test_util::get_adapter(), params)).unwrap();
 
                 }
 
@@ -3424,7 +3458,7 @@ pub mod le {
 
                     let addr = [0x11,0x22,0x33,0x44,0x55, (0x66 | static_address_flag) ];
 
-                    block_for_result(send(&HostInterface::default(), addr)).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), addr)).unwrap();
 
                 }
             }
@@ -3469,7 +3503,7 @@ pub mod le {
 
                     let frequency = Frequency::new(2420).unwrap();
 
-                    block_for_result(send(&HostInterface::default(), frequency)).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), frequency)).unwrap();
 
                 }
             }
@@ -3530,7 +3564,7 @@ pub mod le {
                     #![allow(unreachable_code)]
                     panic!("Test not written correctly");
 
-                    let hci = HostInterface::default();
+                    let hci = crate::hci::test_util::get_adapter();
 
                     block_for_result(send(&hci, true, true)).unwrap();
 
@@ -3685,7 +3719,7 @@ pub mod le {
 
                     let parameters = ScanningParameters::default();
 
-                    block_for_result(send(&HostInterface::default(), parameters)).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameters)).unwrap();
 
                 }
             }
@@ -3864,7 +3898,7 @@ pub mod le {
                     };
 
 
-                    block_for_result(send(&HostInterface::default(), parameters)).unwrap_err();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameters)).unwrap_err();
                 }
             }
         }
@@ -3960,7 +3994,7 @@ pub mod le {
                         connection_event_len: ConnectionEventLength::new(0, 0xFFFF)
                     };
 
-                    let result = block_for_result(send(&HostInterface::default(), parameter, timeout))
+                    let result = block_for_result(send(&crate::hci::test_util::get_adapter(), parameter, timeout))
                         .unwrap();
 
                     if let error::Error::NoError = error::Error::from(result.status) {
@@ -4003,7 +4037,7 @@ pub mod le {
                 #[ignore]
                 fn create_connection_cancel_test() {
 
-                    block_for_result(send(&HostInterface::default())).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
 
                 }
             }
@@ -4503,7 +4537,7 @@ pub mod le {
                         level_type: TransmitPowerLevelType::CurrentPowerLevel,
                     };
 
-                    block_for_result(send(&HostInterface::default(), parameter)).unwrap();
+                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameter)).unwrap();
 
                 }
             }
@@ -4812,6 +4846,6 @@ mod tests {
 
     #[test]
     fn host_interface_default_test() {
-        HostInterface::default();
+        crate::hci::test_util::get_adapter();
     }
 }
