@@ -21,12 +21,10 @@ extern crate test;
 )), no_core)]
 extern crate core;
 
-#[cfg(not(target_os = "android"))]
 pub mod hci;
-
-// The rest is not target or os specific
-
 pub mod gap;
+pub mod att;
+
 
 pub type BluetoothDeviceAddress = [u8; 6];
 
@@ -116,6 +114,22 @@ impl From<u32> for UUID {
 impl From<u16> for UUID {
     fn from(v: u16) -> UUID {
         Self::from_u16(v)
+    }
+}
+
+impl From<uuid::Uuid> for UUID {
+    /// Convert from the
+    /// [uuid](https://crates.io/crates/uuid) crate implementation of UUID.
+    fn from(uuid: uuid::Uuid) -> UUID {
+        <u128>::from_be_bytes(uuid.as_bytes().clone()).into()
+    }
+}
+
+impl From<UUID> for uuid::Uuid {
+    /// Convert a UUID into the UUID from the crate
+    /// [uuid](https://crates.io/crates/uuid)
+    fn from(uuid: UUID) -> uuid::Uuid {
+        uuid::Uuid::from_bytes(uuid.base_uuid.to_be_bytes())
     }
 }
 
