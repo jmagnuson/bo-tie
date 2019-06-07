@@ -336,7 +336,7 @@ impl TransferFormat for ErrorAttributeParameter {
 /// This is sent by the server when ever there is an issue with a client's request
 pub fn error_response(request_opcode: u8, requested_handle: u16, error: Error) -> Pdu<ErrorAttributeParameter> {
     Pdu {
-        opcode: From::from(0x1),
+        opcode: From::from(ServerPduName::ErrorResponse),
         parameters: ErrorAttributeParameter { request_opcode, requested_handle, error },
         signature: None,
     }
@@ -364,7 +364,7 @@ pub fn exchange_mtu_request(mtu: u16) -> Pdu<u16> {
 /// defined in the ATT Protocol) as stated by the exchange MTU request and response.
 pub fn exchange_mtu_response(mtu: u16) -> Pdu<u16> {
     Pdu {
-        opcode: From::from(0x3),
+        opcode: From::from(ServerPduName::ExchangeMTUResponse),
         parameters: mtu,
         signature: None
     }
@@ -566,7 +566,7 @@ pub fn find_information_response<R>( handles_with_uuids: &[HandleWithType] )
 -> Pdu<FormattedHandlesWithType>
 {
     Pdu {
-        opcode: From::from(0x5),
+        opcode: From::from(ServerPduName::FindInformationResponse),
         parameters: FormattedHandlesWithType { handles_with_uuids: From::from(handles_with_uuids) },
         signature: None,
     }
@@ -622,7 +622,7 @@ where R: Into<HandleRange>,
     if let Ok(uuid) = <u16>::try_from(uuid) {
         Ok(
             Pdu {
-                opcode: From::from(0x6),
+                opcode: From::from(ClientPduName::FindByTypeValueRequest),
                 parameters: TypeValueRequest{
                     handle_range: handle_range.into(),
                     attr_type: uuid,
@@ -670,7 +670,7 @@ pub fn find_by_type_value_response( type_values: Box<[TypeValueResponse]> )
 -> Pdu<Box<[TypeValueResponse]>>
 {
     Pdu {
-        opcode: From::from(0x7),
+        opcode: From::from(ServerPduName::FindByTypeValueResponse),
         parameters: type_values,
         signature: None,
     }
@@ -736,7 +736,7 @@ pub fn read_by_type_request<R>(handle_range: R, attr_type: crate::UUID) -> Pdu<T
 where R: Into<HandleRange>
 {
     Pdu {
-        opcode: From::from(0x8),
+        opcode: From::from(ClientPduName::ReadByTypeRequest),
         parameters: TypeRequest {
             handle_range: handle_range.into(),
             attr_type: attr_type
@@ -790,7 +790,7 @@ pub fn read_by_type_response<D>( responses: Box<[ReadTypeResponse<D>]>) -> Pdu<B
 where D: TransferFormat
 {
     Pdu {
-        opcode: From::from(0x9),
+        opcode: From::from(ServerPduName::ReadByTypeResponse),
         parameters: responses,
         signature: None,
     }
@@ -798,7 +798,7 @@ where D: TransferFormat
 
 pub fn read_request( handle: u16 ) -> Pdu<u16> {
     Pdu {
-        opcode: From::from(0xA),
+        opcode: From::from(ClientPduName::ReadRequest),
         parameters: handle,
         signature: None,
     }
@@ -806,7 +806,7 @@ pub fn read_request( handle: u16 ) -> Pdu<u16> {
 
 pub fn read_response<D>( value: D ) -> Pdu<D> where D: TransferFormat {
     Pdu {
-        opcode: From::from(0xB),
+        opcode: From::from(ServerPduName::ReadResponse),
         parameters: value,
         signature: None,
     }
@@ -842,7 +842,7 @@ impl TransferFormat for BlobRequest {
 
 pub fn read_blob_request( handle: u16, offset: u16) -> Pdu<BlobRequest> {
     Pdu {
-        opcode: From::from(0xC),
+        opcode: From::from(ClientPduName::ReadBlobRequest),
         parameters: BlobRequest { handle, offset },
         signature: None,
     }
@@ -855,7 +855,7 @@ where D: TransferFormat
     let end   = offset + att_mtu;
 
     Pdu {
-        opcode: From::from(0xD),
+        opcode: From::from(ServerPduName::ReadBlobResponse),
         parameters: From::from(&TransferFormat::into(&value)[start..end]),
         signature: None,
     }
@@ -869,7 +869,7 @@ where D: TransferFormat
 pub fn read_multiple_request( handles: Box<[u16]> ) -> Result<Pdu<Box<[u16]>>, ()> {
     if handles.len() >= 2 {
         Ok(Pdu {
-            opcode: From::from(0xE),
+            opcode: From::from(ClientPduName::ReadMultipleRequest),
             parameters: handles,
             signature: None,
         })
@@ -885,7 +885,7 @@ pub fn read_multiple_response( values: Box<[Box<dyn TransferFormat>]> )
 -> Pdu<Box<[Box<dyn TransferFormat>]>>
 {
     Pdu {
-        opcode: From::from(0xF),
+        opcode: From::from(ServerPduName::ReadMultipleResponse),
         parameters: values,
         signature: None,
     }
@@ -899,7 +899,7 @@ pub fn read_by_group_type_request<R>(handle_range: R, group_type: crate::UUID) -
 where R: Into<HandleRange>
 {
     Pdu {
-        opcode: From::from(0x10),
+        opcode: From::from(ClientPduName::ReadByGroupTypeRequest),
         parameters: TypeRequest{
             handle_range: handle_range.into(),
             attr_type: group_type,
@@ -957,7 +957,7 @@ pub fn read_by_group_type_response<D>( responses: Box<[ReadGroupTypeResponse<D>]
 where D: TransferFormat
 {
     Pdu {
-        opcode: From::from(0x11),
+        opcode: From::from(ServerPduName::ReadByGroupTypeResponse),
         parameters: responses,
         signature: None,
     }
@@ -997,7 +997,7 @@ impl<D> TransferFormat for HandleWithData<D> where D: TransferFormat {
 /// Write request to an attribute
 pub fn write_request<D>(handle: u16, data: D) -> Pdu<HandleWithData<D>> where D: TransferFormat {
     Pdu {
-        opcode: From::from(0x12),
+        opcode: From::from(ClientPduName::WriteRequest),
         parameters: HandleWithData{ handle, data },
         signature: None,
     }
@@ -1006,7 +1006,7 @@ pub fn write_request<D>(handle: u16, data: D) -> Pdu<HandleWithData<D>> where D:
 /// Write response
 pub fn write_response() -> Pdu<()> {
     Pdu {
-        opcode: From::from(0x13),
+        opcode: From::from(ServerPduName::WriteResponse),
         parameters: (),
         signature: None,
     }
@@ -1014,7 +1014,7 @@ pub fn write_response() -> Pdu<()> {
 
 pub fn write_command<D>(handle: u16, data: D) -> Pdu<HandleWithData<D>> where D: TransferFormat {
     Pdu {
-        opcode: From::from(0x52),
+        opcode: From::from(ClientPduName::WriteCommand),
         parameters: HandleWithData{ handle, data },
         signature: None,
     }
@@ -1075,7 +1075,7 @@ pub fn prepare_write_request<D>(handle: u16, offset: u16, data: D ) -> Pdu<Prepa
 where D: TransferFormat
 {
     Pdu {
-        opcode: From::from(0x16),
+        opcode: From::from(ClientPduName::PrepareWriteRequest),
         parameters: PrepareWriteRequest{ handle, offset, data },
         signature: None
     }
@@ -1084,7 +1084,7 @@ where D: TransferFormat
 pub fn prepare_write_response<D>(handle: u16, offset: u16, data: D ) -> Pdu<PrepareWriteRequest<D>>
 where D: TransferFormat {
     Pdu {
-        opcode: From::from(0x17),
+        opcode: From::from(ServerPduName::PrepareWriteResponse),
         parameters: PrepareWriteRequest{ handle, offset, data },
         signature: None
     }
@@ -1099,7 +1099,7 @@ where D: TransferFormat {
 /// client is indication to the server to drop all data into the queue.
 pub fn execute_write_request( execute: bool ) -> Pdu<u8> {
     Pdu {
-        opcode: From::from(0x18),
+        opcode: From::from(ClientPduName::ExecuteWriteRequest),
         parameters: if execute {0x1} else {0x0},
         signature: None,
     }
@@ -1107,7 +1107,7 @@ pub fn execute_write_request( execute: bool ) -> Pdu<u8> {
 
 pub fn execute_write_response() -> Pdu<()> {
     Pdu {
-        opcode: From::from(0x19),
+        opcode: From::from(ServerPduName::ExecuteWriteResponse),
         parameters: (),
         signature: None,
     }
@@ -1118,7 +1118,7 @@ pub fn handle_value_notification<D>(handle: u16, data: D ) -> Pdu<HandleWithData
 where D: TransferFormat
 {
     Pdu {
-        opcode: From::from(0x1B),
+        opcode: From::from(ServerPduName::HandleValueNotification),
         parameters: HandleWithData { handle, data },
         signature: None,
     }
@@ -1129,7 +1129,7 @@ pub fn handle_value_indication<D>(handle: u16, data: D) -> Pdu<HandleWithData<D>
 where D: TransferFormat
 {
     Pdu {
-        opcode: From::from(0x1D),
+        opcode: From::from(ServerPduName::HandleValueIndication),
         parameters: HandleWithData { handle, data },
         signature: None,
     }
@@ -1138,7 +1138,7 @@ where D: TransferFormat
 /// A client sent confirmation to an indication
 pub fn handle_value_confirmation() -> Pdu<()> {
     Pdu {
-        opcode: From::from(0x1E),
+        opcode: From::from(ClientPduName::HandleValueConfirmation),
         parameters: (),
         signature: None,
     }

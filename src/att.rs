@@ -267,7 +267,7 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
     /// This will panic if the handle value hasn't been set yet
     fn get_handle(&self) -> u16 { self.handle.unwrap() }
 
-    fn get_val_as_transfer_format<'a>(&'a self) -> &'a TransferFormat {
+    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat {
         &self.value
     }
 
@@ -286,24 +286,168 @@ mod test {
     use std::sync::{Arc, Mutex};
     use std::task::Waker;
 
-    struct TestChannel {
-        data: Option<Vec<u8>>,
-        waker: Option<Waker>,
+    struct TwoWayChannel {
+        b1: Option<Vec<u8>>,
+        w1: Option<Waker>,
+
+        b2: Option<Vec<u8>>,
+        w2: Option<Waker>,
     }
 
-    impl crate::gap::ConnectionChannel for Mutex<TestChannel> {
+    /// Channel 1 sends to b1 and receives from b2
+    struct Channel1 {
+        two_way: Arc<Mutex<TwoWayChannel>>
+    }
+
+    /// Channel 2 sends to b2 and receives from b1
+    struct Channel2 {
+        two_way: Arc<Mutex<TwoWayChannel>>
+    }
+
+    impl TwoWayChannel {
+        fn new() -> (Channel1, Channel2) {
+            let tc = TwoWayChannel {
+                b1: None,
+                w1: None,
+                b2: None,
+                w2: None,
+            };
+
+            let am_tc = Arc::new(Mutex::new(tc));
+
+            let c1 = Channel1 { two_way: am_tc.clone() };
+            let c2 = Channel2 { two_way: am_tc.clone() };
+
+            (c1, c2)
+        }
+    }
+
+    impl crate::gap::ConnectionChannel for Channel1 {
+
         const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
 
         fn send(&self, data: &[u8]) {
-            let mut gaurd = *self.lock().expect("Failed to acquire lock");
+            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.data = Some(data.into_vec());
+            gaurd.b1 = Some(data.to_vec());
 
-            if let Some(waker) = gaurd.waker.take() {
+            if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
             }
         }
 
-        fn receive(&self, waker: Waker) -> Option<Box<[u8]>>;
+        fn receive(&self, waker: Waker) -> Option<Box<[u8]>> {
+            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
+
+            if let Some(data) = gaurd.b2.take() {
+                Some(data.into_boxed_slice())
+            } else {
+                gaurd.w2 = Some(waker);
+                None
+            }
+        }
+    }
+
+    impl crate::gap::ConnectionChannel for Channel2 {
+
+        const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
+
+        fn send(&self, data: &[u8]) {
+            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
+
+            gaurd.b2 = Some(data.to_vec());
+
+            if let Some(waker) = gaurd.w2.take() {
+                waker.wake();
+            }
+        }
+
+        fn receive(&self, waker: Waker) -> Option<Box<[u8]>> {
+            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
+
+            if let Some(data) = gaurd.b1.take() {
+                Some(data.into_boxed_slice())
+            } else {
+                gaurd.w1 = Some(waker);
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn test_att_connection() {
+        use std::thread;
+
+        const UUID_1: u16 = 1;
+        const UUID_2: u16 = 2;
+        const UUID_3: u16 = 3;
+
+        let test_val_1 = 33usize;
+        let test_val_2 = 64u64;
+        let test_val_3 = -11i8;
+
+        let (c1,c2) = TwoWayChannel::new();
+
+        thread::spawn( move || {
+            use AttributePermissions::*;
+
+            let mut server = server::Server::new( c2, 256 );
+
+            let attribute_0 = Attribute::new(
+                crate::UUID::from(UUID_1),
+                [Read, Write].to_vec().into_boxed_slice(),
+                0usize
+            );
+
+            let attribute_1 = Attribute::new(
+                crate::UUID::from(UUID_2),
+                [Read, Write].to_vec().into_boxed_slice(),
+                0u64
+            );
+
+            let attribute_3 = Attribute::new(
+                crate::UUID::from(UUID_3),
+                [Read, Write].to_vec().into_boxed_slice(),
+                0i8
+            );
+
+            server.push(attribute_0); // has handle value of 0
+            server.push(attribute_1); // has handle value of 1
+            server.push(attribute_3); // has handle value of 2
+
+            loop {
+                if let Err(e) = futures::executor::block_on( server.on_receive() ) {
+                    panic!("Pdu error: {:?}", e);
+                }
+            }
+        });
+
+        let client = futures::executor::block_on(client::Client::connect(c1, 512))
+            .expect("Failed to connect attribute client");
+
+        // writing to handle 0
+        futures::executor::block_on(client.write_request(0, test_val_1))
+            .expect("Failed to write to server for handle 0");
+
+        // writing to handle 1
+        futures::executor::block_on(client.write_request(1, test_val_2))
+            .expect("Failed to write to server for handle 1");
+
+        // writing to handle 2
+        futures::executor::block_on(client.write_request(2, test_val_3))
+            .expect("Failed to write to server for handle 2");
+
+        let read_val_1: usize = futures::executor::block_on(client.read_request(0))
+            .expect("Failed to read at handle 0 from the server");
+
+        let read_val_2 = futures::executor::block_on(client.read_request(1))
+            .expect("Failed to read at handle 1 from the server");
+
+        let read_val_3 = futures::executor::block_on(client.read_request(2))
+            .expect("Failed to read at handle 2 from the server");
+
+        assert_eq!(test_val_1, read_val_1);
+        assert_eq!(test_val_2, read_val_2);
+        assert_eq!(test_val_3, read_val_3);
     }
 }

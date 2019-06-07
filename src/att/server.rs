@@ -11,7 +11,6 @@ use super::{
     client,
     pdu,
     TransferFormat,
-    Attribute,
 };
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
@@ -37,6 +36,14 @@ impl core::convert::TryFrom<super::pdu::PduOpCode> for ServerPduName {
 
     fn try_from(opcode: super::pdu::PduOpCode) -> Result<Self, Self::Error> {
         Self::try_from(opcode.into_raw())
+    }
+}
+
+impl From<ServerPduName> for pdu::PduOpCode {
+    fn from(pdu_name: ServerPduName) -> pdu::PduOpCode {
+        let raw: u8 = From::from(pdu_name);
+
+        From::from(raw)
     }
 }
 
@@ -224,7 +231,7 @@ where C: crate::gap::ConnectionChannel
         ret
     }
 
-    fn on_receive<'a>(&'a mut self)
+    pub fn on_receive<'a>(&'a mut self)
     -> impl Future<Output=Result<(), super::Error>> + 'a
     {
         ServerReceiver{ server: self }
@@ -236,10 +243,16 @@ where C: crate::gap::ConnectionChannel
     #[inline]
     fn send_invalid_handle_error(&mut self, handle: u16, received_opcode: u8)
     {
+        self.send_pdu_error(handle, received_opcode, pdu::Error::InvalidHandle);
+    }
+
+    #[inline]
+    fn send_pdu_error(&mut self, handle: u16, received_opcode: u8, pdu_error: pdu::Error) {
+
         let err_pdu = pdu::error_response(
             received_opcode,
             handle,
-            pdu::Error::InvalidHandle
+            pdu_error
         );
 
         self.connection.0.send( &TransferFormat::into(&err_pdu) );
@@ -254,14 +267,21 @@ where C: crate::gap::ConnectionChannel
 
         let response_pdu = pdu::exchange_mtu_response(self.max_mtu);
 
-        self.connection.0.send( &TransferFormat::into(&response_pdu) )
+        let data = TransferFormat::into(&response_pdu);
+
+        self.connection.0.send( &data )
     }
 
     fn process_read_request(&mut self, pdu: pdu::Pdu<u16>) {
         let handle = *pdu.get_parameters();
 
-        if let Some(data) = self.attributes.get_mut( handle as usize) {
-            self.connection.0.send( &data.get_val_as_transfer_format().into() )
+        if let Some(attribute) = self.attributes.get_mut( handle as usize) {
+
+            let mut data = alloc::vec!( super::server::ServerPduName::ReadResponse.into() );
+
+            data.extend_from_slice( &attribute.get_val_as_transfer_format().into() );
+
+            self.connection.0.send( &data );
         } else {
             self.send_invalid_handle_error(handle, super::client::ClientPduName::ReadRequest.into());
         }
@@ -273,16 +293,19 @@ where C: crate::gap::ConnectionChannel
     fn process_write_request(&mut self, raw_pdu: &[u8]) {
         let received_opcode = super::client::ClientPduName::WriteRequest.into();
 
-        if raw_pdu.len() >= 2 {
-            let raw_handle = &raw_pdu[..2];
-            let raw_data = &raw_pdu[2..];
+        if raw_pdu.len() >= 3 {
+            let raw_handle = &raw_pdu[1..3];
+            let raw_data = &raw_pdu[3..];
 
             let handle = TransferFormat::from( &raw_handle ).unwrap();
 
             if let Some(data) = self.attributes.get_mut( handle as usize) {
-                data.set_val_from_raw( raw_data );
-
-                self.connection.0.send( &TransferFormat::into(&pdu::write_response()) );
+                match data.set_val_from_raw( raw_data ) {
+                    Ok(_) =>
+                        self.connection.0.send( &TransferFormat::into(&pdu::write_response()) ),
+                    Err(pdu_err) =>
+                        self.send_pdu_error(handle, received_opcode, pdu_err),
+                };
             } else {
                 self.send_invalid_handle_error(handle, received_opcode);
             }

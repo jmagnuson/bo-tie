@@ -305,8 +305,8 @@ mod tests {
     fn op_code_test() {
         let ogf = 4;
         let ocf = 0xa;
-        let oc  = HCICommand::LeController(LEController::SetAdvertisingEnable);
+        let oc  = HCICommand::LEController(LEController::SetAdvertisingEnable);
 
-        assert_eq!( oc, HCICommand::from( OpCodePair{ ogf, ocf } ));
+        assert_eq!( oc, HCICommand::try_from( OpCodePair{ ogf, ocf } ).unwrap() );
     }
 }

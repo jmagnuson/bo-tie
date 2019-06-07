@@ -7,23 +7,6 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Poll, Context};
 
-enum ClientPdu<D> where D: TransferFormat {
-    ExchangeMtuRequest(pdu::Pdu<u16>),
-    FindInformationRequest(pdu::Pdu<pdu::HandleRange>),
-    FindByTypeValueRequest(pdu::Pdu<pdu::TypeValueRequest<D>>),
-    ReadByTypeRequest(pdu::Pdu<pdu::TypeRequest>),
-    ReadRequest(pdu::Pdu<u16>),
-    ReadBlobRequest(pdu::Pdu<pdu::BlobRequest>),
-    ReaqMultipleRequest(pdu::Pdu<Box<[u16]>>),
-    ReadByGroupTypeRequest(pdu::Pdu<pdu::TypeRequest>),
-    WriteRequest(pdu::Pdu<pdu::HandleWithData<D>>),
-    WriteCommand(pdu::Pdu<pdu::HandleWithData<D>>),
-    PrepareWriteRequest(pdu::Pdu<pdu::PrepareWriteRequest<D>>),
-    ExecuteWriteRequest(pdu::Pdu<u8>),
-    HandleValueConfirmation(pdu::Pdu<()>),
-    SignedWriteCommand,
-}
-
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ClientPduName {
     ExchangeMtuRequest,
@@ -114,7 +97,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpi
         if let Some(pdu) = this.mtu_pdu.take() {
 
             // Return an error if the mtu is too small
-            if Ch::DEFAULT_ATT_MTU < this.mtu_size {
+            if Ch::DEFAULT_ATT_MTU > this.mtu_size {
                 return Poll::Ready(Err(super::Error::TooSmallMtu));
             }
 
@@ -187,7 +170,8 @@ where Ch: crate::gap::ConnectionChannel,
         }
 
         if let Some(bytes) = this.channel.receive(cx.waker().clone()) {
-            if bytes.len() > 1 {
+            
+            if bytes.len() >= 1 {
                 use core::convert::TryFrom;
 
                 match super::server::ServerPduName::try_from(bytes[0]) {
@@ -195,16 +179,17 @@ where Ch: crate::gap::ConnectionChannel,
                     Ok(super::server::ServerPduName::ErrorResponse) => {
 
                         let err_pdu_rslt: Result<pdu::Pdu<pdu::ErrorAttributeParameter>, pdu::Error> =
-                            TransferFormat::from(&bytes[1..]);
+                            TransferFormat::from(&bytes);
 
                         match err_pdu_rslt {
                             Ok(err_pdu) => Poll::Ready( Err(err_pdu.into()) ),
-                            Err(e) => Poll::Ready( Err(e.into()) )
+                            Err(e) => Poll::Ready( Err(e.into()) ),
                         }
 
                     },
                     Ok(name) if name == this.exp_resp => {
-                        let pdu_rslt = TransferFormat::from(&bytes[1..]);
+
+                        let pdu_rslt = TransferFormat::from(&bytes);
 
                         match pdu_rslt {
                             Ok(pdu) => Poll::Ready( Ok(pdu) ),
@@ -270,7 +255,7 @@ impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
     /// attribute packet. If maximum_transfer_unit is `None` the the minimum MTU is used.
     ///
     /// The bluetooth connection must already be established
-    pub fn connect<Mtu>( maximum_transfer_unit: Mtu, channel: C)
+    pub fn connect<Mtu>( channel: C, maximum_transfer_unit: Mtu )
     -> impl Future<Output=Result<Self, super::Error>>
     where Mtu: Into<Option<u16>>
     {
@@ -308,7 +293,7 @@ impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
             fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
 
                 // Return an error if the mtu is too small
-                if Channel::DEFAULT_ATT_MTU < self.wanted_mtu {
+                if Channel::DEFAULT_ATT_MTU > self.wanted_mtu {
                     return Poll::Ready( Err(super::Error::TooSmallMtu) )
                 }
 

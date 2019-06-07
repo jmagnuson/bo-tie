@@ -3557,7 +3557,7 @@ macro_rules! events_markup {
 
                 #[cfg(test)]
                 match *self {
-                    $( crate::hci::events::$EnumDataName::$name(ref _data,_) =>
+                    $( crate::hci::events::$EnumDataName::$name(ref _data) =>
                         crate::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
             }

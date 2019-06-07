@@ -566,33 +566,6 @@ macro_rules! impl_command_status_future {
     };
 }
 
-#[cfg(test)]
-#[macro_use]
-mod test_util {
-
-    use std::future::Future;
-    use std::sync::{Arc,Mutex};
-    use super::*;
-
-    lazy_static::lazy_static! {
-
-        pub static ref TEST_EXCLUSION: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
-    }
-
-    fn get_adapter() -> super::HostInterface<bo_tie_linux::HCIAdapter> {
-        let adapter = bo_tie_linux::HCIAdapter::default();
-
-        bo_tie::hci::HostInterface::from(adapter)
-    }
-
-    /// Wrapper around whatever is the future executor du jour
-    #[inline]
-    pub fn block_for_result<T>( future: impl Future <Output=T> ) -> T
-    {
-        futures::executor::block_on(future)
-    }
-}
-
 pub mod le {
 
     #[macro_use]
@@ -886,74 +859,13 @@ pub mod le {
                 }
             };
         }
+
         pub mod add_device_to_white_list {
             const COMMAND: crate::hci::opcodes::HCICommand = crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::AddDeviceToWhiteList);
 
             add_remove_white_list_setup!(COMMAND);
-
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use std::process::Command;
-                use crate::BluetoothDeviceAddress;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn add_device_to_white_list_test() {
-                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
-
-                    let test_address_1 = BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
-                    let test_address_2 = BluetoothDeviceAddress::from([0x12,0x34,0x56,0x78,0x9A,0xBC]);
-
-                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_1[5],
-                        test_address_1[4],
-                        test_address_1[3],
-                        test_address_1[2],
-                        test_address_1[1],
-                        test_address_1[0]
-                    );
-
-                    let test_address_2_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_2[5],
-                        test_address_2[4],
-                        test_address_2[3],
-                        test_address_2[2],
-                        test_address_2[1],
-                        test_address_2[0],
-                    );
-
-                    let adapter = crate::hci::test_util::get_adapter();
-
-                    block_for_result( send(&adapter, AddressType::PublicDeviceAddress, test_address_1))
-                        .unwrap();
-
-                    Command::new("hcitool")
-                        .args(&["lewlrm", &test_address_1_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    block_for_result(send(&adapter, AddressType::RandomDeviceAddress, test_address_2))
-                        .unwrap();
-
-                    Command::new("hcitool")
-                        .args(&["lewlrm", &test_address_2_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    #[cfg(bluetooth_5_0)]
-                    {
-                        let result = block_for_result(
-                            send(&adapter, AddressType::DevicesSendingAnonymousAdvertisements, [0;6])
-                        ).unwrap();
-
-                        assert_eq!(1, result.len() );
-
-                    }
-                }
-            }
         }
+
         pub mod clear_white_list {
 
             use crate::hci::*;
@@ -975,68 +887,8 @@ pub mod le {
             {
                 ReturnedFuture( hci.send_command(Prameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
-
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-                use std::process::Command;
-
-                #[test]
-                pub fn clear_white_list_test() {
-
-                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
-
-                    let test_address_1 = crate::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
-                    let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
-
-                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_1[5],
-                        test_address_1[4],
-                        test_address_1[3],
-                        test_address_1[2],
-                        test_address_1[1],
-                        test_address_1[0],
-                    );
-                    let test_address_2_str =alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_2[5],
-                        test_address_2[4],
-                        test_address_2[3],
-                        test_address_2[2],
-                        test_address_2[1],
-                        test_address_2[0],
-                    );
-
-                    let host_interface = crate::hci::test_util::get_adapter();
-
-                    Command::new("hcitool")
-                        .args(&["lewladd", &test_address_1_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    Command::new("hcitool")
-                        .args(&["lewladd", &test_address_2_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    block_for_result(send(&host_interface)).unwrap();
-
-                    let output_1 = Command::new("hcitool")
-                        .args(&["lewlrm", &test_address_1_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    let output_2 = Command::new("hcitool")
-                        .args(&["lewlrm", &*test_address_2_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    assert!( !output_1.status.success(), "hcitool should not have succeded");
-                    assert!( !output_2.status.success(), "hcitool should not have succeded");
-                }
-            }
         }
+
         pub mod read_buffer_size {
 
             use crate::hci::*;
@@ -1114,20 +966,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn read_buffer_size_test() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
+
         pub mod read_local_supported_features {
 
             use crate::hci::common::EnabledLEFeaturesItr;
@@ -1179,19 +1019,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn read_local_supported_features_test() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
         pub mod read_supported_states {
 
@@ -1392,20 +1219,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn read_supported_states_test() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
+
         pub mod read_white_list_size {
 
             use crate::hci::*;
@@ -1459,101 +1274,16 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use std::process::Command;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn read_white_list_size_test() {
-
-                    let output = Command::new("hcitool")
-                        .arg("lewlsz")
-                        .output()
-                        .expect("failed to execute process");
-
-                    let hcitool_cnt = alloc::string::String::from_utf8_lossy(&output.stdout)
-                            .trim_start_matches("White list size: ")
-                            .trim_end()
-                            .parse::<usize>()
-                            .expect("Couldn't convert string to number");
-
-                    let hci_result = block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                    assert_eq!(hcitool_cnt, hci_result);
-                }
-            }
         }
+
         pub mod remove_device_from_white_list {
 
             const COMMAND: crate::hci::opcodes::HCICommand = crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
 
             add_remove_white_list_setup!(COMMAND);
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-                use std::process::Command;
-
-                #[test]
-                fn remove_device_from_white_list_test() {
-
-                    let _u = crate::hci::test_util::TEST_EXCLUSION.lock().unwrap();
-
-                    let test_address_1 = crate::BluetoothDeviceAddress::from([0x11,0x22,0x33,0x44,0x55,0x66]);
-                    let test_address_2 = crate::BluetoothDeviceAddress::from([0x12,0x34,0x45,0x56,0x78,0x8A]);
-                    let test_address_3 = crate::BluetoothDeviceAddress::from([0xff,0xee,0xdd,0xcc,0xbb,0xaa]);
-
-                    let test_address_1_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_1[5],
-                        test_address_1[4],
-                        test_address_1[3],
-                        test_address_1[2],
-                        test_address_1[1],
-                        test_address_1[0],
-                    );
-                    let test_address_2_str = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        test_address_2[5],
-                        test_address_2[4],
-                        test_address_2[3],
-                        test_address_2[2],
-                        test_address_2[1],
-                        test_address_2[0],
-                    );
-
-                    let hi = crate::hci::test_util::get_adapter();
-
-                    Command::new("hcitool")
-                        .args(&["lewladd", &test_address_1_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    Command::new("hcitool")
-                        .args(&["lewladd", "--random", &test_address_2_str])
-                        .output()
-                        .expect("Failed to execute hcitool command");
-
-                    block_for_result(
-                        send(&hi, AddressType::PublicDeviceAddress, test_address_1)
-                    )
-                    .unwrap();
-
-                    block_for_result(
-                        send(&hi, AddressType::RandomDeviceAddress, test_address_2)
-                    )
-                    .unwrap();
-
-                    block_for_result(
-                        send(&hi, AddressType::PublicDeviceAddress, test_address_3)
-                    )
-                    .unwrap_err();
-                }
-            }
         }
+
         pub mod set_event_mask {
 
             use crate::hci::*;
@@ -1639,29 +1369,8 @@ pub mod le {
                 ReturnedFuture( hi.send_command(command_pram, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-                use crate::hci::events::LEMeta;
-
-                #[test]
-                fn set_event_mask_test() {
-
-                    let hi = crate::hci::test_util::get_adapter();
-
-                    let enabled_events = alloc::vec! [
-                        LEMeta::ConnectionComplete,
-                        LEMeta::AdvertisingReport,
-                        LEMeta::ConnectionUpdateComplete,
-                        LEMeta::ReadRemoteFeaturesComplete,
-                    ];
-
-                    block_for_result(send( &hi, enabled_events )).unwrap();
-                }
-            }
         }
+
         pub mod test_end {
 
             use crate::hci::*;
@@ -1717,21 +1426,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                #[should_panic]
-                fn test_end_test() {
-
-                    block_for_result(send( &crate::hci::test_util::get_adapter() )).unwrap();
-
-                }
-            }
         }
+
         /// This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_bd_addr {
@@ -1792,68 +1488,8 @@ pub mod le {
                 ReturnedFuture(cmd_rslt)
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use std::process::Command;
-                use std::iter::Iterator;
-                use crate::hci::test_util::block_for_result;
-
-                trait TryCollect<A> {
-                    fn try_collect(self) -> Result<A,&'static str>;
-                }
-
-                impl<T> TryCollect<[u8;6]> for T where T: Iterator<Item=u8> {
-
-                    fn try_collect(self) -> Result<[u8;6],&'static str> {
-                        let mut arr = [0u8;6];
-
-                        let mut index = 0;
-                        for val in self {
-                            if index < 6 {
-                                arr[index] = val;
-                                index += 1
-                            }
-                            else {
-                                return Err("Device address is too large");
-                            }
-                        }
-
-                        if index < 6 {
-                            Err("Device address is too small")
-                        }
-                        else {
-                            Ok(arr)
-                        }
-                    }
-                }
-
-                #[test]
-                fn ip_read_bd_addr_test() {
-
-                    let output = Command::new("hcitool")
-                        .arg("dev")
-                        .output()
-                        .expect("failed to execute process");
-
-                    let mut hcitool_bdaddr: BluetoothDeviceAddress =
-                        alloc::string::String::from_utf8_lossy(&output.stdout)
-                            .trim_start_matches(|c: char| c != '0')
-                            .trim_start_matches("0")
-                            .trim()
-                            .split(":")
-                            .map(|s| u8::from_str_radix(s,16).unwrap() )
-                            .try_collect()
-                            .unwrap();
-
-                    hcitool_bdaddr.reverse();
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
+
         /// This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_features {
@@ -1907,21 +1543,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn ip_read_local_supported_features() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter()))
-                        .unwrap();
-
-                }
-            }
         }
+
         // This is part of the Information Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_version_information {
@@ -1993,17 +1616,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn ip_read_local_version_information_test() {
-                    block_for_result( send(&crate::hci::test_util::get_adapter()) ).unwrap();
-                }
-            }
         }
         // This is part of the Host Controller and Baseband opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
@@ -2029,20 +1641,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn reset_test() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
+
         // This is part of the Informational Parameters opcodesgroup
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod ip_read_local_supported_commands {
@@ -2687,40 +2287,7 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
 
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-                use test::Bencher;
-
-                #[test]
-                fn ip_read_local_supported_commands_test() {
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-
-                #[bench]
-                fn ip_read_local_supported_commands_bench( b: &mut Bencher ) {
-                    let hci = crate::hci::test_util::get_adapter();
-
-                    b.iter(|| block_for_result(send(&hci)));
-                }
-
-                #[bench]
-                /// The hope is that converting the raw bits to a vector of commands is much faster
-                /// then the response from the controller (which is what
-                /// ip_read_local_supported_features_bench does)
-                fn supported_commands_from_raw_bench( b: &mut Bencher) {
-
-                    // Should be the worse than the worst case from the hci return for
-                    // performance reasons.
-                    b.iter( || { SupportedCommands::try_from(CmdReturn {
-                        status : 0,
-                        supported_commands: [0xFFu8;64], // worst case scenerio
-                    }) } );
-                }
-            }
         }
     }
 
@@ -2786,41 +2353,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn read_advertising_channel_tx_power_test() {
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-
-                #[test]
-                fn tx_power_into_watts_test() {
-                    // just some data from wikipedia's dBm page
-                    let test_data = [(29i8, 794f32), (24i8,251f32), (-20i8, 10E-6f32)];
-
-                    let fudge_factor = 0.5;
-
-                    let fudge = | act: f32, exp: f32 | {
-                        ( exp + fudge_factor > act ) && ( exp - fudge_factor < act )
-                    };
-
-                    let dbg_out = | act, exp | {
-                        alloc::format!("act: {:?}, exp: {:?}, fudge: {:?}", act, exp, fudge_factor)
-                    };
-
-                    for (dbm, exp_mw) in test_data.iter() {
-                        let act_mw = TxPower(*dbm).into_milli_watts();
-
-                        assert!(fudge(act_mw,*exp_mw), "{}", dbg_out(act_mw,*exp_mw));
-                    }
-                }
-            }
         }
+
         pub mod transmitter_test{
 
             use crate::hci::*;
@@ -2890,33 +2424,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(parameters, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-
-                use super::*;
-                use crate::hci::le::mandatory::test_end;
-                use std::{thread, time};
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                #[ignore]
-                fn transmitter_test_test() {
-                    let hi = crate::hci::test_util::get_adapter();
-
-                    let payload = TestPayload::Repeat11110000;
-                    let frequency = Frequency::new( 2460 ).unwrap();
-                    let payload_len = 2u8;
-
-                    let sleep_duration = time::Duration::new(1,0);
-
-                    block_for_result(send(&hi, frequency, payload, payload_len)).unwrap();
-
-                    thread::sleep(sleep_duration);
-
-                    block_for_result(test_end::send(&crate::hci::test_util::get_adapter()))
-                        .unwrap();
-                }
-            }
         }
 
         pub mod set_advertising_data {
@@ -3039,73 +2546,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(adv_data, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn set_advertising_data_test() {
-
-                    use crate::gap::advertise::{flags,local_name};
-
-                    let mut flags = flags::Flags::new();
-
-                    flags.get_user(0).enable();
-                    flags.get_user(20).enable();
-
-                    let local_name = local_name::LocalName::new("Test", false);
-
-                    let mut ad = AdvertisingData::new();
-                    ad.try_push(flags).unwrap();
-                    ad.try_push(local_name).unwrap();
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), ad)).unwrap();
-
-                }
-
-                #[test]
-                fn advertising_data_try_from_test () {
-
-                    use crate::gap::advertise::{flags,local_name};
-
-                    let mut flags = flags::Flags::new();
-
-                    flags.get_user(11).enable();
-                    flags.get_user(8*3).enable();
-
-                    let too_long_name = local_name::LocalName::new("Supercalifragilisticexpialidocious", true);
-
-                    AdvertisingData::new()
-                    .try_push(flags)
-                    .unwrap();
-
-                    AdvertisingData::new()
-                    .try_push(too_long_name)
-                    .unwrap_err();
-                }
-
-                #[test]
-                fn advertising_data_try_push_test () {
-                    use crate::gap::advertise::local_name::LocalName;
-                    use std::str::from_utf8;
-
-                    let local_name_1 = LocalName::new("abcdefghijklm", true);
-                    let local_name_2 = LocalName::new("012345678901234", false);
-                    let local_name_too_long = LocalName::new(from_utf8(&[102u8;31]).unwrap(), false);
-
-                    let mut test_ad_1 = AdvertisingData::early_terminate();
-                    let mut test_ad_2 = AdvertisingData::early_terminate();
-
-                    assert!(test_ad_1.try_push( local_name_1 ).is_ok());
-
-                    assert!(test_ad_1.try_push( local_name_2 ).is_err());
-
-                    assert!(test_ad_2.try_push( local_name_too_long ).is_err());
-                }
-            }
         }
+
         pub mod set_advertising_enable {
 
             use crate::hci::*;
@@ -3132,31 +2574,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter{ enable: enable }, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use super::super::set_advertising_data;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn set_advertising_enable_test() {
-                    use crate::gap::advertise::local_name::LocalName;
-
-                    let hci = crate::hci::test_util::get_adapter();
-
-                    let mut payload = set_advertising_data::AdvertisingData::new();
-
-                    payload.try_push(LocalName::new("ENABLE BLE TEST", true)).unwrap();
-
-                    block_for_result(set_advertising_data::send(&hci, payload)).unwrap();
-
-                    block_for_result(send(&hci, true)).unwrap();
-
-                    block_for_result(send(&hci, false)).unwrap();
-                }
-            }
         }
+
         pub mod set_advertising_parameters {
 
             use crate::hci::*;
@@ -3379,44 +2798,8 @@ pub mod le {
 
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
-
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use std::time::Duration;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn advertising_interval_test() {
-
-                    AdvertisingInterval::try_from_raw(0x0020).unwrap();
-
-                    AdvertisingInterval::try_from_raw(0x0019).unwrap_err();
-
-                    AdvertisingInterval::try_from_raw(0x4000).unwrap();
-
-                    AdvertisingInterval::try_from_raw(0x4001).unwrap_err();
-
-                    AdvertisingInterval::try_from_duration(Duration::from_millis(20)).unwrap();
-
-                    AdvertisingInterval::try_from_duration(Duration::from_nanos(19999999)).unwrap_err();
-
-                    AdvertisingInterval::try_from_duration(Duration::new(10, 24000000)).unwrap();
-
-                    AdvertisingInterval::try_from_duration(Duration::new(10, 24000001)).unwrap();
-                }
-
-                #[test]
-                fn set_advertising_parameters_test() {
-                    let params = AdvertisingParameters::default_with_peer_address(&[0x12;6]);
-
-                    block_for_result(send( &crate::hci::test_util::get_adapter(), params)).unwrap();
-
-                }
-
-            }
         }
+
         pub mod set_random_address {
 
             use crate::hci::*;
@@ -3445,23 +2828,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(Parameter{ rand_address: rand_addr }, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests{
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn set_random_address_test() {
-
-                    let static_address_flag = 0b11000000u8;
-
-                    let addr = [0x11,0x22,0x33,0x44,0x55, (0x66 | static_address_flag) ];
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), addr)).unwrap();
-
-                }
-            }
         }
     }
 
@@ -3491,23 +2857,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete , Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                #[ignore]
-                fn receiver_test_command_test() {
-
-                    let frequency = Frequency::new(2420).unwrap();
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), frequency)).unwrap();
-
-                }
-            }
         }
+
         pub mod set_scan_enable {
 
             use crate::hci::*;
@@ -3552,30 +2903,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(cmd_param, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn set_scan_enable_test() {
-
-                    #![allow(unreachable_code)]
-                    panic!("Test not written correctly");
-
-                    let hci = crate::hci::test_util::get_adapter();
-
-                    block_for_result(send(&hci, true, true)).unwrap();
-
-                    block_for_result(send(&hci, true, true)).unwrap();
-
-                    block_for_result(send(&hci, false, true)).unwrap();
-
-                    block_for_result(send(&hci, false, false)).unwrap();
-                }
-            }
         }
+
         pub mod set_scan_parameters {
 
             use crate::hci::*;
@@ -3695,34 +3024,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(sp, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use std::time::Duration;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn scanning_interval_test() {
-                    ScanningInterval::try_from_raw(0x0004).unwrap();
-                    ScanningInterval::try_from_raw(0x4000).unwrap();
-                    ScanningInterval::try_from_raw(0x0003).unwrap_err();
-                    ScanningInterval::try_from_raw(0x4001).unwrap_err();
-                    ScanningInterval::try_from_duration(Duration::from_micros(2500)).unwrap();
-                    ScanningInterval::try_from_duration(Duration::new(10,240000000)).unwrap();
-                    ScanningInterval::try_from_duration(Duration::from_nanos(2499999)).unwrap_err();
-                    ScanningInterval::try_from_duration(Duration::new(10,240000001)).unwrap_err();
-                }
-
-                #[test]
-                fn set_scan_parameters_test() {
-
-                    let parameters = ScanningParameters::default();
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameters)).unwrap();
-
-                }
-            }
         }
     }
 
@@ -3879,29 +3180,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                fn disconnect_test() {
-                    // should be a random, unused handle
-                    let handle = ConnectionHandle::try_from(0x123).unwrap();
-
-                    let reason = DisconnectReason::AuthenticationFailure;
-
-                    let parameters = DisconnectParameters {
-                        connection_handle: handle,
-                        disconnect_reason: reason,
-                    };
-
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameters)).unwrap_err();
-                }
-            }
         }
+
         pub mod connection_update {
             use crate::hci::*;
             use crate::hci::common::{
@@ -3967,42 +3247,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command( cu, events::Events::LEMeta( events::LEMeta::ConnectionUpdateComplete ), timeout ) )
             }
 
-            #[cfg(test)]
-            mod tests {
-
-                use super::*;
-                use crate::hci::common;
-                use super::super::ConnectionInterval;
-                use crate::hci::test_util::block_for_result;
-
-                /// This will likely fail with a timeout due to there being no connection to
-                /// a device.
-                #[test]
-                #[ignore]
-                fn connection_update_test() {
-
-                    let timeout = Duration::from_secs(1);
-
-                    let parameter = ConnectionUpdate {
-                        handle: ConnectionHandle::try_from(0x0033).unwrap(),
-                        interval: ConnectionIntervalBounds::try_from(
-                            ConnectionInterval::try_from_raw(0x100).unwrap(),
-                            ConnectionInterval::try_from_raw(0x100).unwrap()
-                        ).unwrap(),
-                        latency: 0x1000,
-                        supervision_timeout: common::SupervisionTimeout::try_from_raw(0x234).unwrap(),
-                        connection_event_len: ConnectionEventLength::new(0, 0xFFFF)
-                    };
-
-                    let result = block_for_result(send(&crate::hci::test_util::get_adapter(), parameter, timeout))
-                        .unwrap();
-
-                    if let error::Error::NoError = error::Error::from(result.status) {
-                        panic!("Expected Error because no connection is made");
-                    }
-                }
-            }
         }
+
         pub mod create_connection_cancel {
 
             use crate::hci::*;
@@ -4027,21 +3273,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                #[ignore]
-                fn create_connection_cancel_test() {
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter())).unwrap();
-
-                }
-            }
         }
+
         pub mod create_connection {
 
             use super::{ConnectionEventLength, ConnectionIntervalBounds};
@@ -4187,14 +3420,6 @@ pub mod le {
                 ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus , Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-                #[test]
-                #[ignore]
-                fn create_connection_test() {
-                    unimplemented!()
-                }
-            }
         }
         pub mod read_channel_map {
 
@@ -4287,16 +3512,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-
-                #[test]
-                #[ignore]
-                fn read_channel_map_test() {
-                    unimplemented!()
-                }
-            }
         }
+
         pub mod read_remote_features {
 
             use crate::hci::*;
@@ -4330,15 +3547,8 @@ pub mod le {
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) ) )
             }
 
-            #[cfg(test)]
-            mod test {
-                #[test]
-                #[ignore]
-                fn read_remote_features_test() {
-                    unimplemented!()
-                }
-            }
         }
+
         pub mod set_host_channel_classification {
             use crate::hci::*;
 
@@ -4412,33 +3622,8 @@ pub mod le {
             {
                 ReturnedFuture( hci.send_command( map, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
-
-            #[cfg(test)]
-            mod test {
-
-                use super::*;
-
-                #[test]
-                #[ignore]
-                fn set_host_channel_classification_test() {
-                    unimplemented!()
-                }
-
-                #[test]
-                fn channel_map_test() {
-                    unimplemented!();
-                    let _expected_raw_map = [
-                        (1 << 3) | (1 << 7),
-                        (1 << (9 - 8)) | (1 << (11 - 8)) | (1 << (13 - 8)),
-                        0,
-                        0,
-                        0,
-                    ];
-
-                    let _map = ChannelMap::try_from(&[11,11,3,9,13,7]).unwrap();
-                }
-            }
         }
+
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_transmit_power_level {
             use crate::hci::*;
@@ -4523,25 +3708,8 @@ pub mod le {
             {
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
             }
-
-            #[cfg(test)]
-            mod tests {
-                use super::*;
-                use crate::hci::test_util::block_for_result;
-
-                #[test]
-                #[ignore]
-                fn read_transmit_power_level_test() {
-                    let parameter = Parameter {
-                        connection_handle: ConnectionHandle::try_from(0x00FF).unwrap(),
-                        level_type: TransmitPowerLevelType::CurrentPowerLevel,
-                    };
-
-                    block_for_result(send(&crate::hci::test_util::get_adapter(), parameter)).unwrap();
-
-                }
-            }
         }
+
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_remote_version_information {
 
@@ -4575,17 +3743,8 @@ pub mod le {
 
                 ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) ) )
             }
-
-            #[cfg(test)]
-            mod tests {
-
-                #[test]
-                #[ignore]
-                fn read_remote_version_information_test() {
-                    unimplemented!()
-                }
-            }
         }
+
         // TODO when BR/EDR is enabled move this to a module for common features and import here
         pub mod read_rssi {
 
@@ -4837,15 +3996,4 @@ pub mod le {
 //             pub fn generate_dh_key() { unimplemented!() }
 //         }
 //     }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn host_interface_default_test() {
-        crate::hci::test_util::get_adapter();
-    }
 }
