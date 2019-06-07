@@ -110,21 +110,25 @@ where C: crate::gap::ConnectionChannel
         match pdu_name {
             super::client::ClientPduName::ExchangeMtuRequest =>
                 self.server.process_exchange_mtu_request( TransferFormat::from(data)? ),
-            super::client::ClientPduName::FindInformationRequest => unimplemented!(),
-            super::client::ClientPduName::FindByTypeValueRequest => unimplemented!(),
-            super::client::ClientPduName::ReadByTypeRequest => unimplemented!(),
-            super::client::ClientPduName::ReadRequest =>
-                self.server.process_read_request( TransferFormat::from(data)? ),
-            super::client::ClientPduName::ReadBlobRequest => unimplemented!(),
-            super::client::ClientPduName::ReadMultipleRequest => unimplemented!(),
-            super::client::ClientPduName::ReadByGroupTypeRequest => unimplemented!(),
-            super::client::ClientPduName::WriteRequest =>
+                super::client::ClientPduName::WriteRequest =>
                 self.server.process_write_request( data ),
-            super::client::ClientPduName::WriteCommand => unimplemented!(),
-            super::client::ClientPduName::PrepareWriteRequest => unimplemented!(),
-            super::client::ClientPduName::ExecuteWriteRequest => unimplemented!(),
-            super::client::ClientPduName::HandleValueConfirmation => unimplemented!(),
-            super::client::ClientPduName::SignedWriteCommand => unimplemented!(),
+                super::client::ClientPduName::ReadRequest =>
+                self.server.process_read_request( TransferFormat::from(data)? ),
+            super::client::ClientPduName::FindInformationRequest |
+            super::client::ClientPduName::FindByTypeValueRequest |
+            super::client::ClientPduName::ReadByTypeRequest |
+            super::client::ClientPduName::ReadBlobRequest |
+            super::client::ClientPduName::ReadMultipleRequest |
+            super::client::ClientPduName::ReadByGroupTypeRequest |
+            super::client::ClientPduName::WriteCommand |
+            super::client::ClientPduName::PrepareWriteRequest |
+            super::client::ClientPduName::ExecuteWriteRequest |
+            super::client::ClientPduName::HandleValueConfirmation |
+            super::client::ClientPduName::SignedWriteCommand => {
+                let opcode = if let Some(oc) = data.get(0) { *oc } else { 0 };
+
+                self.server.send_pdu_error(0, opcode, pdu::Error::RequestNotSupported);
+            },
         };
 
         Ok(())
