@@ -92,6 +92,28 @@ impl core::convert::TryFrom<u8> for ServerPduName {
     }
 }
 
+/// The Reserved Handle
+///
+/// The first handle (value of '0') is reserved for future use. This is used to represent that
+/// handle when creating a new Attribute Bearer
+struct ReservedHandle;
+
+impl super::AnyAttribute for ReservedHandle {
+    fn get_type(&self) -> crate::UUID { crate::UUID::from(0u128) }
+
+    fn get_permissions(&self) -> Box<[super::AttributePermissions]> {
+        alloc::vec!(super::AttributePermissions::Read).into_boxed_slice()
+    }
+
+    fn get_handle(&self) -> u16 { 0 }
+
+    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
+
+    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), pdu::Error> {
+        Err(pdu::Error::InvalidHandle)
+    }
+}
+
 struct ServerReceiver<'a, C>
 where C: crate::gap::ConnectionChannel
 {
@@ -212,7 +234,7 @@ where C: crate::gap::ConnectionChannel
         Self {
             max_mtu: mtu,
             connection: (connection, None),
-            attributes: Vec::new(),
+            attributes: alloc::vec![ Box::new(ReservedHandle) ],
         }
     }
 
@@ -220,8 +242,8 @@ where C: crate::gap::ConnectionChannel
     ///
     /// This function will return the handle to the attribute.
     ///
-    /// #Panic
-    /// If you manage to push 65536 attributes onto this server, the next pushed attribute will
+    /// # Panic
+    /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
     /// cause this function to panic.
     pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
     where V: TransferFormat + Sized + Unpin + 'static

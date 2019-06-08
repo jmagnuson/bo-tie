@@ -426,24 +426,24 @@ mod test {
             .expect("Failed to connect attribute client");
 
         // writing to handle 0
-        futures::executor::block_on(client.write_request(0, test_val_1))
+        futures::executor::block_on(client.write_request(1, test_val_1))
             .expect("Failed to write to server for handle 0");
 
         // writing to handle 1
-        futures::executor::block_on(client.write_request(1, test_val_2))
+        futures::executor::block_on(client.write_request(2, test_val_2))
             .expect("Failed to write to server for handle 1");
 
         // writing to handle 2
-        futures::executor::block_on(client.write_request(2, test_val_3))
+        futures::executor::block_on(client.write_request(3, test_val_3))
             .expect("Failed to write to server for handle 2");
 
-        let read_val_1: usize = futures::executor::block_on(client.read_request(0))
+        let read_val_1: usize = futures::executor::block_on(client.read_request(1))
             .expect("Failed to read at handle 0 from the server");
 
-        let read_val_2 = futures::executor::block_on(client.read_request(1))
+        let read_val_2 = futures::executor::block_on(client.read_request(2))
             .expect("Failed to read at handle 1 from the server");
 
-        let read_val_3 = futures::executor::block_on(client.read_request(2))
+        let read_val_3 = futures::executor::block_on(client.read_request(3))
             .expect("Failed to read at handle 2 from the server");
 
         assert_eq!(test_val_1, read_val_1);
