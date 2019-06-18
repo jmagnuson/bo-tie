@@ -24,7 +24,7 @@ extern crate core;
 pub mod hci;
 pub mod gap;
 pub mod att;
-
+pub mod gatt;
 
 pub type BluetoothDeviceAddress = [u8; 6];
 

@@ -482,7 +482,10 @@ impl TransferFormat for FormattedHandlesWithType {
 
                     for chunk in chunks {
                         let handle = <u16>::from_le_bytes( [chunk[0], chunk[1]] );
-                        let uuid = <crate::UUID>::from( <u16>::from_le_bytes( [chunk[2], chunk[3]] ));
+
+                        let uuid = Into::<crate::UUID>::into(
+                            <u16>::from_le_bytes( [chunk[2], chunk[3]] )
+                        );
 
                         v.push( HandleWithType(handle, uuid))
                     }
@@ -501,11 +504,11 @@ impl TransferFormat for FormattedHandlesWithType {
                     for chunk in chunks {
                         let handle = <u16>::from_le_bytes( [chunk[0], chunk[1]] );
 
-                        let mut uuid_bytes = [0u8;16];
+                        let mut uuid_bytes = [0u8;core::mem::size_of::<u128>()];
 
                         uuid_bytes.clone_from_slice(&chunk[2..]);
 
-                        let uuid = <crate::UUID>::from( <u128>::from_le_bytes(uuid_bytes));
+                        let uuid = Into::<crate::UUID>::into( <u128>::from_le_bytes(uuid_bytes));
 
                         v.push( HandleWithType(handle, uuid) );
                     }
@@ -688,12 +691,12 @@ impl TransferFormat for TypeRequest {
         if raw.len() == 6 {
             Ok(Self {
                 handle_range: TransferFormat::from(&raw[..4])?,
-                attr_type: crate::UUID::from(<u16>::from_le_bytes( [raw[4], raw[5]] )),
+                attr_type: Into::<crate::UUID>::into(<u16>::from_le_bytes( [raw[4], raw[5]] )),
             })
         } else if raw.len() == 20 {
             Ok(Self {
                 handle_range: TransferFormat::from(&raw[..4])?,
-                attr_type: crate::UUID::from(<u128>::from_le_bytes(
+                attr_type: Into::<crate::UUID>::into(<u128>::from_le_bytes(
                     {
                         let mut bytes = [0;16];
                         bytes.clone_from_slice(&raw[4..]);

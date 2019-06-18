@@ -99,7 +99,7 @@ impl core::convert::TryFrom<u8> for ServerPduName {
 struct ReservedHandle;
 
 impl super::AnyAttribute for ReservedHandle {
-    fn get_type(&self) -> crate::UUID { crate::UUID::from(0u128) }
+    fn get_type(&self) -> crate::UUID { Into::<crate::UUID>::into(0u128) }
 
     fn get_permissions(&self) -> Box<[super::AttributePermissions]> {
         alloc::vec!(super::AttributePermissions::Read).into_boxed_slice()
@@ -216,11 +216,12 @@ where C: crate::gap::ConnectionChannel
     /// specified by the DEFAULT_ATT_MTU constant in trait `ConnectionChannel`. If the provided MTU
     /// value is smaller than DEFAULT_ATT_MTU or none is passed, then the MTU will be set to
     /// DEFAULT_ATT_MTU.
-    ///
-    /// # WARNING
-    /// This function will change in the future. The imput "connection" will be removed when
-    /// multiple connections are supported in the future.
-    pub fn new<Mtu>( connection: C, max_mtu: Mtu) -> Self where Mtu: Into<Option<u16>> {
+    pub fn new<Mtu, A>( connection: C, max_mtu: Mtu, server_attributes: A) -> Self
+    where Mtu: Into<Option<u16>>,
+          A: Into<Option<ServerAttributes>>
+    {
+        use alloc::vec;
+
         let mtu = if let Some(val) = max_mtu.into() {
             if val >= C::DEFAULT_ATT_MTU {
                 val
@@ -231,10 +232,16 @@ where C: crate::gap::ConnectionChannel
             C::DEFAULT_ATT_MTU
         };
 
+        let attributes: Vec<Box<dyn super::AnyAttribute + Unpin>> = match server_attributes.into()
+        {
+            Some(a) => a.attributes,
+            None => vec!(Box::new(ReservedHandle)),
+        };
+
         Self {
             max_mtu: mtu,
             connection: (connection, None),
-            attributes: alloc::vec![ Box::new(ReservedHandle) ],
+            attributes: attributes,
         }
     }
 
@@ -256,6 +263,9 @@ where C: crate::gap::ConnectionChannel
 
         ret
     }
+
+    /// Return the next unused handle
+    pub fn next_handle(&self) -> u16 { self.attributes.len() as u16 }
 
     pub fn on_receive<'a>(&'a mut self)
     -> impl Future<Output=Result<(), super::Error>> + 'a
@@ -325,7 +335,7 @@ where C: crate::gap::ConnectionChannel
 
             let handle = TransferFormat::from( &raw_handle ).unwrap();
 
-            if let Some(data) = self.attributes.get_mut( handle as usize) {
+            if let Some(data) = self.attributes.get_mut( handle as usize ) {
                 match data.set_val_from_raw( raw_data ) {
                     Ok(_) =>
                         self.connection.0.send( &TransferFormat::into(&pdu::write_response()) ),
@@ -346,3 +356,34 @@ where C: crate::gap::ConnectionChannel
         }
     }
 }
+
+pub struct ServerAttributes {
+    attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>
+}
+
+impl ServerAttributes {
+    pub fn new() -> Self { Self { attributes: Vec::new() } }
+
+    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
+    where V: TransferFormat + Sized + Unpin + 'static
+    {
+        use core::convert::TryInto;
+
+        let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
+
+        self.attributes.push( Box::new(attribute) );
+
+        ret
+    }
+
+    /// Get the next handle to push an attribute into
+    pub fn next_handle(&self) -> u16 {
+        self.attributes.len() as u16
+    }
+}
+
+// impl AsRef<[Box<dyn Any>]> for ServerAttributes {
+//     fn as_ref(&self) -> &[Box<dyn TransferFormat>] {
+//         self.attributes.as_slice()
+//     }
+// }

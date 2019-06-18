@@ -179,6 +179,37 @@ impl_transfer_format_for_number!{usize}
 impl_transfer_format_for_number!{i128}
 impl_transfer_format_for_number!{u128}
 
+impl TransferFormat for alloc::string::String {
+    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
+        alloc::string::String::from_utf8(raw.to_vec()).map_err(|_| pdu::Error::InvalidPDU)
+    }
+
+    fn into( &self ) -> Box<[u8]> {
+        From::from(self.as_bytes())
+    }
+}
+
+impl TransferFormat for crate::UUID {
+    fn from(raw: &[u8]) -> Result<Self, pdu::Error> {
+        use core::mem::size_of;
+
+        if raw.len() == size_of::<u16>() {
+            Ok( crate::UUID::from_u16( TransferFormat::from(raw)? ) )
+        } else if raw.len() == size_of::<u128>() {
+            Ok( crate::UUID::from_u128( TransferFormat::from(raw)? ) )
+        } else {
+            Err( pdu::Error::InvalidPDU )
+        }
+    }
+
+    fn into(&self) -> Box<[u8]> {
+        match core::convert::TryInto::<u16>::try_into( *self ) {
+            Ok(raw) => TransferFormat::into( &raw ),
+            Err(_) => TransferFormat::into( &Into::<u128>::into(*self) ),
+        }
+    }
+}
+
 impl<T> TransferFormat for Box<[T]> where T: TransferFormat {
 
     fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
@@ -391,29 +422,29 @@ mod test {
         thread::spawn( move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( c2, 256 );
+            let mut server = server::Server::new( c2, 256, None );
 
             let attribute_0 = Attribute::new(
-                crate::UUID::from(UUID_1),
+                From::from(UUID_1),
                 [Read, Write].to_vec().into_boxed_slice(),
                 0usize
             );
 
             let attribute_1 = Attribute::new(
-                crate::UUID::from(UUID_2),
+                From::from(UUID_2),
                 [Read, Write].to_vec().into_boxed_slice(),
                 0u64
             );
 
             let attribute_3 = Attribute::new(
-                crate::UUID::from(UUID_3),
+                From::from(UUID_3),
                 [Read, Write].to_vec().into_boxed_slice(),
                 0i8
             );
 
-            server.push(attribute_0); // has handle value of 0
-            server.push(attribute_1); // has handle value of 1
-            server.push(attribute_3); // has handle value of 2
+            server.push(attribute_0); // has handle value of 1
+            server.push(attribute_1); // has handle value of 2
+            server.push(attribute_3); // has handle value of 3
 
             loop {
                 if let Err(e) = futures::executor::block_on( server.on_receive() ) {
