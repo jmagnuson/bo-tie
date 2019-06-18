@@ -19,14 +19,19 @@ fn is_desired_device<T> (expcted: T, to_compare: T ) -> bool where T: PartialEq 
     }
 }
 
-async fn remove_from_white_list(hi: &hci::HostInterface, address: bo_tie::BluetoothDeviceAddress) {
+async fn remove_from_white_list(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    address: bo_tie::BluetoothDeviceAddress)
+{
     use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
     use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
 
     await!(send(&hi, RandomDeviceAddress, address)).unwrap();
 }
 
-async fn scan_for_local_name<'a>( hi: &'a hci::HostInterface, name: &'a str )
+async fn scan_for_local_name<'a>(
+    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    name: &'a str )
     -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>>
 {
     use bo_tie::gap::advertise::{local_name, TryFromRaw};
@@ -50,22 +55,23 @@ async fn scan_for_local_name<'a>( hi: &'a hci::HostInterface, name: &'a str )
     await!(set_scan_enable::send(&hi, true, true)).unwrap();
 
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = await!(
-        hi.wait_for_event(
-            le_event,
-            |_| true,
-            Duration::from_secs(5)
-        )
-    ) {
+    while let Ok(event) = await!( hi.wait_for_event( le_event.into(), Duration::from_secs(5)) )
+    {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
-            for report in reports.iter() {
-                for data_rsl in report.data_iter() {
-                    if let Ok(local_name) = local_name::LocalName::try_from_raw(data_rsl.unwrap()) {
-                        if is_desired_device( name, local_name.as_ref()) {
-                            await!(set_scan_enable::send(&hi, false, false)).unwrap();
-                            return Some(Box::new(report.clone()));
+            for report_result in reports.iter() {
+                match report_result {
+                    Ok(report) => {
+                        for data_rsl in report.data_iter() {
+                            if let Ok(local_name) = local_name::LocalName::try_from_raw(data_rsl.unwrap())
+                            {
+                                if is_desired_device( name, local_name.as_ref()) {
+                                    await!(set_scan_enable::send(&hi, false, false)).unwrap();
+                                    return Some(Box::new(report.clone()));
+                                }
+                            }
                         }
-                    }
+                    },
+                    Err(err_msg) => println!("Bad advertising data: {}", err_msg),
                 }
             }
         }
@@ -77,7 +83,9 @@ async fn scan_for_local_name<'a>( hi: &'a hci::HostInterface, name: &'a str )
     None
 }
 
-async fn connect( hi: &hci::HostInterface, address: bo_tie::BluetoothDeviceAddress)
+async fn connect(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    address: bo_tie::BluetoothDeviceAddress)
     -> Result<EventsData, impl std::fmt::Debug>
 {
     use bo_tie::hci::common;
@@ -116,16 +124,19 @@ async fn connect( hi: &hci::HostInterface, address: bo_tie::BluetoothDeviceAddre
     await!(create_connection::send(&hi, parameters)).unwrap();
 
     // wait for the LEConnectionUpdate event
-    await!(hi.wait_for_event(connect_event.into(), Duration::from_secs(25)).unwrap())
+    await!(hi.wait_for_event(connect_event.into(), Duration::from_secs(25)))
 }
 
-async fn cancel_connect(hi: &hci::HostInterface ) {
+async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {
     use bo_tie::hci::le::connection::create_connection_cancel;
 
     await!(create_connection_cancel::send(&hi)).unwrap();
 }
 
-async fn disconnect(hi: &hci::HostInterface, connection_handle: hci::common::ConnectionHandle ) {
+async fn disconnect(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    connection_handle: hci::common::ConnectionHandle )
+{
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {

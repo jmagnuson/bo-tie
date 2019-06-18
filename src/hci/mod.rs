@@ -344,8 +344,8 @@ where I: HostControllerInterface
     /// Not doing this with multiple events results in undefined behavior.
     ///
     /// If multiple of the same event need to be made, use
-    /// `[wait_for_event_with_matcher](#wait_for_event_with_matcher)` to match the data returned
-    /// with the event.
+    /// [`wait_for_event_with_matcher`](#method.wait_for_event_with_matcher)
+    /// to match the data returned with the event.
     pub fn wait_for_event<'a,D>(&'a self, event: events::Events, timeout: D)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where D: Into<Option<Duration>>,
@@ -379,7 +379,7 @@ where I: HostControllerInterface
     ///
     /// Using a matcher that always returns true results in `wait_for_event_with_matcher`
     /// functioning the same way as
-    /// `[wait_for_event](#wait_for_event)`
+    /// `[wait_for_event](wait_for_event)`
     pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where P: EventMatcher + Send + Sync + 'static,

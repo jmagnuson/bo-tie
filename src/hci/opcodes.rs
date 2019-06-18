@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn op_code_test() {
-        let ogf = 4;
+        let ogf = 0x8;
         let ocf = 0xa;
         let oc  = HCICommand::LEController(LEController::SetAdvertisingEnable);
 
