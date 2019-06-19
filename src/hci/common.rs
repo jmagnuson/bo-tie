@@ -2,7 +2,7 @@ use core::iter::Iterator;
 use core::time::Duration;
 use core::fmt::Debug;
 
-#[derive(Clone,Copy,PartialEq,PartialOrd)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct ConnectionHandle {
     handle: u16,
 }
