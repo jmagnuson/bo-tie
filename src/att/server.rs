@@ -12,6 +12,7 @@ use super::{
     pdu,
     TransferFormat,
 };
+use crate::l2cap;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ServerPduName {
@@ -115,13 +116,13 @@ impl super::AnyAttribute for ReservedHandle {
 }
 
 struct ServerReceiver<'a, C>
-where C: crate::gap::ConnectionChannel
+where C: l2cap::ConnectionChannel
 {
     server: &'a mut Server<C>
 }
 
 impl<'a,C> ServerReceiver<'a,C>
-where C: crate::gap::ConnectionChannel
+where C: l2cap::ConnectionChannel
 {
     fn process_client_pdu(
         &mut self,
@@ -158,7 +159,7 @@ where C: crate::gap::ConnectionChannel
 }
 
 impl<'a, C> Future for ServerReceiver<'a,C>
-where C: crate::gap::ConnectionChannel
+where C: l2cap::ConnectionChannel
 {
     type Output = Result<(), super::Error>;
 
@@ -166,9 +167,15 @@ where C: crate::gap::ConnectionChannel
 
         let this = self.get_mut();
 
-        let data_opt = this.server.connection.0.receive(cx.waker().clone());
+        let acl_packets_opt = this.server.connection.0.receive(cx.waker().clone());
 
-        if let Some(data) = data_opt {
+        if let Some(acl_packets) = acl_packets_opt {
+
+            let data = acl_packets.iter()
+                .map( |packet| packet.get_payload() )
+                .fold( Vec::new(), |mut vec, data| { vec.extend_from_slice(data); vec } )
+                .into_boxed_slice();
+
             if data.len() > 1 {
                 match super::client::ClientPduName::try_from(data[0]) {
                     Ok(pdu_name) => {
@@ -193,7 +200,7 @@ where C: crate::gap::ConnectionChannel
 /// For now a server can only handle one client. It will be updated to handle multiple clients
 /// as soon as possible.
 pub struct Server<C>
-where C: crate::gap::ConnectionChannel
+where C: l2cap::ConnectionChannel
 {
     /// The maximum mtu that this server can handle. This is also the mtu sent in a MTU response
     /// PDU.
@@ -207,13 +214,13 @@ where C: crate::gap::ConnectionChannel
 }
 
 impl<C> Server<C>
-where C: crate::gap::ConnectionChannel
+where C: l2cap::ConnectionChannel
 {
 
     /// Create a new Server
     ///
     /// The maximum transfer unit is set here, it cannot be smaller then the minimum MTU as
-    /// specified by the DEFAULT_ATT_MTU constant in trait `ConnectionChannel`. If the provided MTU
+    /// specified by the DEFAULT_ATT_MTU constant in trait `l2cap::ConnectionChannel`. If the provided MTU
     /// value is smaller than DEFAULT_ATT_MTU or none is passed, then the MTU will be set to
     /// DEFAULT_ATT_MTU.
     pub fn new<Mtu, A>( connection: C, max_mtu: Mtu, server_attributes: A) -> Self
@@ -273,6 +280,27 @@ where C: crate::gap::ConnectionChannel
         ServerReceiver{ server: self }
     }
 
+    /// Send out notification
+    ///
+    /// The attribute at the given handle will be sent out in the notification.
+    ///
+    /// If the handle doesn't exist, then the notification isn't sent and false is returned
+    pub fn send_notification(&mut self, handle: u16) -> bool {
+        self.attributes.get(handle as usize).and_then( | attribute | {
+
+            let val = attribute.get_val_as_transfer_format().into();
+
+            let pdu = pdu::handle_value_notification( handle, val );
+
+            let data = TransferFormat::into(&pdu);
+
+            self.connection.0.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
+
+            Some(())
+        } )
+        .is_some()
+    }
+
     /// Deref the handle, and if the handle is valid, do F, otherwise return an error.
     ///
     /// If the handle is invalid, then this function sends the error PDU with the error InvalidHandle
@@ -291,7 +319,9 @@ where C: crate::gap::ConnectionChannel
             pdu_error
         );
 
-        self.connection.0.send( &TransferFormat::into(&err_pdu) );
+        let data = TransferFormat::into(&err_pdu);
+
+        self.connection.0.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
     }
 
     fn process_exchange_mtu_request(&mut self, pdu: pdu::Pdu<u16>) {
@@ -305,19 +335,21 @@ where C: crate::gap::ConnectionChannel
 
         let data = TransferFormat::into(&response_pdu);
 
-        self.connection.0.send( &data )
+        self.connection.0.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID) );
     }
 
     fn process_read_request(&mut self, pdu: pdu::Pdu<u16>) {
         let handle = *pdu.get_parameters();
 
-        if let Some(attribute) = self.attributes.get_mut( handle as usize) {
+        if let Some(attribute) = self.attributes.get( handle as usize) {
 
             let mut data = alloc::vec!( super::server::ServerPduName::ReadResponse.into() );
 
             data.extend_from_slice( &attribute.get_val_as_transfer_format().into() );
 
-            self.connection.0.send( &data );
+            let acl_data = l2cap::AclData::new( data.into_boxed_slice(), super::L2CAP_CHANNEL_ID );
+
+            self.connection.0.send( acl_data );
         } else {
             self.send_invalid_handle_error(handle, super::client::ClientPduName::ReadRequest.into());
         }
@@ -337,8 +369,10 @@ where C: crate::gap::ConnectionChannel
 
             if let Some(data) = self.attributes.get_mut( handle as usize ) {
                 match data.set_val_from_raw( raw_data ) {
-                    Ok(_) =>
-                        self.connection.0.send( &TransferFormat::into(&pdu::write_response()) ),
+                    Ok(_) => {
+                        let data = TransferFormat::into(&pdu::write_response());
+                        self.connection.0.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
+                    },
                     Err(pdu_err) =>
                         self.send_pdu_error(handle, received_opcode, pdu_err),
                 };
@@ -352,7 +386,9 @@ where C: crate::gap::ConnectionChannel
                 pdu::Error::InvalidPDU
             );
 
-            self.connection.0.send( &TransferFormat::into(&err_pdu) );
+            let data = TransferFormat::into(&err_pdu);
+
+            self.connection.0.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
         }
     }
 }

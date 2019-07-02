@@ -105,13 +105,13 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
         // Add service UUIDs to the advertising data
         let services_128 = matches.opt_strs("s")
             .into_iter()
-            .fold( bo_tie::gap::advertise::service_class_uuid::new_128(true), |mut services, str_uuid|
+            .fold( bo_tie::gap::advertise::service_uuids::new_128(true), |mut services, str_uuid|
             {
                 use std::convert::TryFrom;
 
                 let uuid = bo_tie::UUID::try_from(str_uuid.as_str()).expect("Invalid UUID");
 
-                services.insert(uuid.into());
+                services.add(uuid.into());
 
                 services
             }
@@ -132,8 +132,9 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
 fn main() {
 
     use futures::executor;
+    use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
-    simple_logging::log_to_stderr(log::LevelFilter::Info);
+    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let adv_flag = Arc::new(AtomicBool::new(true));
 

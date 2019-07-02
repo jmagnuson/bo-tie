@@ -3,9 +3,11 @@ use super::{
     TransferFormat,
 };
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Poll, Context};
+use crate::l2cap;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ClientPduName {
@@ -79,13 +81,13 @@ impl From<ClientPduName> for u8 {
     }
 }
 
-struct MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpin {
+struct MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin {
     mtu_size: u16,
     mtu_pdu: Option<pdu::Pdu<u16>>,
     channel: Option<Ch>,
 }
 
-impl<Ch> Future for MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpin
+impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
 {
     type Output = Result< Client<Ch>, super::Error >;
 
@@ -101,15 +103,21 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpi
                 return Poll::Ready(Err(super::Error::TooSmallMtu));
             }
 
+            let acl_data = l2cap::AclData::new(TransferFormat::into(&pdu), super::L2CAP_CHANNEL_ID);
+
             // The channel must exist at this point
-            this.channel.as_ref().expect("Channel doesn't exist").send( &TransferFormat::into(&pdu) );
+            this.channel.as_ref().expect("Channel doesn't exist").send( acl_data );
         }
 
-        if let Some(bytes) = this.channel.as_ref().and_then( |c| c.receive(cx.waker().clone()) ) {
+        if let Some(att_packet) = this.channel.as_ref()
+            .and_then( |c| c.receive( cx.waker().clone() )
+            .and_then( |packets| packets.first().cloned() ) )
+        {
+            let bytes = att_packet.get_payload();
 
             // Check for a ExchangeMTUResponse PDU
-            if bytes.len() == 3 && bytes[0] == From::from(ServerPduName::ExchangeMTUResponse) {
-
+            let rslt = if bytes.len() == 3 && bytes[0] == From::from(ServerPduName::ExchangeMTUResponse)
+            {
                 match TransferFormat::from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
 
@@ -120,23 +128,25 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpi
                             channel: this.channel.take().expect("No channel to take"),
                         };
 
-                        Poll::Ready(Ok(client))
+                        Ok(client)
                     },
                     Err(e) => {
-                        Poll::Ready(Err(e.into()))
+                        Err(e.into())
                     }
                 }
 
             } else if bytes.len() == 5 && bytes[1] == From::from(ServerPduName::ErrorResponse) {
 
                 // Return error code if received error PDU
-                Poll::Ready(Err( pdu::Error::from_raw(bytes[4]).into() ))
+                Err( pdu::Error::from_raw(bytes[4]).into() )
 
             } else {
 
-                Poll::Ready(Err( pdu::Error::InvalidPDU.into() ))
+                Err( pdu::Error::InvalidPDU.into() )
 
-            }
+            };
+
+            Poll::Ready(rslt)
 
         } else {
 
@@ -147,7 +157,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: crate::gap::ConnectionChannel + Unpi
 }
 
 struct ResponseFuture<'a, Ch, Rd>
-where Ch: crate::gap::ConnectionChannel,
+where Ch: l2cap::ConnectionChannel,
       Rd: TransferFormat,
 {
     channel: &'a Ch,
@@ -157,20 +167,25 @@ where Ch: crate::gap::ConnectionChannel,
 }
 
 impl<Ch, Rd> Future for ResponseFuture<'_, Ch, Rd>
-where Ch: crate::gap::ConnectionChannel,
+where Ch: l2cap::ConnectionChannel,
       Rd: TransferFormat + Unpin,
 {
-    type Output = Result<pdu::Pdu<Rd>, super::Error>;
+    type Output = Result< pdu::Pdu<Rd>, super::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         if let Some(data) = this.send_data.take() {
-            this.channel.send(&data)
+            this.channel.send(l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
         }
 
-        if let Some(bytes) = this.channel.receive(cx.waker().clone()) {
-            
+        if let Some(l2cap_packets) = this.channel.receive(cx.waker().clone()) {
+
+            let bytes = l2cap_packets.iter()
+                .map( |packet| packet.get_payload() )
+                .fold( Vec::new(), | mut vec, payload| { vec.extend_from_slice(payload); vec } )
+                .into_boxed_slice();
+
             if bytes.len() >= 1 {
                 use core::convert::TryFrom;
 
@@ -182,8 +197,8 @@ where Ch: crate::gap::ConnectionChannel,
                             TransferFormat::from(&bytes);
 
                         match err_pdu_rslt {
-                            Ok(err_pdu) => Poll::Ready( Err(err_pdu.into()) ),
-                            Err(e) => Poll::Ready( Err(e.into()) ),
+                            Ok(err_pdu) => Poll::Ready(Err(err_pdu.into())),
+                            Err(e) => Poll::Ready(Err(e.into())),
                         }
 
                     },
@@ -192,12 +207,12 @@ where Ch: crate::gap::ConnectionChannel,
                         let pdu_rslt = TransferFormat::from(&bytes);
 
                         match pdu_rslt {
-                            Ok(pdu) => Poll::Ready( Ok(pdu) ),
-                            Err(e)  => Poll::Ready( Err(e.into()) ),
+                            Ok(pdu) => Poll::Ready(Ok(pdu)),
+                            Err(e)  => Poll::Ready(Err(e.into())),
                         }
                     },
-                    Ok(_) => Poll::Ready( Err( super::Error::UnexpectedPdu )),
-                    Err(_) => Poll::Ready( Err( pdu::Error::InvalidPDU.into() )),
+                    Ok(_) => Poll::Ready(Err( super::Error::UnexpectedPdu )),
+                    Err(_) => Poll::Ready(Err( pdu::Error::InvalidPDU.into() )),
                 }
             } else {
                 Poll::Ready(Err( pdu::Error::InvalidPDU.into() ))
@@ -209,7 +224,7 @@ where Ch: crate::gap::ConnectionChannel,
 }
 
 struct ReturnedResponse<'a, Ch, Rd>
-where Ch: crate::gap::ConnectionChannel,
+where Ch: l2cap::ConnectionChannel,
       Rd: TransferFormat,
 {
     mtu: usize,
@@ -217,7 +232,7 @@ where Ch: crate::gap::ConnectionChannel,
 }
 
 impl<Ch, Rd> Future for ReturnedResponse<'_, Ch, Rd>
-where Ch: crate::gap::ConnectionChannel,
+where Ch: l2cap::ConnectionChannel,
       Rd: TransferFormat + Unpin,
 {
     type Output = Result<Rd, super::Error>;
@@ -232,7 +247,9 @@ where Ch: crate::gap::ConnectionChannel,
         }
 
         match Pin::new(&mut self.get_mut().rf).poll(cx) {
-            Poll::Ready(Ok(pdu)) => Poll::Ready(Ok(pdu.into_parameters())),
+            Poll::Ready(Ok(pdu)) => {
+                Poll::Ready( Ok( pdu.into_parameters() ) )
+            },
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
         }
@@ -240,13 +257,13 @@ where Ch: crate::gap::ConnectionChannel,
 }
 
 pub struct Client<C>
-where C: crate::gap::ConnectionChannel,
+where C: l2cap::ConnectionChannel,
 {
     mtu: usize,
     channel: C,
 }
 
-impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
+impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
 
     /// Connect a client to a attribute server
     ///
@@ -279,14 +296,14 @@ impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
     {
         let data = TransferFormat::into( &pdu::exchange_mtu_request(mtu) );
 
-        struct MtuResponse<'a, Channel> where Channel: crate::gap::ConnectionChannel {
+        struct MtuResponse<'a, Channel> where Channel: l2cap::ConnectionChannel {
             wanted_mtu: u16,
             current_mtu: &'a mut usize,
             rf: ResponseFuture<'a, Channel, u16>,
         }
 
         impl<Channel> Future for MtuResponse<'_, Channel>
-        where Channel: crate::gap::ConnectionChannel
+        where Channel: l2cap::ConnectionChannel
         {
             type Output = Result<u16, super::Error>;
 
@@ -298,6 +315,7 @@ impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
                 }
 
                 let this = self.get_mut();
+
                 match Pin::new(&mut this.rf).poll(cx) {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(pdu_rslt) => {
@@ -488,7 +506,7 @@ impl<C> Client<C> where C: crate::gap::ConnectionChannel + Unpin {
         let data = TransferFormat::into(&pdu);
 
         if self.mtu < data.len() {
-            self.channel.send(&data);
+            self.channel.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
             Ok(())
         } else {
             Err(super::Error::MtuExceeded)

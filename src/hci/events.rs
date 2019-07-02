@@ -650,7 +650,7 @@ impl<UnpackErrorType> core::fmt::Debug for CommandDataErr<UnpackErrorType>
     where UnpackErrorType: core::fmt::Debug
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
-        (self as &core::fmt::Display).fmt(f)
+        (self as & dyn core::fmt::Display).fmt(f)
     }
 }
 
