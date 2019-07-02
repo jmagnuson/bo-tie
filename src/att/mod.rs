@@ -14,6 +14,11 @@ pub mod pdu;
 pub mod client;
 pub mod server;
 
+use crate::l2cap;
+
+const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
+    l2cap::ChannelIdentifier::LE(l2cap::LeUChannelIdentifier::AttributeProtocol);
+
 /// Attribute premission restriction
 ///
 /// Some attributes permissions are restrictions regarding reading and writing permissions. For
@@ -286,7 +291,7 @@ trait AnyAttribute {
 
     fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), pdu::Error>;
 
-    fn get_val_as_transfer_format<'a>(&'a self) -> &'a TransferFormat;
+    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat;
 }
 
 impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
@@ -353,7 +358,7 @@ mod test {
         }
     }
 
-    impl crate::gap::ConnectionChannel for Channel1 {
+    impl l2cap::ConnectionChannel for Channel1 {
 
         const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
 
@@ -379,7 +384,7 @@ mod test {
         }
     }
 
-    impl crate::gap::ConnectionChannel for Channel2 {
+    impl l2cap::ConnectionChannel for Channel2 {
 
         const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
 

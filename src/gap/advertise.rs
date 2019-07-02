@@ -451,7 +451,7 @@ pub mod flags {
     }
 }
 
-pub mod service_class_uuid {
+pub mod service_uuids {
     //! Service Class UUID Data Type
     //!
     //! The struct Services is the data type for the list of service class UUIDs.
@@ -460,6 +460,7 @@ pub mod service_class_uuid {
     use core::convert::{AsRef, AsMut};
     use core::iter::{IntoIterator, FromIterator};
     use super::*;
+    use crate::UUID;
 
     /// Internal trait for specifying the Data Type Value
     ///
@@ -540,16 +541,30 @@ pub mod service_class_uuid {
             }
         }
 
+        /// True if the list is a complete list of service UUIDs
         pub fn is_complete(&self) -> bool {
             self.complete
         }
 
         /// Add uuids to the list of uuids
         ///
-        /// Returns true if the uuid is added, otherwise returns false if the uuid is already in
-        /// the set.
-        pub fn insert(&mut self, uuid: T) -> bool {
-            self.set.insert(uuid)
+        /// This will only add UUIDs that can be converted to the respective size of the service
+        /// UUIDs in the list. If the UUID cannot be converted into such size, then false is
+        /// returned and the UUID is not added to the list.
+        pub fn add<E>(&mut self, uuid: UUID)
+        -> bool
+        where T: core::convert::TryFrom<UUID, Error=E>
+        {
+            if let Ok( uuid_val ) = core::convert::TryInto::<T>::try_into(uuid) {
+                self.set.insert(uuid_val);
+                true
+            } else {
+                false
+            }
+        }
+
+        fn direct_add(&mut self, v: T) {
+            self.set.insert(v);
         }
     }
 
@@ -587,18 +602,26 @@ pub mod service_class_uuid {
         }
     }
 
-    /// Using this constructs a new *complete* Services from the provided iterator
-    impl<T,B> FromIterator<T> for Services<B> where B: Ord, T: Into<B> {
-        fn from_iter<Iter>(iter: Iter) -> Self where Iter: IntoIterator<Item = T> {
-            let mut services = Self::new(true);
 
-            for i in iter {
-                services.insert(i.into());
+    macro_rules! impl_service_from_iterator {
+        ( $size:ty ) => {
+            impl<T> FromIterator<T> for Services<$size> where T: Into<$size> {
+                fn from_iter<Iter>(iter: Iter) -> Self where Iter: IntoIterator<Item = T> {
+                    let mut services = Self::new(true);
+
+                    for i in iter {
+                        services.direct_add(i.into());
+                    }
+
+                    services
+                }
             }
-
-            services
         }
     }
+
+    impl_service_from_iterator!{u16}
+    impl_service_from_iterator!{u32}
+    impl_service_from_iterator!{u128}
 
     macro_rules! impl_from_services {
         ( $uuid_type_to:ty, $( $uuid_type_from:ty),+ ) => {
@@ -612,7 +635,7 @@ pub mod service_class_uuid {
     }
 
     impl_from_services!{u128,u32,u16}
-    impl_from_services!{u32,u16,&u16} // todo double check that this is correct
+    impl_from_services!{u32,u16} // todo double check that this is correct
 
     macro_rules! impl_from_for_slice_with_complete {
         ( $type: ty ) => {

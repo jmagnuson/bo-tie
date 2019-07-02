@@ -8,6 +8,7 @@ use crate::{att, UUID};
 /// Characteristic Properties
 ///
 /// These are the properties that are part of the Characteristic Declaration
+#[derive(Clone,Copy,PartialEq,PartialOrd,Eq,Ord,Debug)]
 pub enum Properties {
     Broadcast,
     Read,

@@ -91,13 +91,10 @@ async fn advertise_setup<'a>(
     adv_flags.get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR).disable();
     adv_flags.get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR).disable();
 
-    // TODO add the Tx power, an example service UUID, and the slave connection interval range to
-    //      the advertising data.
-
     let mut adv_data = set_advertising_data::AdvertisingData::new();
 
-    adv_data.try_push(adv_name).unwrap();
     adv_data.try_push(adv_flags).unwrap();
+    adv_data.try_push(adv_name).unwrap();
 
     await!(set_advertising_enable::send(&hi, false)).unwrap();
 
@@ -185,8 +182,9 @@ fn handle_sig(
 
 fn main() {
     use futures::executor;
+    use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
-    simple_logging::log_to_stderr(log::LevelFilter::Info);
+    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let address = get_address().unwrap();
 
@@ -196,7 +194,6 @@ fn main() {
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
-    // Its fine for the setup to be blocked on b/c its fast to the user
     executor::block_on(advertise_setup(&interface, "Connection Test", address));
 
     // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done

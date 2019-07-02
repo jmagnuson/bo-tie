@@ -20,8 +20,9 @@ features = ["i128"]
 simple-signal= "1.1.1"
 lazy_static = "^1.1"
 getopts = "^0.2"
-futures-preview = { version = "0.3.0-alpha.15" }
-simple-logging = "2.0.2"
+futures-preview = { version = "0.3.0-alpha.16" }
+simplelog = "0.6.0"
+rand = "0.7.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 bo-tie-linux = { path = "crate-derivatives/bo-tie-linux"}

@@ -192,10 +192,10 @@ impl Error {
             0x0F => Error::InsufficientEncryption,
             0x10 => Error::UnsupportedGroupType,
             0x11 => Error::InsufficientResources,
-            0x12 ... 0x7F => Error::Other(ErrorConversionError::Reserved(val)),
-            0x80 ... 0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
-            0xA0 ... 0xDF => Error::Other(ErrorConversionError::Reserved(val)),
-            0xE0 ... 0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
+            0x12 ..= 0x7F => Error::Other(ErrorConversionError::Reserved(val)),
+            0x80 ..= 0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
+            0xA0 ..= 0xDF => Error::Other(ErrorConversionError::Reserved(val)),
+            0xE0 ..= 0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
         }
     }
 

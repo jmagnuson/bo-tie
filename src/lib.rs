@@ -1,8 +1,5 @@
 #![feature(arbitrary_self_types)]
-#![feature(async_await)]
-#![feature(await_macro)]
 #![cfg_attr(test, feature(test))]
-#![cfg_attr(test, feature(gen_future))]
 
 #![cfg_attr(not(test),no_std)]
 
@@ -21,10 +18,11 @@ extern crate test;
 )), no_core)]
 extern crate core;
 
-pub mod hci;
-pub mod gap;
 pub mod att;
+pub mod gap;
 pub mod gatt;
+pub mod hci;
+pub mod l2cap;
 
 pub type BluetoothDeviceAddress = [u8; 6];
 

@@ -15,7 +15,7 @@ use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
-use core::task::Poll;
+use core::task::{ Poll, Waker };
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -82,6 +82,184 @@ impl<F> EventMatcher for F where F: Fn( &events::EventsData ) -> bool + Sized + 
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum AclPacketBoundry {
+    FirstNonFlushable,
+    ContinuingFragment,
+    FirstAutoFlushable,
+    CompleteL2capPdu,
+}
+
+impl AclPacketBoundry {
+
+    /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
+    /// data packet. The returned value is in host byte order.
+    fn get_shifted_val(&self) -> u16 {
+        ( match self {
+            AclPacketBoundry::FirstNonFlushable => 0x0,
+            AclPacketBoundry::ContinuingFragment => 0x1,
+            AclPacketBoundry::FirstAutoFlushable => 0x2,
+            AclPacketBoundry::CompleteL2capPdu => 0x3,
+        } ) >> 12
+    }
+
+    /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
+    /// need to be in host byte order.
+    fn from_shifted_val(val: u16) -> Self {
+        match (val << 12) & 3  {
+            0x0 => AclPacketBoundry::FirstNonFlushable,
+            0x1 => AclPacketBoundry::ContinuingFragment,
+            0x2 => AclPacketBoundry::FirstAutoFlushable,
+            0x3 => AclPacketBoundry::CompleteL2capPdu,
+            _ => panic!("This cannot happen"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AclBroadcastFlag {
+    // Point-to-point message
+    NoBroadcast,
+    // Broadcast to all active slaves
+    ActiveSlaveBroadcast,
+}
+
+impl AclBroadcastFlag {
+
+    /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
+    /// data packet. The returned value is in host byte order.
+    fn get_shifted_val(&self) -> u16 {
+        ( match self {
+            AclBroadcastFlag::NoBroadcast => 0x0,
+            AclBroadcastFlag::ActiveSlaveBroadcast => 0x1,
+        } ) >> 14
+    }
+
+    /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
+    /// need to be in host byte order.
+    fn try_from_shifted_val(val: u16) -> Result<Self, ()> {
+        match (val << 14) & 1  {
+            0x0 => Ok(AclBroadcastFlag::NoBroadcast),
+            0x1 => Ok(AclBroadcastFlag::ActiveSlaveBroadcast),
+            0x2 | 0x3 => Err( () ),
+            _ => panic!("This cannot happen"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum HciAclPacketConvertError {
+    PacketTooSmall,
+    InvalidBroadcastFlag,
+    InvalidConnectionHandle( &'static str ),
+}
+
+impl Display for HciAclPacketConvertError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            HciAclPacketConvertError::PacketTooSmall =>
+                write!(f, "Packet is too small to be a valid HCI ACL Data"),
+            HciAclPacketConvertError::InvalidBroadcastFlag =>
+                write!(f, "Packet has invalid broadcast Flag"),
+            HciAclPacketConvertError::InvalidConnectionHandle(reason) =>
+                write!(f, "Invalid connection handle, {}", reason),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct HciAclData {
+    connection_handle: common::ConnectionHandle,
+    packet_boundry_flag: AclPacketBoundry,
+    broadcast_flag: AclBroadcastFlag,
+    data: alloc::boxed::Box<[u8]>,
+}
+
+impl HciAclData {
+
+    pub fn new(
+        connection_handle: common::ConnectionHandle,
+        packet_boundry_flag: AclPacketBoundry,
+        broadcast_flag: AclBroadcastFlag,
+        data: alloc::boxed::Box<[u8]>
+    ) -> Self
+    {
+        HciAclData { connection_handle, packet_boundry_flag, broadcast_flag, data }
+    }
+
+    pub fn get_handle(&self) -> &common::ConnectionHandle {
+        &self.connection_handle
+    }
+
+    pub fn get_data(&self) -> &[u8] { &self.data }
+
+    pub fn get_packet_boundry_flag(&self) -> AclPacketBoundry { self.packet_boundry_flag }
+
+    pub fn get_broadcast_flag(&self) -> AclBroadcastFlag { self.broadcast_flag }
+
+    /// Convert the HciAclData into a packet
+    ///
+    /// This will convert HciAclData into a packet that can be sent between the host and controller.
+    ///
+    /// # Panics (TODO to remove)
+    /// For now this panics if the length of data is greater then 2^16 because this library only
+    /// supports LE.
+    pub fn into_packet(&self) -> alloc::boxed::Box<[u8]> {
+        let mut v = alloc::vec::Vec::with_capacity( self.data.len() + 4 );
+
+        let first_2_bytes = self.connection_handle.get_raw_handle()
+            | self.packet_boundry_flag.get_shifted_val()
+            | self.broadcast_flag.get_shifted_val();
+
+        v.extend_from_slice( &first_2_bytes.to_le_bytes() );
+
+        v.extend_from_slice( &(self.data.len() as u16).to_le_bytes() );
+
+        v.extend_from_slice(&self.data);
+
+        v.into_boxed_slice()
+    }
+
+
+    /// Attempt to create a `HciAclData`
+    ///
+    /// A `HciAclData` is created if the packet is in the correct HCI ACL data packet format. If
+    /// not, then an error is returned.
+    pub fn from_packet(packet: &[u8]) -> Result<Self, HciAclPacketConvertError> {
+        if packet.len() >= 4 {
+            let first_2_bytes = <u16>::from_le_bytes( [ packet[0], packet[1] ] );
+
+            let connection_handle = match common::ConnectionHandle::try_from( first_2_bytes & 0xFFF) {
+                Ok(handle) => handle,
+                Err(e) => return Err( HciAclPacketConvertError::InvalidConnectionHandle(e) ),
+            };
+
+            let packet_boundry_flag = AclPacketBoundry::from_shifted_val( first_2_bytes );
+
+            let broadcast_flag = match AclBroadcastFlag::try_from_shifted_val( first_2_bytes ) {
+                Ok(flag) => flag,
+                Err(_) => return Err( HciAclPacketConvertError::InvalidBroadcastFlag ),
+            };
+
+            let length = <u16>::from_le_bytes( [ packet[0], packet[1] ] ) as usize;
+
+            Ok(
+                HciAclData {
+                    connection_handle: connection_handle,
+                    packet_boundry_flag: packet_boundry_flag,
+                    broadcast_flag: broadcast_flag,
+                    data: alloc::boxed::Box::from( &packet[2..length] ),
+                }
+            )
+
+        } else {
+            Err( HciAclPacketConvertError::PacketTooSmall )
+        }
+    }
+}
+
 /// Trait for interfacing with the controller
 ///
 ///
@@ -135,7 +313,7 @@ pub trait HostControllerInterface
     /// is used to wake the context for the command to be resent.
     fn send_command<D,W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
     where D: CommandParameter,
-          W: Into<Option<core::task::Waker>>;
+          W: Into<Option<Waker>>;
 
     /// Receive an event from the Bluetooth controller
     ///
@@ -153,9 +331,59 @@ pub trait HostControllerInterface
     /// it will call wake when the event has been received after the method is called or a timeout
     /// occurs (if available). At which point the function must be called again to receive the
     /// EventData.
-    fn receive_event<P>(&self, event: events::Events, waker: core::task::Waker, matcher: Pin<Arc<P>>, timeout: Option<Duration>)
-    -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+    fn receive_event<P>(
+        &self,
+        event: events::Events,
+        waker: Waker,
+        matcher: Pin<Arc<P>>,
+        timeout: Option<Duration>
+    ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     where P: EventMatcher + Send + Sync + 'static;
+}
+
+/// HCI ACL Data interface
+///
+/// This is the trait that must be implemented by the platform specific HCI structure.
+pub trait HciAclDataInterface {
+    type SendACLDataError: Debug + Display;
+    type ReceiveACLDataError: Debug + Display;
+
+    /// Send ACL data
+    ///
+    /// This will send ACL data to the controller for sending to the connected bluetooth device
+    fn send(
+        &self,
+        data: HciAclData,
+    ) -> Result<(), Self::SendACLDataError>;
+
+    /// Register a handle for receiving ACL packets
+    ///
+    /// Unlike events, it can be unpredictable if data will be received by the controller while
+    /// this API is waiting for it. There may be times where data sent from the controller
+    /// to the host and there is nothing to receive it. Lower level implementations should utilize
+    /// this function to enable buffers for each connection handle.
+    ///
+    /// The `receive_acl_data` function will be called afterwards to acquire the buffered data,
+    /// however the buffer needs to still exist
+    fn start_receiver(&self, handle: common::ConnectionHandle);
+
+    /// Unregister a handle for receiving ACL packets
+    ///
+    /// This will be called once there will be no more ACL packets to be received or the user no
+    /// longer cares about receiving ACL packets. Once this is called any buffers can be dropped
+    /// that are associated with the given handle.
+    fn stop_receiver(&self, handle: &common::ConnectionHandle);
+
+    /// Receive ACL data
+    ///
+    /// Receive data from the controller for the given connection handle. If no data is available
+    /// to be received then None will be returned and the provided waker will be used when the next
+    /// ACL data is received.
+    fn receive(
+        &self,
+        handle: &common::ConnectionHandle,
+        waker: Waker,
+    ) -> Result<alloc::boxed::Box<[HciAclData]>, Self::ReceiveACLDataError>;
 }
 
 enum SendCommandError<I> where I: HostControllerInterface {
@@ -252,15 +480,22 @@ P: EventMatcher + Send + Sync + 'static
 /// This is used by the host to interact with the interface between itself and the Bluetooth
 /// Controller.
 #[derive(Clone)]
-pub struct HostInterface<I> where I: HostControllerInterface
+pub struct HostInterface<I>
 {
     interface: I
 }
 
-impl<I> From<I> for HostInterface<I> where I: HostControllerInterface
+impl<I> From<I> for HostInterface<I>
 {
     fn from(interface: I) -> Self {
         HostInterface { interface }
+    }
+}
+
+impl<T> ::core::default::Default for HostInterface<T> where T: Default {
+
+    fn default() -> Self {
+        HostInterface { interface: T::default() }
     }
 }
 
@@ -394,10 +629,93 @@ where I: HostControllerInterface
     }
 }
 
-impl<T> ::core::default::Default for HostInterface<T> where T: HostControllerInterface + Default {
+pub struct HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
+    handle: common::ConnectionHandle,
+    interface: &'a I
+}
 
-    fn default() -> Self {
-        HostInterface { interface: <T as Default>::default() }
+impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
+
+    fn new(interface: &'a I, handle: common::ConnectionHandle) -> Self {
+
+        interface.start_receiver(handle);
+
+        HciAclDataReceiver { handle, interface }
+    }
+
+    /// Get the data (if any) right now
+    ///
+    /// This is used by the
+    /// [`AclHciChannel`](./bo_tie/gap/AclHciChannel)
+    /// If there is no data to receive (and no errors occured), then `None` is returned
+    pub(crate) fn now(&self, waker: Waker)
+    -> Option<Result<alloc::boxed::Box<[HciAclData]>, I::ReceiveACLDataError>>
+    {
+        match self.interface.receive( &self.handle, waker ) {
+            Ok( data ) => if data.len() != 0 { Some( Ok( data ) ) } else { None },
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    /// Get a future receivier for acquiring the next received ACL data.
+    ///
+    /// This returns a future that can be used to get the received data.
+    pub fn future_receive(&self)
+    -> impl Future<Output=Result<alloc::boxed::Box<[HciAclData]>, I::ReceiveACLDataError>> + 'a {
+        struct FutureReturn<'a, HI> where HI: HciAclDataInterface {
+            handle: common::ConnectionHandle,
+            interface: &'a HI
+        }
+
+        impl<'a, HI> Future for FutureReturn<'a, HI> where HI: HciAclDataInterface {
+            type Output = Result<alloc::boxed::Box<[HciAclData]>, HI::ReceiveACLDataError>;
+
+            fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context)
+            -> Poll<Self::Output>
+            {
+                match self.interface.receive( &self.handle, cx.waker().clone() ) {
+                    Ok(buffers) => if buffers.len() != 0 {
+                            Poll::Ready(Ok(buffers))
+                        } else {
+                            Poll::Pending
+                        },
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
+        }
+
+        FutureReturn {
+            handle: self.handle,
+            interface: self.interface,
+        }
+    }
+}
+
+impl<'a,I> core::ops::Drop for HciAclDataReceiver<'a,I> where I: HciAclDataInterface {
+    fn drop(&mut self) {
+        self.interface.stop_receiver(&self.handle)
+    }
+}
+
+impl<I> HostInterface<I> where I: HciAclDataInterface {
+
+    /// Send ACL data
+    pub fn send_data<D>(&self, data: D )
+    -> Result<(), I::SendACLDataError>
+    where D: Into<HciAclData>
+    {
+        self.interface.send( data.into() )
+    }
+
+    /// Create a Buffered Receiver
+    ///
+    /// A buffered receiver will queue received ACL data in the order in which they are received.
+    /// The buffer will exist, and continue to queue received ACL packets, for the lifetime of the
+    /// return.
+    pub fn buffered_receiver<'a>(&'a self, connection_handle: common::ConnectionHandle)
+    -> HciAclDataReceiver<'a,I>
+    {
+        HciAclDataReceiver::new(&self.interface, connection_handle)
     }
 }
 
@@ -531,7 +849,7 @@ macro_rules! impl_command_data_future {
                 };
 
                 match unsafe {
-                    (&data as &crate::hci::events::GetDataForCommand<$data_type>)
+                    (&data as &dyn crate::hci::events::GetDataForCommand<$data_type>)
                         .get_return()
                 } {
                     Ok(Some(ret_val)) => core::task::Poll::Ready(Ok(ret_val)),

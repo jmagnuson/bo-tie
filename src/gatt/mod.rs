@@ -2,7 +2,7 @@ use alloc::{
     boxed::Box,
     vec::Vec,
 };
-use crate::{att, gap, UUID};
+use crate::{ att, l2cap, UUID};
 
 pub mod characteristic;
 
@@ -318,7 +318,8 @@ impl ServerBuilder
         }
     }
 
-    pub fn construct_service<'a>(&'a mut self, service_type: UUID, is_primary: bool)
+    /// Create a service constructor
+    pub fn new_service_constructor<'a>(&'a mut self, service_type: UUID, is_primary: bool)
     -> ServiceBuilder<'a>
     {
         ServiceBuilder::new(&mut self.attributes, service_type, is_primary)
@@ -329,8 +330,8 @@ impl ServerBuilder
     /// Construct an server from the server builder.
     pub fn make_server<C,Mtu>(self, connection_channel: C, server_mtu: Mtu)
     -> att::server::Server<C>
-    where C: gap::ConnectionChannel,
-          Mtu: Into<u16>
+    where C: l2cap::ConnectionChannel,
+          Mtu: Into<Option<u16>>
     {
         att::server::Server::new(connection_channel, server_mtu.into(), Some(self.attributes))
     }
@@ -341,7 +342,7 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::gap::ConnectionChannel;
+    use crate::l2cap::ConnectionChannel;
     use crate::UUID;
 
     struct DummyConnection;
@@ -358,7 +359,7 @@ mod tests {
 
         let mut server_builder = ServerBuilder::new();
 
-        let test_service_1 = server_builder.construct_service( UUID::from_u16(0x1234), false )
+        let test_service_1 = server_builder.into_service_constructor( UUID::from_u16(0x1234), false )
             .into_characteristics_adder()
             .build_characteristic(
                 vec!(characteristic::Properties::Read),
@@ -376,7 +377,7 @@ mod tests {
             .finish_characteristic()
             .finish_service();
 
-        let _test_service_2 = server_builder.construct_service( UUID::from_u16(0x3456), true )
+        let _test_service_2 = server_builder.into_service_constructor( UUID::from_u16(0x3456), true )
             .into_includes_adder()
             .include_service(&test_service_1)
             .finish_service();
