@@ -57,15 +57,22 @@ impl ConnectionInterval {
     pub const MIN: u16 = 0x000C;
     pub const MAX: u16 = 0x0C80;
 
-    /// For internal use
+    /// Try to create a ConnectionInterval from HCI data event from the controller.
     ///
     /// Used for events coming from the controller and it is assumed that the controller
-    /// is not defective
-    pub(crate) fn from(raw: u16) -> Self {
-        debug_assert!( raw >= Self::MIN && raw <= Self::MAX );
+    /// is not defective.
+    pub(crate) fn try_from_received(raw: u16) -> Result<Self, alloc::string::String> {
+        if raw >= Self::MIN && raw <= Self::MAX {
 
-        ConnectionInterval {
-            interval: raw,
+            let ci = ConnectionInterval {
+                interval: raw,
+            };
+
+            Ok(ci)
+
+        } else {
+            Err( alloc::format!("Invalid Interval: 0x{:04X}, Acceptable range: 0x{:04X}..=0x{:04X}",
+                raw, Self::MIN, Self::MAX) )
         }
     }
 

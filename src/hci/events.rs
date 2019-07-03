@@ -2362,7 +2362,7 @@ impl LEConnectionCompleteData {
             role: LERole::try_from(chew!(packet))?,
             peer_address_type: LEConnectionAddressType::try_from(chew!(packet))?,
             peer_address: chew_baddr!(packet),
-            connection_interval: ConnectionInterval::from(chew_u16!(packet)),
+            connection_interval: ConnectionInterval::try_from_received(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
             supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
@@ -2496,7 +2496,7 @@ impl LEConnectionUpdateCompleteData {
         Ok(LEConnectionUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            connection_interval: ConnectionInterval::from(chew_u16!(packet)),
+            connection_interval: ConnectionInterval::try_from_received(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
             supervision_timeout: SupervisionTimeout::from(chew_u16!(packet))
         })
