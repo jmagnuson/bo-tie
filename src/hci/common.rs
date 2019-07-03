@@ -54,7 +54,7 @@ pub struct ConnectionInterval {
 
 impl ConnectionInterval {
     const CNV: u64 = 1250; // unit: microseconds
-    pub const MIN: u16 = 0x000C;
+    pub const MIN: u16 = 0x0006;
     pub const MAX: u16 = 0x0C80;
 
     /// Try to create a ConnectionInterval from HCI data event from the controller.
@@ -71,7 +71,7 @@ impl ConnectionInterval {
             Ok(ci)
 
         } else {
-            Err( alloc::format!("Invalid Interval: 0x{:04X}, Acceptable range: 0x{:04X}..=0x{:04X}",
+            Err( alloc::format!("Invalid Connection Interval: 0x{:04X}, Acceptable range: 0x{:04X}..=0x{:04X}",
                 raw, Self::MIN, Self::MAX) )
         }
     }

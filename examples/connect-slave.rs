@@ -11,10 +11,18 @@
 //! There is no security implemented in this example, but no data is exposed either. Be careful
 //! when extending/using this example for your purposes.
 //!
-//! # Note
+//! # Important Notes
 //! Super User privaleges may be required to interact with your bluetooth peripheral. To do will
 //! probably require the full path to cargo. The cargo binary is usually locacted in your home
 //! directory at `.cargo/bin/cargo`.
+//!
+//! This example assumes there isn't any bonding/caching between the device that is to be connected
+//! with this example. This will cause the the example to get stuck and eventually time out waiting
+//! to connect to the device. If this occurs, using a different random address should work (or
+//! power cycle the bluetooth controller to get a newly generated default random address). If
+//! there are still problems, delete the cache, whitelist, and any other memory associted with the
+//! bluetooth on the device to connect with, but please note this will git rid of all information
+//! associated with the bluetooth and other devices will need to be reconnected.
 
 #![feature(async_await)]
 #![feature(await_macro)]
@@ -27,7 +35,6 @@ use bo_tie::hci::le::transmitter::{
     set_advertising_data,
     set_advertising_parameters,
     set_advertising_enable,
-    set_random_address,
 };
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Duration;
@@ -36,49 +43,10 @@ use std::time::Duration;
 /// from the controller to the user.
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
-fn get_address() -> Result<Option<bo_tie::BluetoothDeviceAddress>, String> {
-    use std::io::stdin;
-    use std::io::BufRead;
-
-    println!("Input the bluetooth address in the format of XX:XX:XX:XX:XX:XX (most significant \
-        byte -> least significant) to set the random address or hit enter to use the default");
-
-    let mut buffer = String::new();
-
-    let stdin = stdin();
-
-    stdin.lock().read_line(&mut buffer).expect("Couldn't read input from terminal");
-
-    if (buffer.len() == 1 && buffer.ends_with('\n')) ||
-       (buffer.len() == 2 && buffer.ends_with("\r\n"))
-    {
-        Ok( None )
-    } else {
-
-        let adr_vec = buffer.rsplit(":")
-            .map(|v| {
-                u8::from_str_radix(v.trim(), 16).expect("Couldn't convert bluetooth address")
-            })
-            .collect::<Vec<u8>>();
-
-        if adr_vec.len() == 6 {
-            let mut address = bo_tie::BluetoothDeviceAddress::default();
-
-            address.copy_from_slice(adr_vec.as_slice());
-
-            Ok( Some(address) )
-        }
-        else {
-            Err(format!("{} is not an address in the form of XX:XX:XX:XX:XX:XX", buffer))
-        }
-    }
-}
-
 /// This sets up the advertising and waits for the connection complete event
 async fn advertise_setup<'a>(
     hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    local_name: &'a str,
-    rand_address: Option<bo_tie::BluetoothDeviceAddress> )
+    local_name: &'a str )
 {
     let adv_name = advertise::local_name::LocalName::new(local_name, false);
 
@@ -103,10 +71,6 @@ async fn advertise_setup<'a>(
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
-
-    if let Some(address) = rand_address {
-        await!(set_random_address::send(&hi, address)).unwrap()
-    }
 
     await!(set_advertising_parameters::send(&hi, adv_prams)).unwrap();
 
@@ -175,7 +139,13 @@ fn handle_sig(
                 let handle = bo_tie::hci::common::ConnectionHandle::try_from(handle_val).expect("Incorrect Handle");
 
                 futures::executor::block_on(disconnect(&hi, handle));
+
+                println!("Bluetooth connection terminated")
             }
+
+            println!("Exiting example");
+
+            std::process::exit(0);
         }
     );
 }
@@ -184,9 +154,7 @@ fn main() {
     use futures::executor;
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
-    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
-
-    let address = get_address().unwrap();
+    TermLogger::init( LevelFilter::Info, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
@@ -194,7 +162,7 @@ fn main() {
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
-    executor::block_on(advertise_setup(&interface, "Connection Test", address));
+    executor::block_on(advertise_setup(&interface, "Connection Test"));
 
     // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
     // on a different thread.
