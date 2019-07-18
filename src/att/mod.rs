@@ -9,6 +9,7 @@
 //! (version 5.0), Vol. 3, Part F.
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 pub mod pdu;
 pub mod client;
@@ -19,19 +20,49 @@ use crate::l2cap;
 const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUChannelIdentifier::AttributeProtocol);
 
+/// Avanced Encryption Standard (AES) key sizes
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum EncryptionKeySize {
+    Bits128,
+    Bits192,
+    Bits256,
+}
+
+impl EncryptionKeySize {
+    /// Used to force an ordering such that Bits128 < Bits192 < Bits256
+    fn forced_order_val(&self) -> usize {
+        match self {
+            EncryptionKeySize::Bits128 => 0,
+            EncryptionKeySize::Bits192 => 1,
+            EncryptionKeySize::Bits256 => 2,
+        }
+    }
+}
+
+impl PartialOrd for EncryptionKeySize {
+    fn partial_cmp(&self, other: &EncryptionKeySize) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EncryptionKeySize {
+    fn cmp(&self, other: &EncryptionKeySize) -> core::cmp::Ordering {
+        self.forced_order_val().cmp(&other.forced_order_val())
+    }
+}
+
 /// Attribute premission restriction
 ///
 /// Some attributes permissions are restrictions regarding reading and writing permissions. For
 /// those permissions this enum will be used to specify whether the restriction is for reading,
 /// writing, or both.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum AttributeRestriction {
     Read,
-    Write,
-    ReadAndWrite
+    Write
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum AttributePermissions {
     /// Readable attributes
     Read,
@@ -40,7 +71,8 @@ pub enum AttributePermissions {
     /// Encryption Requirement
     ///
     /// Encryption is required to access the specified attribute permission(s)
-    Encryption(AttributeRestriction),
+    /// A minimum key size may also be requred to access the specified
+    Encryption(AttributeRestriction, EncryptionKeySize),
     /// Authentication Requirement
     ///
     /// Authentication is required to access the specified attribute permission(s)
@@ -93,13 +125,25 @@ pub struct Attribute<V> {
 }
 
 impl<V> Attribute<V> {
-    pub fn new( attribute_type: crate::UUID, permissions: Box<[AttributePermissions]>, value: V)
+
+    /// Create an Attribute
+    ///
+    /// There are four components to an attribute, the type of the attribute, the handle of the
+    /// attribute, the access permissions of the attribute, and the value of it. Every part except
+    /// for the handle is assigned with the inputs. The handle will be set once the attribute is
+    /// pushed on to the server.
+    ///
+    /// Ihe input 'permissions' will have all duplicates removed.
+    pub fn new( attribute_type: crate::UUID, mut permissions: Vec<AttributePermissions>, value: V)
     -> Self
     {
+        permissions.sort();
+        permissions.dedup();
+
         Attribute {
             ty: attribute_type,
             handle: None,
-            permissions: permissions,
+            permissions: permissions.into_boxed_slice(),
             value: value,
         }
     }
@@ -118,7 +162,9 @@ pub enum Error {
     /// The only error information gathered is the PDU Error type
     Only(pdu::Error),
     /// A different pdu was expected
-    UnexpectedPdu
+    ///
+    /// This contains the opcode value of the unexpectedly received pdu
+    UnexpectedPdu(u8)
 }
 
 impl From<pdu::Error> for Error {
@@ -218,7 +264,6 @@ impl TransferFormat for crate::UUID {
 impl<T> TransferFormat for Box<[T]> where T: TransferFormat {
 
     fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
-        use alloc::vec::Vec;
         use core::mem::size_of;
 
         let mut chunks = raw.chunks_exact(size_of::<T>());

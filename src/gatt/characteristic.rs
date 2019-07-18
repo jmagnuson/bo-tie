@@ -352,7 +352,7 @@ where V: att::TransferFormat + Sized + Unpin + 'static
 
         let value = Attribute::new(
             self.value_decl.att_type,
-            self.value_decl.permissions.into_boxed_slice(),
+            self.value_decl.permissions,
             self.value_decl.value
         );
 
@@ -373,7 +373,7 @@ where V: att::TransferFormat + Sized + Unpin + 'static
             last_attr = attributes.push(
                 Attribute::new(
                     UserDescription::TYPE,
-                    desc.permissions.into_boxed_slice(),
+                    desc.permissions,
                     desc.value
                 )
             );

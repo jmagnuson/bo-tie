@@ -116,7 +116,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
             let bytes = att_packet.get_payload();
 
             // Check for a ExchangeMTUResponse PDU
-            let rslt = if bytes.len() == 3 && bytes[0] == From::from(ServerPduName::ExchangeMTUResponse)
+            if ServerPduName::ExchangeMTUResponse.is_convertable_from(bytes)
             {
                 match TransferFormat::from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
@@ -135,18 +135,35 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
                     }
                 }
 
-            } else if bytes.len() == 5 && bytes[1] == From::from(ServerPduName::ErrorResponse) {
+            } else if ServerPduName::ErrorResponse.is_convertable_from(bytes) {
 
-                // Return error code if received error PDU
-                Err( pdu::Error::from_raw(bytes[4]).into() )
+                match pdu::Error::from_raw(bytes[4]) {
 
+                    // Per the Spec (Core v5.0, Vol 3, part F, 3.4.9), this should be the only
+                    // error type received
+                    pdu::Error::RequestNotSupported => {
+
+                        // Log that exhange MTU is not supported by the server, and return a client
+                        // with the default MTU as its sizing
+
+                        log::info!("Server doesn't support 'MTU exchange'; default MTU of {} \
+                            bytes is used", Ch::DEFAULT_ATT_MTU);
+
+                        let client = Client {
+                            mtu: Ch::DEFAULT_ATT_MTU as usize,
+                            channel: this.channel.take().expect("Not channel to take"),
+                        };
+
+                        Ok(client)
+                    }
+
+                    e @ _ => Err( e.into() )
+                }
             } else {
 
                 Err( pdu::Error::InvalidPDU.into() )
 
-            };
-
-            Poll::Ready(rslt)
+            }.into()
 
         } else {
 
@@ -211,7 +228,7 @@ where Ch: l2cap::ConnectionChannel,
                             Err(e)  => Poll::Ready(Err(e.into())),
                         }
                     },
-                    Ok(_) => Poll::Ready(Err( super::Error::UnexpectedPdu )),
+                    Ok(_) => Poll::Ready(Err( super::Error::UnexpectedPdu(bytes[0]) )),
                     Err(_) => Poll::Ready(Err( pdu::Error::InvalidPDU.into() )),
                 }
             } else {

@@ -154,7 +154,7 @@ fn main() {
     use futures::executor;
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
-    TermLogger::init( LevelFilter::Info, Config::default(), TerminalMode::Mixed ).unwrap();
+    TermLogger::init( LevelFilter::Debug, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
@@ -172,7 +172,7 @@ fn main() {
 
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
-            loop { std::thread::park(); }
+            executor::block_on(interface.wait_for_event(events::Events::DisconnectionComplete, None)).ok();
         },
         Err(err) => println!("Error: {}", err),
     };

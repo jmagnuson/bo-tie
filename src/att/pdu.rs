@@ -388,8 +388,8 @@ pub fn exchange_mtu_response(mtu: u16) -> Pdu<u16> {
 /// 1 is used as the value for the starting handle.
 #[derive(Clone)]
 pub struct HandleRange {
-    starting_handle: u16,
-    ending_handle: u16
+    pub starting_handle: u16,
+    pub ending_handle: u16
 }
 
 impl TransferFormat for HandleRange {
@@ -682,8 +682,8 @@ pub fn find_by_type_value_response( type_values: Box<[TypeValueResponse]> )
 /// The parameter for the type request ATT PDU
 #[derive(Clone)]
 pub struct TypeRequest {
-    handle_range: HandleRange,
-    attr_type: crate::UUID,
+    pub handle_range: HandleRange,
+    pub attr_type: crate::UUID,
 }
 
 impl TransferFormat for TypeRequest {
