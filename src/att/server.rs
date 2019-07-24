@@ -470,7 +470,7 @@ where C: l2cap::ConnectionChannel
 
             let data = TransferFormat::into(&pdu);
 
-            self.connection.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
+            self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
 
             Some(())
         } )
@@ -496,7 +496,7 @@ where C: l2cap::ConnectionChannel
 
         let data = TransferFormat::into(&err_pdu);
 
-        self.connection.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
+        self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
     }
 
     fn process_exchange_mtu_request(&mut self, pdu: pdu::Pdu<u16>) {
@@ -510,7 +510,7 @@ where C: l2cap::ConnectionChannel
 
         let data = TransferFormat::into(&response_pdu);
 
-        self.connection.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID) );
+        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID) );
     }
 
     fn process_read_request(&mut self, pdu: pdu::Pdu<u16>) {
@@ -522,7 +522,7 @@ where C: l2cap::ConnectionChannel
 
             data.extend_from_slice( &attribute.get_val_as_transfer_format().into() );
 
-            let acl_data = l2cap::AclData::new( data.into_boxed_slice(), super::L2CAP_CHANNEL_ID );
+            let acl_data = l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID );
 
             self.connection.send( acl_data );
         } else {
@@ -546,7 +546,7 @@ where C: l2cap::ConnectionChannel
                 match data.set_val_from_raw( raw_data ) {
                     Ok(_) => {
                         let data = TransferFormat::into(&pdu::write_response());
-                        self.connection.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
+                        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
                     },
                     Err(pdu_err) =>
                         self.send_pdu_error(handle, received_opcode, pdu_err),
@@ -563,7 +563,7 @@ where C: l2cap::ConnectionChannel
 
             let data = TransferFormat::into(&err_pdu);
 
-            self.connection.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
+            self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
         }
     }
 
@@ -694,7 +694,7 @@ where C: l2cap::ConnectionChannel
 
                         let data = vec.into_boxed_slice();
 
-                        self.connection.send( l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ));
+                        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ));
 
                         Ok(())
                     })
@@ -792,7 +792,7 @@ where C: l2cap::ConnectionChannel
 
                     self.connection.send(
                         l2cap::AclData::new(
-                            handles_information_list.into_boxed_slice(),
+                            handles_information_list,
                             super::L2CAP_CHANNEL_ID
                         )
                     );
@@ -936,7 +936,7 @@ where C: l2cap::ConnectionChannel
                 if read_by_type_response.len() > 1 {
 
                     self.connection.send( l2cap::AclData::new(
-                        read_by_type_response.into_boxed_slice(),
+                        read_by_type_response,
                         super::L2CAP_CHANNEL_ID
                     ));
 

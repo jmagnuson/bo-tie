@@ -1,7 +1,6 @@
 /// Logical Link Control and Adaption protocol (L2CAP)
 
 use alloc::{
-    boxed::Box,
     vec::Vec,
 };
 use crate::hci;
@@ -16,18 +15,34 @@ use crate::hci;
 /// See Bluetooth Specification V5 | Vol 3, Part A Section 2.1
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub enum ChannelIdentifier {
+    NullIdentifier,
     /// LE User (Logical link) identifiers
-    LE(LeUChannelIdentifier)
+    LE(LeUserChannelIdentifier)
 }
 
 impl ChannelIdentifier {
-    fn to_val(&self) -> u16 {
+    /// Convert to the numerical value
+    ///
+    /// The returned value is in *native byte order*
+    pub fn to_val(&self) -> u16 {
         match self {
-            ChannelIdentifier::LE(ci) => ci.to_val()
+            ChannelIdentifier::NullIdentifier => 0,
+            ChannelIdentifier::LE(ci) => ci.to_val(),
         }
+    }
+
+    /// Try to convert a raw value into a LeUserChannelIdentifier
+    ///
+    /// This function expects the input to be in *native byte order*
+    pub fn try_from_raw(val: u16) -> Result<Self, ()> {
+
+        // TODO add BR/EDR CI check
+
+        Ok(ChannelIdentifier::LE(LeUserChannelIdentifier::try_from_raw(val)?))
     }
 }
 
+/// Dynamicly created l2cap channel
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct DynChannelId {
     channel_id: u16
@@ -44,25 +59,25 @@ impl DynChannelId {
     /// Create a new Dynamic Channel identifer for the LE-U CID name space
     ///
     /// This will return the enum
-    /// [`DynamicallyAllocated`](../enum.LeUChannelIdentifier.html#variant.DynamicallyAllocated)
+    /// [`DynamicallyAllocated`](../enum.LeUserChannelIdentifier.html#variant.DynamicallyAllocated)
     /// with the `channel_id` if the id is within the bounds of
     /// [`LE_LOWER`](#const.LE_LOWER) and
     /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
     /// returned containing the infringing input value.
-    pub fn new_le( channel_id: u16 ) -> Result< LeUChannelIdentifier, u16 > {
+    pub fn new_le( channel_id: u16 ) -> Result< LeUserChannelIdentifier, u16 > {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok( LeUChannelIdentifier::DynamicallyAllocated( DynChannelId::new(channel_id) ) )
+            Ok( LeUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(channel_id) ) )
         } else {
             Err( channel_id )
         }
     }
 }
 
-/// LE-U Channel Identifiers
+/// LE User (LE-U) Channel Identifiers
 ///
 /// These are the channel identifiers for a LE
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-pub enum LeUChannelIdentifier {
+pub enum LeUserChannelIdentifier {
     /// Channel for the Attribute Protocol
     ///
     /// This channel is used for the attribute protocol, which also means that all GATT data will
@@ -85,32 +100,37 @@ pub enum LeUChannelIdentifier {
     DynamicallyAllocated(DynChannelId)
 }
 
-impl LeUChannelIdentifier {
+impl LeUserChannelIdentifier {
+
     fn to_val(&self) -> u16 {
         match self {
-            LeUChannelIdentifier::AttributeProtocol => 0x4,
-            LeUChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
-            LeUChannelIdentifier::SecurityManagerProtocl => 0x6,
-            LeUChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
+            LeUserChannelIdentifier::AttributeProtocol => 0x4,
+            LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
+            LeUserChannelIdentifier::SecurityManagerProtocl => 0x6,
+            LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
     }
 
-    fn from_raw(val: u16) -> Result<Self, ()>  {
+    fn try_from_raw(val: u16) -> Result<Self, ()>  {
         match val {
-            0x4 => Ok( LeUChannelIdentifier::AttributeProtocol ),
-            0x5 => Ok( LeUChannelIdentifier::LowEnergyL2CAPSignalingChannel ),
-            0x6 => Ok( LeUChannelIdentifier::SecurityManagerProtocl ),
+            0x4 => Ok( LeUserChannelIdentifier::AttributeProtocol ),
+            0x5 => Ok( LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel ),
+            0x6 => Ok( LeUserChannelIdentifier::SecurityManagerProtocl ),
             _ if DynChannelId::LE_BOUNDS.contains(&val) =>
-                Ok( LeUChannelIdentifier::DynamicallyAllocated( DynChannelId::new(val) ) ),
+                Ok( LeUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(val) ) ),
             _ => Err(()),
         }
     }
 }
 
+/// Acl Data Errors
 #[derive(Debug)]
 pub enum AclDataError {
+    /// Raw data is too small for an ACL frame
     RawDataTooSmall,
+    /// Specified payload length didn't match the actual payload length
     PayloadLengthIncorrect,
+    /// Invalid Channel Id
     InvalidChannelId,
 }
 
@@ -129,11 +149,11 @@ impl core::fmt::Display for AclDataError {
 #[derive(Debug,Clone)]
 pub struct AclData {
     channel_id: ChannelIdentifier,
-    data: Box<[u8]>
+    data: Vec<u8>
 }
 
 impl AclData {
-    pub fn new( payload: Box<[u8]>, channel_id: ChannelIdentifier ) -> Self {
+    pub fn new( payload: Vec<u8>, channel_id: ChannelIdentifier ) -> Self {
         AclData {
             channel_id: channel_id,
             data: payload,
@@ -144,7 +164,7 @@ impl AclData {
 
     pub fn get_payload(&self) -> &[u8] { &self.data }
 
-    pub fn into_raw_data(&self) -> Box<[u8]> {
+    pub fn into_raw_data(&self) -> Vec<u8> {
         use core::convert::TryInto;
 
         let mut v = Vec::new();
@@ -157,7 +177,7 @@ impl AclData {
 
         v.extend_from_slice( &self.data );
 
-        v.into_boxed_slice()
+        v
     }
 
     /// Create an AclData struct from raw l2cap acl data
@@ -178,9 +198,9 @@ impl AclData {
             if payload.len() == len.try_into().expect("Cannot convert len to usize") {
                 Ok( Self {
                     channel_id: ChannelIdentifier::LE(
-                        LeUChannelIdentifier::from_raw(raw_channel_id).or(Err(AclDataError::InvalidChannelId))?
+                        LeUserChannelIdentifier::try_from_raw(raw_channel_id).or(Err(AclDataError::InvalidChannelId))?
                     ),
-                    data: Box::from(payload),
+                    data: Vec::from(payload),
                 })
             } else {
                 Err( AclDataError::PayloadLengthIncorrect )
@@ -202,7 +222,7 @@ pub trait ConnectionChannel {
     const DEFAULT_ATT_MTU: u16;
 
     fn send(&self, data: AclData);
-    fn receive(&self, waker: core::task::Waker) -> Option<Box<[AclData]>>;
+    fn receive(&self, waker: core::task::Waker) -> Option<Vec<AclData>>;
 }
 
 /// A channel constructed via the Acl HCI interface
@@ -217,6 +237,7 @@ pub struct LeAclHciChannel<'a, I> where I: hci::HciAclDataInterface {
 
 impl<'a, I> LeAclHciChannel<'a, I> where I: hci::HciAclDataInterface {
 
+    /// Create a new LE ACL channel from the
     pub fn new( hi: &'a hci::HostInterface<I>, connection_event: hci::events::LEConnectionCompleteData )
     -> Self
     {
@@ -238,13 +259,13 @@ impl<'a,I> ConnectionChannel for LeAclHciChannel<'a,I> where I: hci::HciAclDataI
             self.connection_handle,
             hci::AclPacketBoundry::FirstNonFlushable,
             hci::AclBroadcastFlag::NoBroadcast,
-            data.into_raw_data()
+            data.into_raw_data().into()
         );
 
         self.hi_ref.send_data(hci_acl_data).expect("Failed to send hci acl data");
     }
 
-    fn receive(&self, waker: core::task::Waker) -> Option<Box<[AclData]>> {
+    fn receive(&self, waker: core::task::Waker) -> Option<Vec<AclData>> {
         self.buf_recv.now(waker).and_then(
             |r| {
                 match r {
@@ -261,10 +282,143 @@ impl<'a,I> ConnectionChannel for LeAclHciChannel<'a,I> where I: hci::HciAclDataI
                                 Ok( vec )
                             })
                             .ok()?
-                            .into_boxed_slice()
                             .into()
                     },
                 }
             })
+    }
+}
+
+/// Protocol and Service Multiplexers
+///
+/// This is a wrapper around the numerical number of the PSM. There are two ways to create a `Psm`.
+/// One way is to convert one of the enumerations of
+/// [`PsmAssignedNum`](PsmAssignedNum)
+/// into this, the other way is to create a dynamic PSM with the function
+/// [`new_dyn`](#method.new_dyn).
+pub struct Psm { val: u16 }
+
+impl Psm {
+
+    /// Get the value of the PSM
+    ///
+    /// The returned value is in *native byte order*
+    pub fn to_val(&self) -> u16 {
+        self.val
+    }
+
+    /// Create a new *dynamic* PSM
+    ///
+    /// This will create a dynamic PSM if the input `dyn_psm` is within the acceptable range of
+    /// dynamically allocated PSM values (see the Bluetooth core spec v 5.0 | Vol 3, Part A).
+    ///
+    /// # Note
+    /// For now extended dynamic PSM's are not supported as I do not know how to support them (
+    /// see
+    /// [`DynPsmIssue`](DynPsmIssue) for why)
+    pub fn new_dyn( dyn_psm: u16 ) -> Result<Self, DynPsmIssue> {
+        match dyn_psm {
+            _ if dyn_psm <= 0x1000 => Err( DynPsmIssue::NotDynamicRange ),
+            _ if dyn_psm & 0x1 == 0 => Err( DynPsmIssue::NotOdd ),
+            _ if dyn_psm & 0x100 != 0 => Err( DynPsmIssue::Extended ),
+            _ => Ok( Psm { val: dyn_psm } )
+        }
+    }
+}
+
+impl From<PsmAssignedNum> for Psm {
+    fn from( pan: PsmAssignedNum ) -> Psm {
+
+        let val = match pan {
+            PsmAssignedNum::Sdp => 0x1,
+            PsmAssignedNum::Rfcomm => 0x3,
+            PsmAssignedNum::TcsBin => 0x5,
+            PsmAssignedNum::TcsBinCordless => 0x7,
+            PsmAssignedNum::Bnep => 0xf,
+            PsmAssignedNum::HidControl => 0x11,
+            PsmAssignedNum::HidInterrupt => 0x13,
+            PsmAssignedNum::Upnp => 0x15,
+            PsmAssignedNum::Avctp => 0x17,
+            PsmAssignedNum::Avdtp => 0x19,
+            PsmAssignedNum::AvctpBrowsing => 0x1b,
+            PsmAssignedNum::UdiCPlane => 0x1d,
+            PsmAssignedNum::Att => 0x1f,
+            PsmAssignedNum::ThreeDsp => 0x21,
+            PsmAssignedNum::LePsmIpsp => 0x23,
+            PsmAssignedNum::Ots => 0x25,
+        };
+
+        Psm { val }
+    }
+}
+
+/// Protocol and Service Multiplexers assigned numbers
+///
+/// The enumartions defined in `PsmAssignedNum` are those listed in the Bluetooth SIG assigned
+/// numbers.
+pub enum PsmAssignedNum {
+    /// Service Disconvery Protocol
+    Sdp,
+    /// RFCOMM
+    Rfcomm,
+    /// Telephony Control Specification
+    TcsBin,
+    /// Telephony Control Specification ( Dordless )
+    TcsBinCordless,
+    /// Network Encapsulation Protocol
+    Bnep,
+    /// Human Interface Device ( Control )
+    HidControl,
+    /// Human Interface Device ( Interrupt )
+    HidInterrupt,
+    /// ESDP(?)
+    Upnp,
+    /// Audio/Video Control Transport Protocol
+    Avctp,
+    /// Audio/Video Distribution Transport Protocol
+    Avdtp,
+    /// Audio/Video Remote Control Profile
+    AvctpBrowsing,
+    /// Unrestricted Digital Information Profile
+    UdiCPlane,
+    /// Attribute Protocol
+    Att,
+    /// 3D Synchronization Profile
+    ThreeDsp,
+    /// Internet Protocol Support Profile
+    LePsmIpsp,
+    /// Object Transfer Service
+    Ots,
+}
+
+/// The issue with the provided PSM value
+///
+/// ### NotDynamicRange
+/// Returned when the PSM is within the assigned number range of values. Dynamic values need to be
+/// larger then 0x1000.
+///
+/// ### NotOdd
+/// All PSM values must be odd, the value provided was even
+///
+/// ### Extended
+/// The least signaficant bit of the most significant byte (aka bit 8) must be 0 unless you want
+/// an extended PSM (but I don't know what that is as I don't want to pay 200 sweedish dubloons
+/// for ISO 3309 to find out what that is). For now extended PSM is not supported.
+pub enum DynPsmIssue {
+    NotDynamicRange,
+    NotOdd,
+    Extended,
+}
+
+impl core::fmt::Display for DynPsmIssue {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            DynPsmIssue::NotDynamicRange =>
+                write!(f, "Dynamic PSM not within allocated range"),
+            DynPsmIssue::NotOdd =>
+                write!(f, "Dynamic PSM value is not odd"),
+            DynPsmIssue::Extended =>
+                write!(f, "Dynamic PSM has extended bit set"),
+        }
     }
 }

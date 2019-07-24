@@ -1,10 +1,44 @@
 use core::iter::Iterator;
 use core::time::Duration;
-use core::fmt::Debug;
+use core::fmt;
 
-#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Debug)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Debug,Hash)]
 pub struct ConnectionHandle {
     handle: u16,
+}
+
+impl fmt::Display for ConnectionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.handle)
+    }
+}
+
+impl fmt::Binary for ConnectionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:b}", self.handle)
+    }
+}
+
+impl fmt::LowerHex for ConnectionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self.handle)
+    }
+}
+
+impl fmt::Octal for ConnectionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:o}", self.handle)
+    }
+}
+
+impl fmt::UpperHex for ConnectionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:X}", self.handle)
+    }
+}
+
+impl AsRef<u16> for ConnectionHandle {
+    fn as_ref(&self) -> &u16 { &self.handle }
 }
 
 impl ConnectionHandle {
@@ -34,12 +68,12 @@ impl ConnectionHandle {
 ///
 /// The value contained in each enum should be the bound value that was violated.
 #[derive(Debug,Clone,Copy,PartialEq)]
-pub enum BoundsErr<T> where T: Debug + Clone + Copy + PartialEq + PartialOrd {
+pub enum BoundsErr<T> where T: fmt::Debug + Clone + Copy + PartialEq + PartialOrd {
     AboveMax(T),
     BelowMin(T),
 }
 
-impl<T> BoundsErr<T> where T: Debug + Clone + Copy + PartialEq + PartialOrd {
+impl<T> BoundsErr<T> where T: fmt::Debug + Clone + Copy + PartialEq + PartialOrd {
     pub(crate) fn check(val: T, min: T, max: T) -> Result<T, Self> {
         if val < min      { Err(BoundsErr::BelowMin(min)) }
         else if val > max { Err(BoundsErr::AboveMax(max)) }
@@ -474,7 +508,7 @@ impl Iterator for EnabledFeaturesIter {
     }
 }
 
-impl ::core::fmt::Debug for EnabledFeaturesIter {
+impl fmt::Debug for EnabledFeaturesIter {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [")?;
 
@@ -554,7 +588,7 @@ impl Iterator for EnabledExtendedFeaturesItr {
     }
 }
 
-impl ::core::fmt::Debug for EnabledExtendedFeaturesItr {
+impl fmt::Debug for EnabledExtendedFeaturesItr {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [")?;
 
@@ -751,7 +785,7 @@ impl Iterator for EnabledLEFeaturesItr {
     }
 }
 
-impl ::core::fmt::Debug for EnabledLEFeaturesItr {
+impl fmt::Debug for EnabledLEFeaturesItr {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [")?;
 

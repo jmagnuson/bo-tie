@@ -103,7 +103,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
                 return Poll::Ready(Err(super::Error::TooSmallMtu));
             }
 
-            let acl_data = l2cap::AclData::new(TransferFormat::into(&pdu), super::L2CAP_CHANNEL_ID);
+            let acl_data = l2cap::AclData::new(TransferFormat::into(&pdu).into(), super::L2CAP_CHANNEL_ID);
 
             // The channel must exist at this point
             this.channel.as_ref().expect("Channel doesn't exist").send( acl_data );
@@ -193,7 +193,7 @@ where Ch: l2cap::ConnectionChannel,
         let this = self.get_mut();
 
         if let Some(data) = this.send_data.take() {
-            this.channel.send(l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID ) );
+            this.channel.send(l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
         }
 
         if let Some(l2cap_packets) = this.channel.receive(cx.waker().clone()) {
@@ -523,7 +523,7 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
         let data = TransferFormat::into(&pdu);
 
         if self.mtu < data.len() {
-            self.channel.send( l2cap::AclData::new(data, super::L2CAP_CHANNEL_ID) );
+            self.channel.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
             Ok(())
         } else {
             Err(super::Error::MtuExceeded)

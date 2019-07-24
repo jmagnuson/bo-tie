@@ -3571,31 +3571,16 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
-                let hci_msg_type = chew!(packet);
-
-                // packet[1] is the LEMeta specific event code if the event is LEMeta
+                // packet[0] is the LEMeta specific event code if the event is LEMeta
                 let event_code = crate::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
 
-                let event_len  = chew!(packet);
-
-                // The first byte indicates what HCI packet the HCI message is. A value of 4
-                // indicates that the packet is an Event from the controller (Vol4, Part A, Sec 2
-                // of spec)
-                debug_assert_eq!( 4, hci_msg_type);
-
-                // This is needed to check that the packet parameter length matches. This should
-                // always be correct if the packet came from a bluetooth controller.
-                debug_assert_eq!( packet.len(), event_len as usize,
-                    "Error occured in macro invocation of hci::events::events_markup:\n\
-                    event: {:?},\n\
-                    length as specified in event: {:?}\n\
-                    full data: {:?}",
-                    event_code, event_len, data);
+                /// The length of the packet and convert it into a usize
+                let event_len  = chew!(packet).into();
 
                 match event_code {
                     $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
                         Ok(crate::hci::events::$EnumDataName::$name(
-                            crate::hci::events::$data::<$( $type ),*>::try_from(packet)?)),
+                            crate::hci::events::$data::<$( $type ),*>::try_from(&packet[..event_len])?)),
                     )*
                     Err(err) => Err(err),
                 }

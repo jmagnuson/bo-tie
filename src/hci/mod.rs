@@ -206,7 +206,7 @@ impl HciAclData {
     /// # Panics (TODO to remove)
     /// For now this panics if the length of data is greater then 2^16 because this library only
     /// supports LE.
-    pub fn into_packet(&self) -> alloc::boxed::Box<[u8]> {
+    pub fn into_packet(&self) -> alloc::vec::Vec<u8> {
         let mut v = alloc::vec::Vec::with_capacity( self.data.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
@@ -219,7 +219,7 @@ impl HciAclData {
 
         v.extend_from_slice(&self.data);
 
-        v.into_boxed_slice()
+        v
     }
 
 
@@ -483,6 +483,22 @@ P: EventMatcher + Send + Sync + 'static
 pub struct HostInterface<I>
 {
     interface: I
+}
+
+impl<I> AsRef<I> for HostInterface<I> {
+    fn as_ref(&self) -> &I {
+        &self.interface
+    }
+}
+
+impl<I> AsMut<I> for HostInterface<I> {
+    fn as_mut(&mut self) -> &mut I {
+        &mut self.interface
+    }
+}
+
+impl<I> HostInterface<I> {
+    pub fn into_inner(self) -> I { self.interface }
 }
 
 impl<I> From<I> for HostInterface<I>

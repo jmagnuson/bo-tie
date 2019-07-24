@@ -18,7 +18,7 @@ pub mod server;
 use crate::l2cap;
 
 const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::LE(l2cap::LeUChannelIdentifier::AttributeProtocol);
+    l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
 /// Avanced Encryption Standard (AES) key sizes
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
