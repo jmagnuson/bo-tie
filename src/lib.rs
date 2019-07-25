@@ -1,8 +1,11 @@
 #![feature(arbitrary_self_types)]
 
-use bo_tie::hci::events;
-use std::boxed::Box;
-use std::collections::BTreeMap;
+use bo_tie::hci::{
+    events,
+    common::ConnectionHandle,
+    HciAclData,
+};
+use std::collections::HashMap;
 use std::default;
 use std::error;
 use std::fmt;
@@ -16,37 +19,18 @@ use std::thread;
 use std::time::Duration;
 use std::os::unix::io::RawFd;
 
-mod bluez {
-    use std::os::raw::c_void;
-
-    // Linux Bluetooth socket constants
-    pub const SOL_HCI: u32 = 0;
-    pub const HCI_FILTER: u32 = 2;
-    //pub const HCI_COMMAND_PKT: u32 = 1;
-    //pub const HCI_ACLDATA_PKT: u32 = 2;
-    //pub const HCI_SCODATA_PKT: u32 = 3;
-    pub const HCI_EVENT_PKT: u32 = 4;
-    //pub const HCI_VENDOR_PKT: u32 = 255;
-
-    // HCI filter constants from the bluez library
-    pub const HCI_FLT_TYPE_BITS: usize = 31;
-    // const HCI_FLT_EVENT_BITS: u32 = 63;
-
-    #[link(name = "bluetooth")]
-    extern "C" {
-        pub fn hci_open_dev(dev_id: i32) -> i32;
-        pub fn hci_get_route(bt_dev_addr: *mut bo_tie::BluetoothDeviceAddress) -> i32;
-        pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    pub struct hci_filter {
-        pub type_mask: u32,
-        pub event_mask: [u32; 2usize],
-        pub opcode: u16,
+macro_rules! lock {
+    ($( $mutex:ident ).*) => {
+        $($mutex).*.lock().map_err(|e| Error::MPSCError(e.to_string()))?
     }
 }
+
+macro_rules! log_error_and_panic {
+    ($($arg:tt)+) => {{ log::error!( $($arg)+ ); panic!( $($arg)+ ); }}
+}
+
+mod bluez;
+mod timeout;
 
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct FileDescriptor(RawFd);
@@ -74,12 +58,6 @@ impl ArcFileDesc {
     }
 }
 
-macro_rules! lock {
-    ($( $mutex:ident ).*) => {
-        $($mutex).*.lock().map_err(|e| Error::MPSCError(e.to_string()))?
-    }
-}
-
 mod event;
 
 /// For Epoll, a value is assigned to signify what file descriptor had an event occur.
@@ -90,6 +68,15 @@ enum EPollResult {
     BluetoothController,
     TaskExit,
     Timeout(u64),
+}
+
+impl EPollResult {
+    const TIMEOUT_ID_START: u64 = 2;
+
+    fn make_timeout_id(timeout_fd: RawFd) -> u64 {
+        // The (ch)easy way to make unique id's for the timeouts
+        timeout_fd as u64 + Self::TIMEOUT_ID_START
+    }
 }
 
 impl From<u64> for EPollResult {
@@ -110,11 +97,6 @@ impl From<EPollResult> for u64 {
             EPollResult::Timeout(val) => val,
         }
     }
-}
-
-fn make_timeout_id(timeout_fd: RawFd) -> u64 {
-    // The (ch)easy way to make unique id's for the timeouts
-    timeout_fd as u64 + 2
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -177,8 +159,10 @@ enum CtrlMsgType {
     SyncData,
 }
 
-impl CtrlMsgType {
-    fn from(raw: u8) -> Result<Self, ()> {
+impl core::convert::TryFrom<u8> for CtrlMsgType {
+    type Error = ();
+
+    fn try_from(raw: u8) -> Result<Self, ()> {
         match raw {
             0x01 => Ok(CtrlMsgType::Command),
             0x02 => Ok(CtrlMsgType::ACLData),
@@ -189,196 +173,25 @@ impl CtrlMsgType {
     }
 }
 
-fn remove_timer_from_epoll( epoll_fd: ArcFileDesc, timer_fd: ArcFileDesc) -> Result<(), Error> {
-    use nix::sys::epoll;
-
-    epoll::epoll_ctl(
-        epoll_fd.raw_fd(),
-        epoll::EpollOp::EpollCtlDel,
-        timer_fd.raw_fd(),
-        None
-    )
-    .map_err(|e| Error::from(e))?;
-
-    Ok(())
-}
-
-#[derive(Debug)]
-struct Timeout {
-    epoll_fd: ArcFileDesc,
-    timer_fd: ArcFileDesc,
-    callback: Box<dyn OnTimeout>,
-}
-
-impl Timeout {
-
-    fn remove_timer(&self) -> Result<(), Error>{
-        remove_timer_from_epoll(self.epoll_fd.clone(), self.timer_fd.clone())
-    }
-
-    /// Triggers the callback and removes the timer
-    fn trigger(self) -> Result<(), Error> {
-        self.remove_timer()?;
-
-        self.callback.on_timeout();
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct StopTimeout {
-    epoll_fd: ArcFileDesc,
-    timer_fd: ArcFileDesc,
-    id: u64,
-    timeout_manager: Arc<Mutex<TimeoutManager>>,
-}
-
-impl StopTimeout {
-    fn stop(self) -> Result<(), Error> {
-        lock!(self.timeout_manager)
-        .remove(self.id)
-        .or(Err(Error::Other("Timeout ID doesn't exist".to_string())))?;
-
-        remove_timer_from_epoll(self.epoll_fd, self.timer_fd)
-    }
-}
-
-trait OnTimeout: Send + fmt::Debug {
-    fn on_timeout(&self);
-}
-
-pub struct TimeoutBuilder {
-    epoll_fd: ArcFileDesc,
-    timer_fd: ArcFileDesc,
-    callback: Option<Box<dyn OnTimeout>>,
-    timeout_manager: Arc<Mutex<TimeoutManager>>,
-    time: Duration,
-    id: u64,
-}
-
-impl TimeoutBuilder {
-
-    fn new( epoll_fd: ArcFileDesc, time: Duration, tm: Arc<Mutex<TimeoutManager>>) -> Result<TimeoutBuilder, Error>
-    {
-        use nix::libc;
-        use nix::errno::Errno;
-        use nix::sys::epoll;
-
-        let timer_fd = unsafe{ libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_CLOEXEC) };
-
-        if timer_fd < 0 { return Err(Error::from(Errno::last())); }
-
-        let timer_id = make_timeout_id(timer_fd);
-
-        epoll::epoll_ctl(
-            epoll_fd.raw_fd(),
-            epoll::EpollOp::EpollCtlAdd,
-            timer_fd,
-            &mut epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, timer_id)
-        )
-        .map_err(|e| Error::from(e))?;
-
-        Ok(TimeoutBuilder {
-            epoll_fd: epoll_fd,
-            timer_fd: ArcFileDesc::from(timer_fd),
-            callback: None,
-            timeout_manager: tm,
-            time: time,
-            id: timer_id,
-        })
-    }
-
-    /// Must be called to set the function that is called when a timeout occurs.
-    fn set_timeout_callback(&mut self, callback: Box<dyn OnTimeout>) {
-        self.callback = Some(callback);
-    }
-
-    /// set_timeout_callback must be called before this is called to set the callback method
-    /// because a callback is needed to construct a "dummy" timeout object
-    fn make_stop_timer(&self) -> Result<StopTimeout, Error> {
-        Ok(StopTimeout {
-            epoll_fd: self.epoll_fd.clone(),
-            timer_fd: self.timer_fd.clone(),
-            id: self.id.clone(),
-            timeout_manager: self.timeout_manager.clone(),
-        })
-    }
-
-    /// set_timeout_callback must be called to set the timeout callback or this will just return
-    /// an error
-    fn enable_timer(mut self) -> Result<(), Error>
-    {
-        use nix::errno::Errno;
-        use nix::libc;
-        use std::ptr::null_mut;
-
-        let timeout = Timeout {
-            epoll_fd: self.epoll_fd.clone(),
-            timer_fd: self.timer_fd.clone(),
-            callback: self.callback.take().ok_or(Error::Other("timeout callback not set".into()))?,
-        };
-
-        let timeout_spec = libc::itimerspec {
-            it_interval: libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            it_value: libc::timespec {
-                tv_sec: self.time.as_secs() as libc::time_t,
-                tv_nsec: self.time.subsec_nanos() as libc::c_long,
-            }
-        };
-
-        lock!(self.timeout_manager).add(self.id, timeout)?;
-
-        if 0 > unsafe{ libc::timerfd_settime(
-            self.timer_fd.raw_fd(),
-            0,
-            &timeout_spec as *const libc::itimerspec,
-            null_mut()) }
-        {
-            lock!(self.timeout_manager).remove(self.id)?;
-            return Err(Error::from(Errno::last()));
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct TimeoutManager {
-    timeouts: BTreeMap<u64,Timeout>
-}
-
-impl TimeoutManager {
-    fn new() -> Self {
-        TimeoutManager {
-            timeouts: BTreeMap::new()
+impl From<CtrlMsgType> for u8 {
+    fn from(raw: CtrlMsgType) -> u8 {
+        match raw {
+            CtrlMsgType::Command => 0x01,
+            CtrlMsgType::ACLData => 0x02,
+            CtrlMsgType::SyncData => 0x03,
+            CtrlMsgType::Event => 0x04,
         }
     }
-
-    fn add(&mut self, timeout_id: u64, timeout: Timeout ) -> Result<(), Error> {
-        match self.timeouts.insert(timeout_id, timeout) {
-            None => Ok(()),
-            Some(v) => {
-                self.timeouts.insert(timeout_id, v);
-                Err(Error::Other("Timeout ID already exists".to_string()))
-            }
-        }
-    }
-
-    fn remove(&mut self, timeout_id: u64) -> Result<Timeout, Error> {
-        self.timeouts.remove(&timeout_id).ok_or(Error::Other("Timeout ID doesn't exist".to_string()))
-    }
 }
+
 
 struct AdapterThread {
     adapter_fd: ArcFileDesc,
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_processor: event::EventProcessor,
-    timeout_manager: Arc<Mutex<TimeoutManager>>
+    timeout_manager: Arc<Mutex<timeout::TimeoutManager>>,
+    hci_data_recv: RcvHciAclData,
 }
 
 impl AdapterThread {
@@ -425,6 +238,9 @@ impl AdapterThread {
         use nix::sys::epoll;
         use nix::unistd::read;
 
+        // Buffer used for receiving data.
+        let mut buffer = [0u8; 1024];
+
         'task: loop {
 
             let epoll_events = &mut [epoll::EpollEvent::empty();256];
@@ -444,10 +260,6 @@ impl AdapterThread {
                 match EPollResult::from(epoll_event.data()) {
                     EPollResult:: BluetoothController => {
 
-                        // size per the bluetooth spec for the HCI Event Packet
-                        // (in v5 | vol 2, Part E 5.4.4 )
-                        let mut buffer = [0u8; 256];
-
                         // received the data
                         let len = match Self::ignore_eagain_and_eintr( || {
                             read( self.adapter_fd.raw_fd(), &mut buffer).map_err( |e| { Error::from(e) })
@@ -459,8 +271,9 @@ impl AdapterThread {
                         // The first byte is the indicator of the mssage type, next byte is the length of the
                         // message, the rest is the hci message
                         //
-                        // Any other values are ignored (including the special 0xFF value)
-                        if let Ok(msg) = CtrlMsgType::from(buffer[0])
+                        // Any other values are logged (debug level) and then ignored (including
+                        // the sometimes manufacture specific 0xFF value)
+                        if let Ok(msg) = core::convert::TryInto::try_into(buffer[0])
                         {
                             match msg {
                                 CtrlMsgType::Command => {
@@ -468,11 +281,18 @@ impl AdapterThread {
                                         only receive ACL, Syncronous, or Event Data from a controller")
                                 },
                                 CtrlMsgType::Event => {
-                                    self.event_processor.process(&buffer[..len])
+                                    self.event_processor.process(&buffer[1..len])
                                 },
-                                CtrlMsgType::ACLData => {unimplemented!()},
-                                CtrlMsgType::SyncData => {unimplemented!()},
+                                CtrlMsgType::ACLData => {
+                                    match HciAclData::from_packet(&buffer[1..len]) {
+                                        Ok(hci_acl_data) => self.hci_data_recv.add_received(hci_acl_data),
+                                        Err(e) => log::error!("Failed to process hci acl packet: {}", e),
+                                    }
+                                },
+                                CtrlMsgType::SyncData => { log::error!("SCO data unimplemented")},
                             }
+                        } else {
+                            log::debug!("Received unknown packet indicator type '{:#x}", buffer[0])
                         }
                     },
 
@@ -507,7 +327,8 @@ pub struct HCIAdapter {
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_expecter: Arc<Mutex<event::EventExpecter>>,
-    timeout_manager: Arc<Mutex<TimeoutManager>>,
+    timeout_manager: Arc<Mutex<timeout::TimeoutManager>>,
+    hci_data_recv: RcvHciAclData,
 }
 
 impl From<i32> for HCIAdapter {
@@ -521,6 +342,7 @@ impl From<i32> for HCIAdapter {
     fn from( adapter_id: i32 ) -> Self {
 
         use nix::sys::eventfd::{EfdFlags, eventfd};
+        use nix::libc;
         use nix::sys::epoll::{
             epoll_create1,
             epoll_ctl,
@@ -530,10 +352,38 @@ impl From<i32> for HCIAdapter {
             EpollFlags,
         };
 
-        let device_fd = unsafe { bluez::hci_open_dev(adapter_id) };
+        use std::convert::TryInto;
+
+        if adapter_id < 0 { panic!("Invalid adapter id, cannot be a negative number") }
+
+        let device_fd = unsafe{ libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, bluez::BTPROTO_HCI) };
 
         if device_fd < 0 {
             panic!("No Bluetooth Adapter with device id {} exists", adapter_id);
+        }
+
+        let sa_p = &bluez::sockaddr_hci {
+            hci_family: libc::AF_BLUETOOTH as u16,
+            hci_dev: adapter_id as u16,
+            hci_channel: bluez::HCI_CHANNEL_USER as u16,
+        } as *const bluez::sockaddr_hci as *const libc::sockaddr;
+
+        let sa_len = std::mem::size_of::<bluez::sockaddr_hci>() as libc::socklen_t;
+
+        if let Err(e) = unsafe{ bluez::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
+            panic!("Failed to close hci device '{}', {}", adapter_id, e );
+        }
+
+        if let Err(e) = unsafe{ bluez::hci_dev_up(device_fd, adapter_id.try_into().unwrap() ) } {
+            panic!("Failed to open hci device '{}', {}", adapter_id, e );
+        }
+
+        if let Err(e) = unsafe{ bluez::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
+            panic!("Failed to close hci device '{}', {}", adapter_id, e );
+        }
+
+        if unsafe{ libc::bind(device_fd, sa_p, sa_len) } < 0 {
+            panic!("Failed to bind to HCI: {}", nix::errno::Errno::last() );
         }
 
         let exit_evt_fd = eventfd(0, EfdFlags::EFD_CLOEXEC).expect("eventfd failed");
@@ -558,9 +408,11 @@ impl From<i32> for HCIAdapter {
         let arc_exit_fd = ArcFileDesc::from(exit_evt_fd);
         let arc_epoll_fd = ArcFileDesc::from(epoll_fd);
 
-        let (event_expecter, event_processor) = event::EventSetup::setup(arc_adapter_fd.clone());
+        let (event_expecter, event_processor) = event::EventSetup::setup();
 
-        let to_manager = Arc::new(Mutex::new(TimeoutManager::new()));
+        let to_manager = Arc::new(Mutex::new(timeout::TimeoutManager::new()));
+
+        let data_receiver = RcvHciAclData::new();
 
         AdapterThread {
             adapter_fd: arc_adapter_fd.clone(),
@@ -568,6 +420,7 @@ impl From<i32> for HCIAdapter {
             epoll_fd: arc_epoll_fd.clone(),
             event_processor: event_processor,
             timeout_manager: to_manager.clone(),
+            hci_data_recv: data_receiver.clone(),
         }
         .spawn();
 
@@ -577,6 +430,7 @@ impl From<i32> for HCIAdapter {
             epoll_fd: arc_epoll_fd,
             event_expecter: event_expecter,
             timeout_manager: to_manager,
+            hci_data_recv: data_receiver,
         }
     }
 }
@@ -645,14 +499,14 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
 
     fn receive_event<P>(&self,
         event: events::Events,
-        waker: core::task::Waker,
+        waker: &task::Waker,
         matcher: Pin<Arc<P>>,
         timeout: Option<Duration>)
     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     where P: bo_tie::hci::EventMatcher + Send + Sync + 'static
     {
         let timeout_builder = match timeout {
-            Some(duration) => match TimeoutBuilder::new(
+            Some(duration) => match timeout::TimeoutBuilder::new(
                     self.epoll_fd.clone(),
                     duration,
                     self.timeout_manager.clone() )
@@ -670,6 +524,195 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
             matcher,
             timeout_builder
         )
+    }
+}
+
+impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
+
+    type SendAclDataError = nix::Error;
+    type ReceiveAclDataError = String;
+
+    fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
+        use nix::sys::uio;
+
+        let packet_indicator = &[ CtrlMsgType::Command.into() ];
+        let packet_data = &data.into_packet();
+
+        let io_vec = &[uio::IoVec::from_slice(packet_indicator), uio::IoVec::from_slice(packet_data)];
+
+        uio::writev(self.adapter_fd.raw_fd(), io_vec)
+    }
+
+    fn start_receiver(&self, handle: ConnectionHandle) {
+        self.hci_data_recv.add_connection_handle(handle);
+    }
+
+    fn stop_receiver(&self, handle: &ConnectionHandle) {
+        self.hci_data_recv.remove_connection_handle(handle);
+    }
+
+    fn receive(&self, handle: &ConnectionHandle, waker: &task::Waker)
+    -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>>
+    {
+        self.hci_data_recv.get_received(handle, waker)
+    }
+}
+
+#[derive(Debug)]
+struct ConnectionRecvInfo {
+    received_packets: Vec<HciAclData>,
+    waker: Option<task::Waker>,
+    stay_around: bool,
+}
+
+impl ConnectionRecvInfo {
+
+    /// Create a new ConnectionRecvInfo
+    ///
+    /// The `stay` input is used to indicate if this should continue to exist after data is taken
+    /// from it. The `stay` flag is used by
+    /// [`RcvHciAclData`](RcvHciAclData).
+    fn new(stay: bool) -> Self {
+        ConnectionRecvInfo {
+            received_packets: Vec::new(),
+            waker: None,
+            stay_around: stay,
+        }
+    }
+
+    /// Set the waker
+    fn set_waker(&mut self, waker: &task::Waker) {
+        self.waker = Some(waker.clone())
+    }
+
+    /// Get the next packet or set the waker
+    ///
+    /// If there is any packets in `received_packets` then this will return the first in the list
+    /// This will return None if the waker is set
+    fn get_data_or_set_waker(&mut self, waker: &task::Waker ) -> Option<Vec<HciAclData>> {
+
+        let recv_packs = core::mem::replace( &mut self.received_packets, Vec::new() );
+
+        match recv_packs.len() {
+            0 => { self.waker = Some(waker.clone()); None},
+            _ => Some(recv_packs)
+        }
+    }
+
+    /// Add data
+    fn add(&mut self, data: HciAclData ) {
+
+        self.received_packets.push(data);
+
+        if let Some(w) = self.waker.take() { w.wake(); }
+    }
+
+    /// get flag inicating if this should stick around after retreiving all data
+    fn stay_around(&self) -> bool { self.stay_around }
+}
+
+type AclDataChannels = HashMap<ConnectionHandle, ConnectionRecvInfo>;
+
+/// A structure for managing the reception of hci acl data packets for use with futures
+#[derive(Debug,Clone)]
+struct RcvHciAclData {
+    receive_channels: Arc<Mutex<AclDataChannels>>
+}
+
+impl RcvHciAclData {
+
+    fn new() -> Self {
+        RcvHciAclData { receive_channels: Arc::new( Mutex::new( AclDataChannels::new() )) }
+    }
+
+    /// Add a buffer to associated with `handle` for receiving ACL data
+    ///
+    /// This will create a buffer that will stay around to collect ACL data packets even when there
+    /// is no waker to wake a pending task to receive the received data.
+    ///
+    /// Only one buffer is set per handle, calling this multiple of times will just delete the
+    /// previous buffer (and any data in it) and replace it with a new buffer. If there was a waker
+    /// associated with the previous buffer (due to a call to `get_received`) it is also deleted.
+    fn add_connection_handle(&self, handle: ConnectionHandle) {
+        self.receive_channels.lock().as_mut()
+            .and_then( |rc| Ok( rc.insert(handle, ConnectionRecvInfo::new(true)) ) )
+            .or_else( |e| -> Result<_,()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
+            .ok();
+    }
+
+    /// Remove the buffer associated with `handle`
+    ///
+    /// This needs to be called to delete the buffer created by `add_connection_handle`
+    ///
+    /// This should also be called for any buffer that was created by `get_received`, but in not
+    /// deleted by another call to `get_received`.
+    fn remove_connection_handle(&self, handle: &ConnectionHandle) {
+        self.receive_channels.lock().as_mut()
+            .and_then( |rc| Ok( rc.remove( &handle) ) )
+            .or_else( |e| -> Result<_,()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
+            .ok();
+    }
+
+    /// Try to get a received packet
+    ///
+    /// If there is a packet to be received for the provided connection handle, then an HciAclData
+    /// packet will be returned. If there are no packets to be received, then no packet is returned
+    /// but the provided waker will be used when a packet is ready to be received. Whoever is woken
+    /// will need to call this function again to get the received data. If data is returned, the
+    /// provided waker is ignored.
+    fn get_received( &self, handle: &ConnectionHandle, waker: &task::Waker )
+    -> Option< Result<Vec<HciAclData>, String> >
+    {
+        let mut rc_gaurd = match self.receive_channels.lock() {
+            Ok(gaurd) => gaurd,
+            Err(e) => log_error_and_panic!("Failed to acquire 'receive_channels' lock: {}", e),
+        };
+
+        let opt_data = rc_gaurd.get_mut(handle);
+
+        let mut remove_cri = false;
+
+        let ret = if opt_data.is_some() { // If the buffer exists then check if there is any data
+            opt_data.and_then( |ri|
+                ri.get_data_or_set_waker( waker )
+                    .and_then( |d| {
+                        Some(Ok(d))
+                    })
+                    .and_then( |ret| {
+                        remove_cri = !ri.stay_around();
+                        Some(ret)
+                    })
+            )
+        } else { // The buffer doesn't exist, so create a temporary buffer
+            let mut cri = ConnectionRecvInfo::new(false);
+            cri.set_waker(waker);
+            rc_gaurd.insert( *handle, cri);
+            None
+        };
+
+        // The handle is associated with a temporary buffer so it should be deleted
+        if remove_cri { rc_gaurd.remove(handle); }
+
+        ret
+    }
+
+    /// Add a received packet
+    ///
+    /// This is used by the
+    /// [`AdapterThread`](AdapterThread)
+    /// to add ACL Data packets that were received from the controller.
+    fn add_received( &self, packet: HciAclData ) {
+        match self.receive_channels.lock().as_mut()
+            .and_then( |rc| Ok(rc.get_mut(&packet.get_handle())) )
+        {
+            Ok( Some(recv_info) ) =>
+                recv_info.add( packet ),
+            Ok( None ) =>
+                log::debug!("Received acl data for unbound connection handle: {}",
+                    &packet.get_handle() ),
+            Err(lock_e) =>
+                log_error_and_panic!("Failed to acquire lock: {}", lock_e),
+        }
     }
 }
 
