@@ -334,7 +334,7 @@ pub trait HostControllerInterface
     fn receive_event<P>(
         &self,
         event: events::Events,
-        waker: Waker,
+        waker: &Waker,
         matcher: Pin<Arc<P>>,
         timeout: Option<Duration>
     ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
@@ -382,7 +382,7 @@ pub trait HciAclDataInterface {
     fn receive(
         &self,
         handle: &common::ConnectionHandle,
-        waker: Waker,
+        waker: &Waker,
     ) -> Result<alloc::boxed::Box<[HciAclData]>, Self::ReceiveACLDataError>;
 }
 
@@ -444,7 +444,7 @@ where I: HostControllerInterface,
             }
         }
 
-        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher.clone(), self.timeout) {
+        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone(), self.timeout) {
             None => Poll::Pending,
             Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
         }
@@ -468,7 +468,7 @@ P: EventMatcher + Send + Sync + 'static
     type Output = Result<events::EventsData, I::ReceiveEventError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
-        match self.interface.receive_event(self.event, cx.waker().clone(), self.matcher.clone(), self.timeout) {
+        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone(), self.timeout) {
             Some(evnt_rspn) => Poll::Ready(evnt_rspn),
             None => Poll::Pending,
         }
@@ -664,7 +664,7 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
     /// This is used by the
     /// [`AclHciChannel`](./bo_tie/gap/AclHciChannel)
     /// If there is no data to receive (and no errors occured), then `None` is returned
-    pub(crate) fn now(&self, waker: Waker)
+    pub(crate) fn now(&self, waker: &Waker)
     -> Option<Result<alloc::boxed::Box<[HciAclData]>, I::ReceiveACLDataError>>
     {
         match self.interface.receive( &self.handle, waker ) {
@@ -689,7 +689,7 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
             fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context)
             -> Poll<Self::Output>
             {
-                match self.interface.receive( &self.handle, cx.waker().clone() ) {
+                match self.interface.receive( &self.handle, cx.waker() ) {
                     Ok(buffers) => if buffers.len() != 0 {
                             Poll::Ready(Ok(buffers))
                         } else {

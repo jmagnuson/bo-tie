@@ -256,7 +256,7 @@ where C: l2cap::ConnectionChannel
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
 
         let acl_packets_opt = self.server.as_ref().and_then(
-            |server| server.connection.receive(cx.waker().clone())
+            |server| server.connection.receive(cx.waker())
         );
 
         if let Some(acl_packets) = acl_packets_opt {

@@ -222,7 +222,7 @@ pub trait ConnectionChannel {
     const DEFAULT_ATT_MTU: u16;
 
     fn send(&self, data: AclData);
-    fn receive(&self, waker: core::task::Waker) -> Option<Vec<AclData>>;
+    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>>;
 }
 
 /// A channel constructed via the Acl HCI interface
@@ -265,7 +265,7 @@ impl<'a,I> ConnectionChannel for LeAclHciChannel<'a,I> where I: hci::HciAclDataI
         self.hi_ref.send_data(hci_acl_data).expect("Failed to send hci acl data");
     }
 
-    fn receive(&self, waker: core::task::Waker) -> Option<Vec<AclData>> {
+    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>> {
         self.buf_recv.now(waker).and_then(
             |r| {
                 match r {

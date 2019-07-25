@@ -110,7 +110,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
         }
 
         if let Some(att_packet) = this.channel.as_ref()
-            .and_then( |c| c.receive( cx.waker().clone() )
+            .and_then( |c| c.receive( cx.waker() )
             .and_then( |packets| packets.first().cloned() ) )
         {
             let bytes = att_packet.get_payload();
@@ -196,7 +196,7 @@ where Ch: l2cap::ConnectionChannel,
             this.channel.send(l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
         }
 
-        if let Some(l2cap_packets) = this.channel.receive(cx.waker().clone()) {
+        if let Some(l2cap_packets) = this.channel.receive(cx.waker()) {
 
             let bytes = l2cap_packets.iter()
                 .map( |packet| packet.get_payload() )
