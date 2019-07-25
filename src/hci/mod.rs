@@ -345,8 +345,8 @@ pub trait HostControllerInterface
 ///
 /// This is the trait that must be implemented by the platform specific HCI structure.
 pub trait HciAclDataInterface {
-    type SendACLDataError: Debug + Display;
-    type ReceiveACLDataError: Debug + Display;
+    type SendAclDataError: Debug + Display;
+    type ReceiveAclDataError: Debug + Display;
 
     /// Send ACL data
     ///
@@ -354,7 +354,7 @@ pub trait HciAclDataInterface {
     fn send(
         &self,
         data: HciAclData,
-    ) -> Result<(), Self::SendACLDataError>;
+    ) -> Result<(), Self::SendAclDataError>;
 
     /// Register a handle for receiving ACL packets
     ///
@@ -383,7 +383,7 @@ pub trait HciAclDataInterface {
         &self,
         handle: &common::ConnectionHandle,
         waker: &Waker,
-    ) -> Result<alloc::boxed::Box<[HciAclData]>, Self::ReceiveACLDataError>;
+    ) -> Result<alloc::vec::Vec<HciAclData>, Self::ReceiveAclDataError>;
 }
 
 enum SendCommandError<I> where I: HostControllerInterface {
@@ -665,7 +665,7 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
     /// [`AclHciChannel`](./bo_tie/gap/AclHciChannel)
     /// If there is no data to receive (and no errors occured), then `None` is returned
     pub(crate) fn now(&self, waker: &Waker)
-    -> Option<Result<alloc::boxed::Box<[HciAclData]>, I::ReceiveACLDataError>>
+    -> Option<Result<alloc::vec::Vec<HciAclData>, I::ReceiveAclDataError>>
     {
         match self.interface.receive( &self.handle, waker ) {
             Ok( data ) => if data.len() != 0 { Some( Ok( data ) ) } else { None },
@@ -677,14 +677,14 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
     ///
     /// This returns a future that can be used to get the received data.
     pub fn future_receive(&self)
-    -> impl Future<Output=Result<alloc::boxed::Box<[HciAclData]>, I::ReceiveACLDataError>> + 'a {
+    -> impl Future<Output=Result<alloc::vec::Vec<HciAclData>, I::ReceiveAclDataError>> + 'a {
         struct FutureReturn<'a, HI> where HI: HciAclDataInterface {
             handle: common::ConnectionHandle,
             interface: &'a HI
         }
 
         impl<'a, HI> Future for FutureReturn<'a, HI> where HI: HciAclDataInterface {
-            type Output = Result<alloc::boxed::Box<[HciAclData]>, HI::ReceiveACLDataError>;
+            type Output = Result<alloc::vec::Vec<HciAclData>, HI::ReceiveAclDataError>;
 
             fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context)
             -> Poll<Self::Output>
@@ -717,7 +717,7 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
 
     /// Send ACL data
     pub fn send_data<D>(&self, data: D )
-    -> Result<(), I::SendACLDataError>
+    -> Result<(), I::SendAclDataError>
     where D: Into<HciAclData>
     {
         self.interface.send( data.into() )
