@@ -351,10 +351,13 @@ pub trait HciAclDataInterface {
     /// Send ACL data
     ///
     /// This will send ACL data to the controller for sending to the connected bluetooth device
+    ///
+    /// The return value is the number of bytes of acl data payload + 1 ( due to added packet
+    /// indicator ) sent.
     fn send(
         &self,
         data: HciAclData,
-    ) -> Result<(), Self::SendAclDataError>;
+    ) -> Result<usize, Self::SendAclDataError>;
 
     /// Register a handle for receiving ACL packets
     ///
@@ -718,8 +721,11 @@ impl<'a,I> core::ops::Drop for HciAclDataReceiver<'a,I> where I: HciAclDataInter
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
     /// Send ACL data
+    ///
+    /// This will return the number of bytes sent + 1 to the controller. The added byte sent to
+    /// the controller is the packet indicator.
     pub fn send_data<D>(&self, data: D )
-    -> Result<(), I::SendAclDataError>
+    -> Result<usize, I::SendAclDataError>
     where D: Into<HciAclData>
     {
         self.interface.send( data.into() )
