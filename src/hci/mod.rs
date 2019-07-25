@@ -383,7 +383,7 @@ pub trait HciAclDataInterface {
         &self,
         handle: &common::ConnectionHandle,
         waker: &Waker,
-    ) -> Result<alloc::vec::Vec<HciAclData>, Self::ReceiveAclDataError>;
+    ) -> Option<Result<alloc::vec::Vec<HciAclData>, Self::ReceiveAclDataError>>;
 }
 
 enum SendCommandError<I> where I: HostControllerInterface {
@@ -668,8 +668,9 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
     -> Option<Result<alloc::vec::Vec<HciAclData>, I::ReceiveAclDataError>>
     {
         match self.interface.receive( &self.handle, waker ) {
-            Ok( data ) => if data.len() != 0 { Some( Ok( data ) ) } else { None },
-            Err(e) => Some(Err(e)),
+            Some( Ok( data ) ) => if data.len() != 0 { Some( Ok( data ) ) } else { None },
+            Some( Err(e) ) => Some(Err(e)),
+            None => None
         }
     }
 
@@ -690,12 +691,13 @@ impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
             -> Poll<Self::Output>
             {
                 match self.interface.receive( &self.handle, cx.waker() ) {
-                    Ok(buffers) => if buffers.len() != 0 {
+                    Some( Ok(buffers) ) => if buffers.len() != 0 {
                             Poll::Ready(Ok(buffers))
                         } else {
                             Poll::Pending
                         },
-                    Err(e) => Poll::Ready(Err(e)),
+                    Some( Err(e) ) => Poll::Ready(Err(e)),
+                    None => Poll::Pending,
                 }
             }
         }
