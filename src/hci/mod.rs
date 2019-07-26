@@ -235,7 +235,9 @@ impl HciAclData {
     /// A `HciAclData` is created if the packet is in the correct HCI ACL data packet format. If
     /// not, then an error is returned.
     pub fn from_packet(packet: &[u8]) -> Result<Self, HciAclPacketConvertError> {
-        if packet.len() >= 4 {
+        const HEADER_SIZE: usize = 4;
+
+        if packet.len() >= HEADER_SIZE {
             let first_2_bytes = <u16>::from_le_bytes( [ packet[0], packet[1] ] );
 
             let connection_handle = match common::ConnectionHandle::try_from( first_2_bytes & 0xFFF) {
@@ -257,7 +259,7 @@ impl HciAclData {
                     connection_handle: connection_handle,
                     packet_boundry_flag: packet_boundry_flag,
                     broadcast_flag: broadcast_flag,
-                    payload: alloc::boxed::Box::from( &packet[4..(4 + length)] ),
+                    payload: alloc::boxed::Box::from( &packet[HEADER_SIZE..(HEADER_SIZE + length)] ),
                 }
             )
 
