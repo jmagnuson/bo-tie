@@ -299,6 +299,21 @@ impl<T> TransferFormat for Box<T> where T: TransferFormat {
     }
 }
 
+impl TransferFormat for Box<str> {
+    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
+        core::str::from_utf8(raw)
+            .and_then( |s| Ok( s.into() ) )
+            .or_else( |e| {
+                log::debug!("UTF8 conversion error: {}", e);
+                Err( pdu::Error::InvalidPDU )
+            })
+    }
+
+    fn into(&self) -> Box<[u8]> {
+        self.clone().into_boxed_bytes()
+    }
+}
+
 impl TransferFormat for () {
 
     fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {

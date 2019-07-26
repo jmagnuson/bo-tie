@@ -174,7 +174,8 @@ pub struct HciAclData {
     connection_handle: common::ConnectionHandle,
     packet_boundry_flag: AclPacketBoundry,
     broadcast_flag: AclBroadcastFlag,
-    data: alloc::boxed::Box<[u8]>,
+    /// This is always a L2CAP ACL packet
+    payload: alloc::boxed::Box<[u8]>,
 }
 
 impl HciAclData {
@@ -183,17 +184,17 @@ impl HciAclData {
         connection_handle: common::ConnectionHandle,
         packet_boundry_flag: AclPacketBoundry,
         broadcast_flag: AclBroadcastFlag,
-        data: alloc::boxed::Box<[u8]>
+        payload: alloc::boxed::Box<[u8]>
     ) -> Self
     {
-        HciAclData { connection_handle, packet_boundry_flag, broadcast_flag, data }
+        HciAclData { connection_handle, packet_boundry_flag, broadcast_flag, payload }
     }
 
     pub fn get_handle(&self) -> &common::ConnectionHandle {
         &self.connection_handle
     }
 
-    pub fn get_data(&self) -> &[u8] { &self.data }
+    pub fn get_payload(&self) -> &[u8] { &self.payload }
 
     pub fn get_packet_boundry_flag(&self) -> AclPacketBoundry { self.packet_boundry_flag }
 
@@ -207,7 +208,7 @@ impl HciAclData {
     /// For now this panics if the length of data is greater then 2^16 because this library only
     /// supports LE.
     pub fn into_packet(&self) -> alloc::vec::Vec<u8> {
-        let mut v = alloc::vec::Vec::with_capacity( self.data.len() + 4 );
+        let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
             | self.packet_boundry_flag.get_shifted_val()
@@ -215,13 +216,19 @@ impl HciAclData {
 
         v.extend_from_slice( &first_2_bytes.to_le_bytes() );
 
-        v.extend_from_slice( &(self.data.len() as u16).to_le_bytes() );
+        v.extend_from_slice( &(self.payload.len() as u16).to_le_bytes() );
 
-        v.extend_from_slice(&self.data);
+        v.extend_from_slice(&self.payload);
 
         v
     }
 
+    /// Get the inner L2CAP ACL Packet
+    ///
+    /// This will create an `AclData` packet from the payload of the `HciAclData` packet
+    pub fn get_acl_packet(&self) -> Result<crate::l2cap::AclData, crate::l2cap::AclDataError> {
+        crate::l2cap::AclData::from_raw_data(&self.payload)
+    }
 
     /// Attempt to create a `HciAclData`
     ///
@@ -250,7 +257,7 @@ impl HciAclData {
                     connection_handle: connection_handle,
                     packet_boundry_flag: packet_boundry_flag,
                     broadcast_flag: broadcast_flag,
-                    data: alloc::boxed::Box::from( &packet[4..length] ),
+                    payload: alloc::boxed::Box::from( &packet[4..(4 + length)] ),
                 }
             )
 
@@ -648,98 +655,81 @@ where I: HostControllerInterface
     }
 }
 
-pub struct HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
+
+struct LeAclHciChannel<'a, I> where I: HciAclDataInterface {
     handle: common::ConnectionHandle,
-    interface: &'a I
+    hi: &'a HostInterface<I>
 }
 
-impl<'a, I> HciAclDataReceiver<'a, I> where I: HciAclDataInterface {
+impl<'a, I> LeAclHciChannel<'a, I> where I: HciAclDataInterface {
 
-    fn new(interface: &'a I, handle: common::ConnectionHandle) -> Self {
+    fn new(hi: &'a HostInterface<I>, handle: common::ConnectionHandle) -> Self {
 
-        interface.start_receiver(handle);
+        hi.interface.start_receiver(handle);
 
-        HciAclDataReceiver { handle, interface }
+        LeAclHciChannel { handle, hi }
     }
 
-    /// Get the data (if any) right now
-    ///
-    /// This is used by the
-    /// [`AclHciChannel`](./bo_tie/gap/AclHciChannel)
-    /// If there is no data to receive (and no errors occured), then `None` is returned
-    pub(crate) fn now(&self, waker: &Waker)
-    -> Option<Result<alloc::vec::Vec<HciAclData>, I::ReceiveAclDataError>>
-    {
-        match self.interface.receive( &self.handle, waker ) {
-            Some( Ok( data ) ) => if data.len() != 0 { Some( Ok( data ) ) } else { None },
-            Some( Err(e) ) => Some(Err(e)),
-            None => None
-        }
+
+}
+
+impl<'a,I> crate::l2cap::ConnectionChannel for LeAclHciChannel<'a, I>
+where I: HciAclDataInterface
+{
+    const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
+
+    fn send(&self, data: crate::l2cap::AclData ) {
+
+        let hci_acl_data = HciAclData::new(
+            self.handle,
+            AclPacketBoundry::FirstNonFlushable,
+            AclBroadcastFlag::NoBroadcast,
+            data.into_raw_data().into()
+        );
+
+        self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
     }
 
-    /// Get a future receivier for acquiring the next received ACL data.
-    ///
-    /// This returns a future that can be used to get the received data.
-    pub fn future_receive(&self)
-    -> impl Future<Output=Result<alloc::vec::Vec<HciAclData>, I::ReceiveAclDataError>> + 'a {
-        struct FutureReturn<'a, HI> where HI: HciAclDataInterface {
-            handle: common::ConnectionHandle,
-            interface: &'a HI
-        }
+    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclData>> {
 
-        impl<'a, HI> Future for FutureReturn<'a, HI> where HI: HciAclDataInterface {
-            type Output = Result<alloc::vec::Vec<HciAclData>, HI::ReceiveAclDataError>;
-
-            fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context)
-            -> Poll<Self::Output>
-            {
-                match self.interface.receive( &self.handle, cx.waker() ) {
-                    Some( Ok(buffers) ) => if buffers.len() != 0 {
-                            Poll::Ready(Ok(buffers))
-                        } else {
-                            Poll::Pending
-                        },
-                    Some( Err(e) ) => Poll::Ready(Err(e)),
-                    None => Poll::Pending,
-                }
-            }
-        }
-
-        FutureReturn {
-            handle: self.handle,
-            interface: self.interface,
-        }
+        self.hi.interface.receive(&self.handle, waker).and_then( |received| match received {
+            Ok( packets ) => packets.into_iter().filter_map(
+                    |packet| {
+                        match packet.get_acl_packet() {
+                            Ok( acl_packet) => Some(acl_packet),
+                            Err( e ) => {
+                                log::error!("Couldn't create ACL Packet from HCI ACL Packet, \
+                                    {}, hci acl packet: {:#x?} ", e, packet);
+                                None
+                            }
+                        }
+                    }
+                )
+                .collect::<alloc::vec::Vec<crate::l2cap::AclData>>()
+                .into(),
+            Err( e ) => {
+                log::error!("Failed to receive data: {}", e);
+                Some(alloc::vec::Vec::new())
+            },
+        })
     }
 }
 
-impl<'a,I> core::ops::Drop for HciAclDataReceiver<'a,I> where I: HciAclDataInterface {
+impl<'a,I> core::ops::Drop for LeAclHciChannel<'a,I> where I: HciAclDataInterface {
     fn drop(&mut self) {
-        self.interface.stop_receiver(&self.handle)
+        self.hi.interface.stop_receiver(&self.handle)
     }
 }
 
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
-    /// Send ACL data
+    /// Make an ACL data connection channel
     ///
-    /// This will return the number of bytes sent + 1 to the controller. The added byte sent to
-    /// the controller is the packet indicator.
-    pub fn send_data<D>(&self, data: D )
-    -> Result<usize, I::SendAclDataError>
-    where D: Into<HciAclData>
+    /// Make a connection channel for the provided connection handle.
+    pub fn new_le_acl_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
+    -> impl crate::l2cap::ConnectionChannel + 'a
     {
-        self.interface.send( data.into() )
-    }
-
-    /// Create a Buffered Receiver
-    ///
-    /// A buffered receiver will queue received ACL data in the order in which they are received.
-    /// The buffer will exist, and continue to queue received ACL packets, for the lifetime of the
-    /// return.
-    pub fn buffered_receiver<'a>(&'a self, connection_handle: common::ConnectionHandle)
-    -> HciAclDataReceiver<'a,I>
-    {
-        HciAclDataReceiver::new(&self.interface, connection_handle)
+        LeAclHciChannel::new(self, connection_handle)
     }
 }
 

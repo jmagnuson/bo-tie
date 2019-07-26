@@ -118,7 +118,7 @@ impl Declaration {
     const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
 }
 
-struct ValueDeclaration<V> {
+struct ValueDeclaration<V> where V: ?Sized {
     att_type: UUID,
     value: Box<V>,
     permissions: Vec<att::AttributePermissions>,
@@ -249,7 +249,7 @@ impl ServerConfiguration {
     ];
 }
 
-pub struct CharacteristicBuilder<'a, V> {
+pub struct CharacteristicBuilder<'a, V> where V: ?Sized {
     characteristic_adder: super::CharacteristicAdder<'a>,
     declaration: Declaration,
     value_decl: ValueDeclaration<V>,
@@ -260,7 +260,8 @@ pub struct CharacteristicBuilder<'a, V> {
 }
 
 impl<'a, V> CharacteristicBuilder<'a, V>
-where V: att::TransferFormat + Sized + Unpin + 'static
+where Box<V>: att::TransferFormat + Unpin + 'static,
+           V: ?Sized
 {
     pub(super) fn new(
         characteristic_adder: super::CharacteristicAdder<'a>,

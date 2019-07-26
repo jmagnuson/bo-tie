@@ -968,6 +968,10 @@ pub struct ServerAttributes {
 impl ServerAttributes {
     pub fn new() -> Self { Self { attributes: Vec::new() } }
 
+    pub(crate) fn append(&mut self, server_attributes: &mut ServerAttributes) {
+        self.attributes.append(&mut server_attributes.attributes)
+    }
+
     pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
     where V: TransferFormat + Sized + Unpin + 'static
     {
@@ -985,9 +989,3 @@ impl ServerAttributes {
         self.attributes.len() as u16
     }
 }
-
-// impl AsRef<[Box<dyn Any>]> for ServerAttributes {
-//     fn as_ref(&self) -> &[Box<dyn TransferFormat>] {
-//         self.attributes.as_slice()
-//     }
-// }

@@ -269,7 +269,8 @@ impl<'a> CharacteristicAdder<'a>
         value: Box<V>,
         value_permissions: Vec<att::AttributePermissions> )
     -> characteristic::CharacteristicBuilder<'a, V>
-    where V: att::TransferFormat + Sized + Unpin + 'static
+    where Box<V>: att::TransferFormat + Unpin + 'static,
+              V: ?Sized
     {
         characteristic::CharacteristicBuilder::new(
             self,
@@ -302,18 +303,94 @@ impl Service {
     }
 }
 
+pub struct GapServiceBuilder {
+    attributes: att::server::ServerAttributes
+}
+
+impl GapServiceBuilder {
+    /// Service UUID
+    const GAP_SERVICE_TYPE: UUID = UUID::from_u16(0x1800);
+
+    /// Default Appearance
+    pub const UNKNOWN_APPERANCE: u16 = 0;
+
+    /// Make a new `GapServiceBuilder`
+    ///
+    /// The `device_name` is a readable string for the client. The appperance is an assigned number
+    /// to indiciate to the client the external appearance of the device. Both these fields are
+    /// optional with `device_name` defaulting to an empty string and
+    pub fn new<'a,D,A>(device_name: D, apperance: A) -> Self
+    where D: Into<Option<&'a str>>,
+          A: Into<Option<u16>>
+    {
+        use characteristic::Properties;
+        use att::AttributePermissions;
+
+        let device_name_props = [Properties::Read].to_vec();
+        let apperance_props   = [Properties::Read].to_vec();
+
+        let device_name_type = UUID::from_u16(0x2a00);
+        let apperance_type   = UUID::from_u16(0x2a01);
+
+        let device_name_val: Box<str> = if let Some(name) = device_name.into() {
+            name.into()
+        } else {
+            "".into()
+        };
+
+        let apperance_val = if let Some(appr) = apperance.into() {
+            Box::new(appr)
+        } else {
+            Box::new( Self::UNKNOWN_APPERANCE)
+        };
+
+        let device_name_att_perms = [AttributePermissions::Read].to_vec();
+        let apperance_att_perms = [AttributePermissions::Read].to_vec();
+
+        let mut attributes = att::server::ServerAttributes::new();
+
+        ServiceBuilder::new(&mut attributes, Self::GAP_SERVICE_TYPE, true)
+        .into_characteristics_adder()
+        .build_characteristic(device_name_props, device_name_type, device_name_val, device_name_att_perms)
+        .finish_characteristic()
+        .build_characteristic(apperance_props, apperance_type, apperance_val, apperance_att_perms)
+        .finish_characteristic();
+
+        GapServiceBuilder { attributes }
+    }
+}
+
+/// Constructor of a GATT server
+///
+/// This will construct a GATT server for use with BR/EDR/LE bluetooth operation.
 pub struct ServerBuilder
 {
-    attributes: att::server::ServerAttributes
+    gap_service_att: GapServiceBuilder,
+    attributes: att::server::ServerAttributes,
 }
 
 impl ServerBuilder
 {
-
     /// Construct a new `ServicesBuiler`
+    ///
+    /// This will make a `ServiceBuilder` with the basic requirements for a GATT server. This
+    /// server will only contain a *GAP* service with the characteristics *Device Name* and
+    /// *Appearance*, but both of these characteristics contain no information.
     pub fn new() -> Self
     {
         ServerBuilder {
+            gap_service_att: GapServiceBuilder::new("", GapServiceBuilder::UNKNOWN_APPERANCE),
+            attributes: att::server::ServerAttributes::new(),
+        }
+    }
+
+    /// Construct a new `ServiceBuilder` with the provided GAP service builder
+    ///
+    /// The provided GAP service builder will be used to construct the required GAP service for the
+    /// GATT server.
+    pub fn new_with_gap(gap: GapServiceBuilder) -> Self {
+        ServerBuilder {
+            gap_service_att: gap,
             attributes: att::server::ServerAttributes::new()
         }
     }
@@ -328,12 +405,16 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C,Mtu>(self, connection_channel: C, server_mtu: Mtu)
+    pub fn make_server<C,Mtu>(mut self, connection_channel: C, server_mtu: Mtu)
     -> att::server::Server<C>
     where C: l2cap::ConnectionChannel,
           Mtu: Into<Option<u16>>
     {
-        att::server::Server::new(connection_channel, server_mtu.into(), Some(self.attributes))
+        let mut attributes = self.gap_service_att.attributes;
+
+        attributes.append(&mut self.attributes);
+
+        att::server::Server::new(connection_channel, server_mtu.into(), Some(attributes))
     }
 }
 

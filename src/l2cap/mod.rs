@@ -3,7 +3,6 @@
 use alloc::{
     vec::Vec,
 };
-use crate::hci;
 
 /// Channel Identifier
 ///
@@ -223,70 +222,6 @@ pub trait ConnectionChannel {
 
     fn send(&self, data: AclData);
     fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>>;
-}
-
-/// A channel constructed via the Acl HCI interface
-///
-/// This channel is for use with Acl data sent through the host controller interface.
-pub struct LeAclHciChannel<'a, I> where I: hci::HciAclDataInterface {
-    connection_handle: hci::common::ConnectionHandle,
-    connection_interval: hci::common::ConnectionInterval,
-    hi_ref: &'a hci::HostInterface<I>,
-    buf_recv: hci::HciAclDataReceiver<'a, I>
-}
-
-impl<'a, I> LeAclHciChannel<'a, I> where I: hci::HciAclDataInterface {
-
-    /// Create a new LE ACL channel from the
-    pub fn new( hi: &'a hci::HostInterface<I>, connection_event: hci::events::LEConnectionCompleteData )
-    -> Self
-    {
-        LeAclHciChannel {
-            connection_handle: connection_event.connection_handle,
-            connection_interval: connection_event.connection_interval,
-            hi_ref: hi,
-            buf_recv: hi.buffered_receiver(connection_event.connection_handle)
-        }
-    }
-}
-
-impl<'a,I> ConnectionChannel for LeAclHciChannel<'a,I> where I: hci::HciAclDataInterface {
-    const DEFAULT_ATT_MTU: u16 = MIN_ATT_MTU_LE;
-
-    fn send(&self, data: AclData ) {
-
-        let hci_acl_data = hci::HciAclData::new(
-            self.connection_handle,
-            hci::AclPacketBoundry::FirstNonFlushable,
-            hci::AclBroadcastFlag::NoBroadcast,
-            data.into_raw_data().into()
-        );
-
-        self.hi_ref.send_data(hci_acl_data).expect("Failed to send hci acl data");
-    }
-
-    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>> {
-        self.buf_recv.now(waker).and_then(
-            |r| {
-                match r {
-                    Err(e) => {
-                        log::error!("{}", e);
-                        None
-                    },
-                    Ok(hci_acl_data) => {
-                        hci_acl_data.iter()
-                            .try_fold( Vec::new(), |mut vec, hci_data| -> Result<Vec<AclData>, AclDataError> {
-                                let raw_data = AclData::from_raw_data(hci_data.get_data())?;
-
-                                vec.push( raw_data );
-                                Ok( vec )
-                            })
-                            .ok()?
-                            .into()
-                    },
-                }
-            })
-    }
 }
 
 /// Protocol and Service Multiplexers

@@ -28,13 +28,17 @@
 #![feature(await_macro)]
 #![feature(gen_future)]
 
-use bo_tie::gap::advertise;
-use bo_tie::hci;
-use bo_tie::hci::events;
-use bo_tie::hci::le::transmitter::{
-    set_advertising_data,
-    set_advertising_parameters,
-    set_advertising_enable,
+use bo_tie:: {
+    att,
+    gap::advertise,
+    gatt,
+    hci,
+    hci::events,
+    hci::le::transmitter::{
+        set_advertising_data,
+        set_advertising_parameters,
+        set_advertising_enable,
+    },
 };
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Duration;
@@ -80,22 +84,19 @@ async fn advertise_setup<'a>(
 // For simplicity, I've left the race condition in here. There could be a case where the connection
 // is made and the ConnectionComplete event isn't propicated & processed
 async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>)
--> Result<hci::common::ConnectionHandle, impl std::fmt::Display>
+-> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
     let evt_rsl = await!(hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)));
 
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
-
     match evt_rsl {
         Ok(event) => {
             use bo_tie::hci::events::{EventsData,LEMetaData};
 
-            println!("Connection Made!");
+            if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
 
-            if let EventsData::LEMeta(LEMetaData::ConnectionComplete(le_conn_comp_event)) = event {
-                Ok(le_conn_comp_event.connection_handle)
+                Ok(event_data)
             }
             else {
                 Err(format!("Received the incorrect event {:?}", event))
@@ -119,6 +120,31 @@ async fn disconnect(
     };
 
     await!(disconnect::send(&hi, prams)).expect("Failed to disconnect");
+}
+
+/// Initialize the Attribute Server
+///
+/// The attribute server is organized via the gatt protocol. This example is about connecting
+/// to a client and not about featuring the attribue server, so only the minimalistic gatt server
+/// is present.
+fn gatt_server_init<C>(channel: C, local_name: &str) -> att::server::Server<C>
+where C: bo_tie::l2cap::ConnectionChannel
+{
+    let att_mtu = 256;
+
+    let gsb = gatt::GapServiceBuilder::new(local_name, None);
+
+    gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu)
+}
+
+fn att_server_loop<C>(mut server: att::server::Server<C> ) where C: bo_tie::l2cap::ConnectionChannel {
+
+    loop {
+        futures::executor::block_on(server.receiver())
+            .expect("Couldn't get ACL data")
+            .process_request()
+            .expect("Couldn't process ACL data");
+    }
 }
 
 fn handle_sig(
@@ -154,6 +180,8 @@ fn main() {
     use futures::executor;
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
+    let local_name = "Connection Test";
+
     TermLogger::init( LevelFilter::Debug, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
@@ -162,13 +190,28 @@ fn main() {
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
-    executor::block_on(advertise_setup(&interface, "Connection Test"));
+    executor::block_on(advertise_setup(&interface, local_name));
 
     // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
     // on a different thread.
     match executor::block_on(wait_for_connection(&interface)) {
-        Ok(handle) => {
+        Ok(event_data) => {
+            let handle = event_data.connection_handle;
+
             raw_connection_handle.store(handle.get_raw_handle(), Ordering::SeqCst);
+
+            let interface_clone = interface.clone();
+
+            std::thread::spawn( move || {
+
+                let connection_channel = interface_clone.new_le_acl_connection_channel(handle);
+
+                let server = gatt_server_init(connection_channel, local_name);
+
+                att_server_loop(server);
+            });
+
+            executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();
 
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
