@@ -252,14 +252,14 @@ impl HciAclData {
                 Err(_) => return Err( HciAclPacketConvertError::InvalidBroadcastFlag ),
             };
 
-            let length = <u16>::from_le_bytes( [ packet[2], packet[3] ] ) as usize;
+            let data_length = <u16>::from_le_bytes( [ packet[2], packet[3] ] ) as usize;
 
             Ok(
                 HciAclData {
                     connection_handle: connection_handle,
                     packet_boundry_flag: packet_boundry_flag,
                     broadcast_flag: broadcast_flag,
-                    payload: alloc::boxed::Box::from( &packet[HEADER_SIZE..(HEADER_SIZE + length)] ),
+                    payload: alloc::boxed::Box::from( &packet[HEADER_SIZE..(HEADER_SIZE + data_length)] ),
                 }
             )
 
