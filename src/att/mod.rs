@@ -8,8 +8,12 @@
 //! This is implementation of the Attribute Protocol as defined in the Bluetooth Specification
 //! (version 5.0), Vol. 3, Part F.
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::{
+    boxed::Box,
+    format,
+    string::String,
+    vec::Vec,
+};
 
 pub mod pdu;
 pub mod client;
@@ -149,7 +153,6 @@ impl<V> Attribute<V> {
     }
 }
 
-#[derive(Debug)]
 pub enum Error {
     /// Returned when there is no connection to the bluetooth controller
     NotConnected,
@@ -159,17 +162,40 @@ pub enum Error {
     TooSmallMtu,
     /// An Error PDU is received
     Pdu(pdu::Pdu<pdu::ErrorAttributeParameter>),
-    /// The only error information gathered is the PDU Error type
-    Only(pdu::Error),
     /// A different pdu was expected
     ///
     /// This contains the opcode value of the unexpectedly received pdu
-    UnexpectedPdu(u8)
+    UnexpectedPdu(u8),
+    /// A Transfer format error
+    TransferFormat(TransferFormatError),
+    /// An empty PDU
+    Empty,
+    /// Unknown opcode
+    ///
+    /// An `UnknonwOpcode` is for opcodes that are not recognized by the ATT protocol. They may
+    /// be valid for a higher layer protocol.
+    UnknownOpcode(u8),
 }
 
-impl From<pdu::Error> for Error {
-    fn from(err: pdu::Error) -> Error {
-        Error::Only(err)
+impl core::fmt::Display for Error{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Error::NotConnected => write!( f, "Not Connected" ),
+            Error::MtuExceeded => write!( f, "Maximum Transmission Unit exceeded" ),
+            Error::TooSmallMtu => write!( f, "Minimum Transmission Unit larger then specified" ),
+            Error::Pdu(pdu) => write!( f, "Received Error PDU: {}", pdu ),
+            Error::UnexpectedPdu(val) => write!( f, "{}", val ),
+            Error::TransferFormat(t_e) => write!( f, "{}", t_e ),
+            Error::Empty => write!( f, "Received an empty PDU" ),
+            Error::UnknownOpcode(op) =>
+                write!( f, "Opcode not known to the attribute protocol ({:#x})", op),
+        }
+    }
+}
+
+impl core::fmt::Debug for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(self,f)
     }
 }
 
@@ -179,6 +205,87 @@ impl From<pdu::Pdu<pdu::ErrorAttributeParameter>> for Error {
     }
 }
 
+impl From<TransferFormatError> for Error {
+    fn from(err: TransferFormatError) -> Self {
+        Error::TransferFormat(err)
+    }
+}
+
+pub struct TransferFormatError {
+    pub pdu_err: pdu::Error,
+    pub message: String,
+}
+
+impl TransferFormatError {
+
+    /// Create a `TransferFormatError` for when the processed bytes does not match the expected
+    /// number of bytes
+    pub(crate) fn bad_size<D1, D2>(name: &'static str, expected_len: D1, incorrect_len: D2) -> Self
+    where D1: core::fmt::Display,
+          D2: core::fmt::Display,
+    {
+        TransferFormatError::from( format!("Expected a size of {} bytes for {}, data length is {}",
+            expected_len, name, incorrect_len)
+        )
+    }
+
+    pub(crate) fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
+    where D1: core::fmt::Display,
+          D2: core::fmt::Display,
+    {
+        TransferFormatError::from( format!("Expected a minimum size of {} bytes for {}, data \
+            length is {}", min_size, name, data_len) )
+    }
+    /// Create a `TransferFormattedError` for when
+    /// `[chunks_exact]`(https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.chunks_exact)
+    /// created an `ChunksExact` object that contained a remainder that isn't zero
+    pub(crate) fn bad_exact_chunks<D1, D2>(name: &'static str, chunk_size: D1, data_len: D2) -> Self
+    where D1: core::fmt::Display,
+          D2: core::fmt::Display,
+    {
+        TransferFormatError::from( format!("Cannot split data for {}, data of length {} is not a \
+             multiple of {}", name, data_len, chunk_size))
+    }
+}
+
+impl From<String> for TransferFormatError {
+    /// Create a `TransferFormatError` with the given message
+    ///
+    /// The member `pdu_err` will be set to `InvalidPDU`
+    fn from(message: String) -> Self {
+        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message: message }
+    }
+}
+
+impl From<&'_ str> for TransferFormatError {
+    /// Create a `TransferFormatError` with the given message
+    ///
+    /// The member `pdu` will be set to `InvalidPDU`
+    fn from(msg: &'_ str) -> Self {
+        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message: msg.into() }
+    }
+}
+
+impl From<pdu::Error> for TransferFormatError {
+    /// Create a `TransferFormatError` with the input `err`
+    ///
+    /// The member message will just be set to 'unspecified'
+    fn from(err: pdu::Error) -> Self {
+        TransferFormatError { pdu_err: err, message: "unspecified".into() }
+    }
+}
+
+impl core::fmt::Debug for TransferFormatError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
+
+impl core::fmt::Display for TransferFormatError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{}, {}", self.pdu_err, self.message)
+    }
+}
 /// ATT Protocol Transmission format
 ///
 /// Structures that implement `TransferFormat` can be converted into the transmitted format
@@ -189,16 +296,25 @@ pub trait TransferFormat {
     /// This will attempt to take the passed byte slice and convert it into Self. The byte slice
     /// needs to only be the attribute parameter, it cannot contain either the attribute opcode
     /// or the attribute signature.
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> where Self: Sized;
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized;
 
     /// Convert Self into the attribute parameter
     fn into(&self) -> Box<[u8]>;
 }
 
+/// The size of Formatted Transfer
+///
+/// This is required for vectors or slices of transfered data.
+pub trait TransferFormatSize {
+
+    /// The size of the data in its transferred format
+    const SIZE: usize;
+}
+
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
         impl TransferFormat for $num {
-            fn from( raw: &[u8]) -> Result<Self, pdu::Error> {
+            fn from( raw: &[u8]) -> Result<Self, TransferFormatError> {
                 if raw.len() == core::mem::size_of::<$num>() {
                     let mut bytes = <[u8;core::mem::size_of::<$num>()]>::default();
 
@@ -206,13 +322,17 @@ macro_rules! impl_transfer_format_for_number {
 
                     Ok(Self::from_le_bytes(bytes))
                 } else {
-                    Err(pdu::Error::InvalidPDU)
+                    Err(TransferFormatError::from(concat!("Invalid length for ", stringify!($ty))))
                 }
             }
 
             fn into(&self) -> Box<[u8]> {
                 From::<&'_ [u8]>::from(&self.to_le_bytes())
             }
+        }
+
+        impl TransferFormatSize for $num {
+            const SIZE: usize = core::mem::size_of::<$num>();
         }
     }
 }
@@ -231,8 +351,9 @@ impl_transfer_format_for_number!{i128}
 impl_transfer_format_for_number!{u128}
 
 impl TransferFormat for alloc::string::String {
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
-        alloc::string::String::from_utf8(raw.to_vec()).map_err(|_| pdu::Error::InvalidPDU)
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+        alloc::string::String::from_utf8(raw.to_vec())
+            .map_err( |e| TransferFormatError::from(format!("{:?}", e)) )
     }
 
     fn into( &self ) -> Box<[u8]> {
@@ -241,15 +362,25 @@ impl TransferFormat for alloc::string::String {
 }
 
 impl TransferFormat for crate::UUID {
-    fn from(raw: &[u8]) -> Result<Self, pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         use core::mem::size_of;
 
+        macro_rules! err_fmt { () =>  { "Failed to create UUID, {}" } }
+
         if raw.len() == size_of::<u16>() {
-            Ok( crate::UUID::from_u16( TransferFormat::from(raw)? ) )
+
+            TransferFormat::from(raw)
+            .and_then( |uuid_16: u16| Ok(crate::UUID::from_u16(uuid_16)) )
+            .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
+
         } else if raw.len() == size_of::<u128>() {
-            Ok( crate::UUID::from_u128( TransferFormat::from(raw)? ) )
+
+            TransferFormat::from(raw)
+            .and_then( |uuid_128: u128| Ok(crate::UUID::from_u128(uuid_128)) )
+            .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
+
         } else {
-            Err( pdu::Error::InvalidPDU )
+            Err(TransferFormatError::from(format!(err_fmt!(), "raw data is not 16 or 128 bits")))
         }
     }
 
@@ -261,22 +392,22 @@ impl TransferFormat for crate::UUID {
     }
 }
 
-impl<T> TransferFormat for Box<[T]> where T: TransferFormat {
+impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize {
 
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
-        use core::mem::size_of;
-
-        let mut chunks = raw.chunks_exact(size_of::<T>());
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+        let mut chunks = raw.chunks_exact(T::SIZE);
 
         if chunks.remainder().len() == 0 {
             Ok( chunks.try_fold( Vec::new(), |mut v,c| {
                     v.push(TransferFormat::from(&c)?);
                     Ok(v)
-                })?
+                })
+                .or_else(|e: TransferFormatError| Err(TransferFormatError::from(
+                    format!("Failed to make boxed slice, {}", e))))?
                 .into_boxed_slice()
             )
         } else {
-            Err(pdu::Error::InvalidPDU)
+            Err(TransferFormatError::bad_exact_chunks("{generic}", T::SIZE, raw.len()))
         }
     }
 
@@ -290,7 +421,7 @@ impl<T> TransferFormat for Box<[T]> where T: TransferFormat {
 }
 
 impl<T> TransferFormat for Box<T> where T: TransferFormat {
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
         <T as TransferFormat>::from(raw).and_then( |v| Ok(Box::new(v)) )
     }
 
@@ -300,12 +431,11 @@ impl<T> TransferFormat for Box<T> where T: TransferFormat {
 }
 
 impl TransferFormat for Box<str> {
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
         core::str::from_utf8(raw)
             .and_then( |s| Ok( s.into() ) )
             .or_else( |e| {
-                log::debug!("UTF8 conversion error: {}", e);
-                Err( pdu::Error::InvalidPDU )
+                Err( TransferFormatError::from(format!("{}", e)))
             })
     }
 
@@ -316,11 +446,11 @@ impl TransferFormat for Box<str> {
 
 impl TransferFormat for () {
 
-    fn from( raw: &[u8] ) -> Result<Self, pdu::Error> {
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() == 0 {
             Ok(())
         } else {
-            Err(pdu::Error::InvalidPDU)
+            Err(TransferFormatError::from("length must be zero for type '()'"))
         }
     }
 
@@ -331,14 +461,19 @@ impl TransferFormat for () {
 
 impl TransferFormat for Box<dyn TransferFormat> {
     /// It is impossible to convert data from its raw form into a Box<dyn TransferFormat>. This
-    /// will always return Err(pdu::Error::InvalidPDU)
-    fn from( _: &[u8]) -> Result<Self, pdu::Error> {
-        Err(pdu::Error::InvalidPDU)
+    /// will always return `Err(..)`
+    fn from( _: &[u8]) -> Result<Self, TransferFormatError> {
+        Err(TransferFormatError::from("Impossible to convert raw data to a 'Box<dyn TransferFormat>'"))
     }
 
     fn into(&self) -> Box<[u8]> {
         TransferFormat::into(self.as_ref())
     }
+}
+
+impl TransferFormatSize for Box<dyn TransferFormat> {
+    /// This is not the actual size, but because the size is unknown this is set to zero
+    const SIZE: usize = 0;
 }
 
 trait AnyAttribute {
@@ -349,7 +484,7 @@ trait AnyAttribute {
 
     fn get_handle(&self) -> u16;
 
-    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), pdu::Error>;
+    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError>;
 
     fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat;
 }
@@ -367,7 +502,7 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
         &self.value
     }
 
-    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), pdu::Error> {
+    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError> {
 
         self.value = TransferFormat::from(raw)?;
 

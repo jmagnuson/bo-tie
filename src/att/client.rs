@@ -1,9 +1,14 @@
 use super::{
     pdu,
     TransferFormat,
+    TransferFormatSize,
+    TransferFormatError
 };
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::{
+    boxed::Box,
+    vec::Vec,
+    format,
+};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Poll, Context};
@@ -27,11 +32,10 @@ pub enum ClientPduName {
     SignedWriteCommand,
 }
 
-impl ClientPduName {
-    /// Convert a u8 opcode to a client pdu name
-    ///
-    /// If the opcode is not part of the Attribute protocol, then the an error is returned.
-    pub(crate) fn try_from(val: u8) -> Result<Self, ()> {
+impl core::convert::TryFrom<u8> for ClientPduName {
+    type Error = ();
+
+    fn try_from(val: u8) -> Result<Self, ()> {
         match val {
             0x02 => Ok(ClientPduName::ExchangeMtuRequest),
             0x04 => Ok(ClientPduName::FindInformationRequest),
@@ -77,6 +81,27 @@ impl From<ClientPduName> for u8 {
             ClientPduName::ExecuteWriteRequest => 0x18,
             ClientPduName::HandleValueConfirmation => 0x1E,
             ClientPduName::SignedWriteCommand => 0xD2,
+        }
+    }
+}
+
+impl core::fmt::Display for ClientPduName {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ClientPduName::ExchangeMtuRequest => write!(f, "Exchange Mtu Request"),
+            ClientPduName::FindInformationRequest => write!(f, "Find Information Request"),
+            ClientPduName::FindByTypeValueRequest => write!(f, "Find By Type Value Request"),
+            ClientPduName::ReadByTypeRequest => write!(f, "Read By Type Request"),
+            ClientPduName::ReadRequest => write!(f, "Read Request"),
+            ClientPduName::ReadBlobRequest => write!(f, "Read Blob Request"),
+            ClientPduName::ReadMultipleRequest => write!(f, "Read Multiple Request"),
+            ClientPduName::ReadByGroupTypeRequest => write!(f, "Read By Group Type Request"),
+            ClientPduName::WriteRequest => write!(f, "Write Request"),
+            ClientPduName::WriteCommand => write!(f, "Write Command"),
+            ClientPduName::PrepareWriteRequest => write!(f, "Prepare Write Request"),
+            ClientPduName::ExecuteWriteRequest => write!(f, "Execute Write Request"),
+            ClientPduName::HandleValueConfirmation => write!(f, "Handle Value Confirmation"),
+            ClientPduName::SignedWriteCommand => write!(f, "Signed Write Command"),
         }
     }
 }
@@ -131,7 +156,8 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
                         Ok(client)
                     },
                     Err(e) => {
-                        Err(e.into())
+                        Err( TransferFormatError::from(format!("Bad exchange MTU response: {}", e))
+                            .into() )
                     }
                 }
 
@@ -151,17 +177,34 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
 
                         let client = Client {
                             mtu: Ch::DEFAULT_ATT_MTU as usize,
-                            channel: this.channel.take().expect("Not channel to take"),
+                            channel: this.channel.take().expect("No channel to take"),
                         };
 
                         Ok(client)
                     }
 
-                    e @ _ => Err( e.into() )
+                    e @ _ => Err( super::Error::from(TransferFormatError {
+                        pdu_err: e,
+                        message: format!("{}", e),
+                    }) )
                 }
             } else {
+                use core::convert::TryFrom;
 
-                Err( pdu::Error::InvalidPDU.into() )
+                match bytes.get(0).and_then(|b| Some(ServerPduName::try_from(*b)) ) {
+
+                    Some(Ok(pdu)) => Err( TransferFormatError::from(format!("Client received \
+                        invalid pdu in response to 'exchange MTU request'. Received '{}'", pdu ))),
+
+                    Some(Err(_)) => Err( TransferFormatError::from(format!("Received unknown \
+                        invalid PDU for response to 'exchange MTU request'; raw value is {:#x}",
+                        bytes[0]))),
+
+                    None => Err( TransferFormatError::from("Received empty packet for
+                        response to 'exchange MTU rerquest'") ),
+
+                }
+                .or_else( |tfe| Err( super::Error::from(tfe) ) )
 
             }.into()
 
@@ -210,7 +253,7 @@ where Ch: l2cap::ConnectionChannel,
 
                     Ok(super::server::ServerPduName::ErrorResponse) => {
 
-                        let err_pdu_rslt: Result<pdu::Pdu<pdu::ErrorAttributeParameter>, pdu::Error> =
+                        let err_pdu_rslt: Result<pdu::Pdu<pdu::ErrorAttributeParameter>, _> =
                             TransferFormat::from(&bytes);
 
                         match err_pdu_rslt {
@@ -229,10 +272,13 @@ where Ch: l2cap::ConnectionChannel,
                         }
                     },
                     Ok(_) => Poll::Ready(Err( super::Error::UnexpectedPdu(bytes[0]) )),
-                    Err(_) => Poll::Ready(Err( pdu::Error::InvalidPDU.into() )),
+                    Err(_) => Poll::Ready(Err( TransferFormatError::from(format!("Received Unknown \"
+                        PDU '{:#x}', expected '{} ({:#x})'", bytes[0], this.exp_resp,
+                        Into::<u8>::into(this.exp_resp))).into() )),
                 }
             } else {
-                Poll::Ready(Err( pdu::Error::InvalidPDU.into() ))
+                Poll::Ready(Err( TransferFormatError::from(format!("Received Empty PDU, expected \
+                    {}", this.exp_resp)).into() ))
             }
         } else {
             Poll::Pending
@@ -483,7 +529,7 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
     pub fn read_by_group_type_request<'a,R,D>(&'a self, handle_range: R, group_type: crate::UUID)
     -> impl Future<Output = Result<Box<[pdu::ReadGroupTypeResponse<D>]>, super::Error>> + 'a
     where R: Into<pdu::HandleRange>,
-          D: TransferFormat + Unpin + 'a
+          D: TransferFormat + TransferFormatSize + Unpin + 'a
     {
         let pdu = pdu::read_by_group_type_request(handle_range, group_type);
 

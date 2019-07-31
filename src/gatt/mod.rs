@@ -26,10 +26,10 @@ struct ServiceInclude {
 }
 
 impl att::TransferFormat for ServiceInclude {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         // The implementation of TransferFormat for UUID will check if the length is good for
         // a 128 bit UUID
-        if raw.len() >= (4 + core::mem::size_of::<u16>()) {
+        if raw.len() >= 6 {
             Ok( ServiceInclude {
                 service_handle: att::TransferFormat::from( &raw[..2] )?,
                 end_group_handle: att::TransferFormat::from( &raw[2..4] )?,
@@ -40,11 +40,13 @@ impl att::TransferFormat for ServiceInclude {
                 } else if raw[4..].len() == 0 {
                     None
                 } else {
-                    return Err( att::pdu::Error::InvalidPDU )
+                    return Err(att::TransferFormatError::from(
+                        concat!("Invalid short service type in ", stringify!("ServiceInclude"))))
                 },
             })
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_min_size(stringify!(ServiceInclude),
+                6, raw.len()) )
         }
     }
 

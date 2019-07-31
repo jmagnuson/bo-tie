@@ -2,6 +2,7 @@ use alloc::{
     boxed::Box,
     vec::Vec,
     string::String,
+    format,
 };
 use crate::{att, UUID};
 
@@ -64,11 +65,11 @@ impl Properties {
 }
 
 impl att::TransferFormat for Box<[Properties]> {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 1 {
             Ok( Properties::from_bit_field(raw[0]) )
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_size(stringify!(Box<[Properties]>), 1, raw.len()) )
         }
     }
 
@@ -79,6 +80,10 @@ impl att::TransferFormat for Box<[Properties]> {
     }
 }
 
+impl att::TransferFormatSize for Box<[Properties]> {
+    const SIZE: usize = 1;
+}
+
 struct Declaration {
     properties: Box<[Properties]>,
     value_handle: u16,
@@ -86,17 +91,17 @@ struct Declaration {
 }
 
 impl att::TransferFormat for Declaration {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         // The implementation of TransferFormat for UUID will check if the length is good for
         // a 128 bit UUID
-        if raw.len() >= (4 + core::mem::size_of::<u16>()) {
+        if raw.len() >= 6 {
             Ok( Declaration {
                 properties: att::TransferFormat::from( &raw[..1] )?,
                 value_handle: att::TransferFormat::from( &raw[1..3] )?,
                 uuid: att::TransferFormat::from( &raw[3..])?,
             })
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_min_size(stringify!(Declaration), 6, raw.len()) )
         }
     }
 
@@ -130,15 +135,16 @@ pub enum ExtendedProperties {
 }
 
 impl att::TransferFormat for ExtendedProperties {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ExtendedProperties::ReliableWrite ),
                 0x2 => Ok( ExtendedProperties::WritableAuxiliaries ),
-                _   => Err( att::pdu::Error::InvalidPDU )
+                e @ _ => Err( att::TransferFormatError::from(
+                    format!("Unknown extended property '{}'", e)) )
             }
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_size(stringify!(ExtendedProperties), 2, raw.len()) )
         }
     }
 
@@ -150,6 +156,10 @@ impl att::TransferFormat for ExtendedProperties {
 
         From::<&[u8]>::from( &[val] )
     }
+}
+
+impl att::TransferFormatSize for ExtendedProperties {
+    const SIZE: usize = 1;
 }
 
 impl ExtendedProperties {
@@ -182,15 +192,16 @@ pub enum ClientConfiguration {
 }
 
 impl att::TransferFormat for ClientConfiguration {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ClientConfiguration::Notification ),
                 0x2 => Ok( ClientConfiguration::Indication ),
-                _   => Err( att::pdu::Error::InvalidPDU )
+                e @ _ => Err( att::TransferFormatError::from(
+                    format!("Unknown Client Configuration '{}'", e)))
             }
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_size(stringify!(ClientConfiguration), 2, raw.len()) )
         }
     }
 
@@ -202,6 +213,10 @@ impl att::TransferFormat for ClientConfiguration {
 
         From::<&[u8]>::from( &[val] )
     }
+}
+
+impl att::TransferFormatSize for ClientConfiguration {
+    const SIZE: usize = 1;
 }
 
 impl ClientConfiguration {
@@ -219,14 +234,15 @@ pub enum ServerConfiguration {
 }
 
 impl att::TransferFormat for ServerConfiguration {
-    fn from(raw: &[u8]) -> Result<Self, att::pdu::Error> {
+    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ServerConfiguration::Broadcast ),
-                _   => Err( att::pdu::Error::InvalidPDU )
+                e @ _ => Err( att::TransferFormatError::from(
+                    format!("Unknown server configuration: '{}'", e)))
             }
         } else {
-            Err( att::pdu::Error::InvalidPDU )
+            Err( att::TransferFormatError::bad_size(stringify!(ServerConfiguration), 2, raw.len()) )
         }
     }
 
@@ -237,6 +253,10 @@ impl att::TransferFormat for ServerConfiguration {
 
         From::<&[u8]>::from( &[val] )
     }
+}
+
+impl att::TransferFormatSize for ServerConfiguration {
+    const SIZE: usize = 1;
 }
 
 impl ServerConfiguration {
