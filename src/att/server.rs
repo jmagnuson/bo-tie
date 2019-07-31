@@ -11,6 +11,7 @@ use super::{
     client,
     pdu,
     TransferFormat,
+    TransferFormatError
 };
 use crate::l2cap;
 
@@ -93,6 +94,27 @@ impl core::convert::TryFrom<u8> for ServerPduName {
     }
 }
 
+impl core::fmt::Display for ServerPduName {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ServerPduName::ErrorResponse => write!(f, "Error Response"),
+            ServerPduName::ExchangeMTUResponse => write!(f, "Exchange MTU Response"),
+            ServerPduName::FindInformationResponse => write!(f, "Find Information Response"),
+            ServerPduName::FindByTypeValueResponse => write!(f, "Find By Type Value Response"),
+            ServerPduName::ReadByTypeResponse => write!(f, "Read By Type Response"),
+            ServerPduName::ReadResponse => write!(f, "Read Response"),
+            ServerPduName::ReadBlobResponse => write!(f, "Read Blob Response"),
+            ServerPduName::ReadMultipleResponse => write!(f, "Read Multiple Response"),
+            ServerPduName::ReadByGroupTypeResponse => write!(f, "Read By Group Type Response"),
+            ServerPduName::WriteResponse => write!(f, "Write Response"),
+            ServerPduName::PrepareWriteResponse => write!(f, "Prepare Write Response"),
+            ServerPduName::ExecuteWriteResponse => write!(f, "Execute Write Response"),
+            ServerPduName::HandleValueNotification => write!(f, "Handle Value Notification"),
+            ServerPduName::HandleValueIndication => write!(f, "Handle Value Indication"),
+        }
+    }
+}
+
 impl ServerPduName {
 
     /// Check that the given raw pdu is this response pdu
@@ -167,15 +189,15 @@ impl super::AnyAttribute for ReservedHandle {
 
     fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
 
-    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), pdu::Error> {
-        Err(pdu::Error::InvalidHandle)
+    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), TransferFormatError> {
+        Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
     }
 }
 
 pub struct RequestProcessor<'a, C>
 where C: l2cap::ConnectionChannel
 {
-    pdu_name: client::ClientPduName,
+    pdu_name: Option<client::ClientPduName>,
     pdu_raw_data: Vec<u8>,
     server: &'a mut Server<C>,
 }
@@ -183,8 +205,14 @@ where C: l2cap::ConnectionChannel
 impl<'a, C> RequestProcessor<'a, C>
 where C: l2cap::ConnectionChannel
 {
-    fn new( pdu_name: client::ClientPduName, pdu_raw_data: Vec<u8>, server: &'a mut Server<C>) -> Self {
-        RequestProcessor { pdu_name, pdu_raw_data, server }
+    fn new<P>( pdu_name: P, pdu_raw_data: Vec<u8>, server: &'a mut Server<C>) -> Self
+    where P: Into<Option<client::ClientPduName>>
+    {
+        RequestProcessor {
+            pdu_name: pdu_name.into(),
+            pdu_raw_data: pdu_raw_data,
+            server: server
+        }
     }
 
     /// Attribute Protocol Process
@@ -194,37 +222,46 @@ where C: l2cap::ConnectionChannel
     /// between attributes that are definied in this protocol. Consequently this function is the
     /// usually the slowest way to process an attribute request of the *find* or *by type* kind and
     /// higher layer protocls may have a faster way to process those requests.
-    pub fn process_request( &mut self )-> Result<(), pdu::Error>
+    ///
+    /// If an opcode that isn't part of the opcodes assigned to the attribute protocol is received,
+    /// then this function will return a
+    /// [`UnknownOpcode`](UnknownOpcode)
+    /// with the opcode.
+    pub fn process_request( &mut self )-> Result<(), super::Error>
     {
         match self.pdu_name {
-            super::client::ClientPduName::ExchangeMtuRequest =>
+            Some( super::client::ClientPduName::ExchangeMtuRequest ) =>
                 self.server.process_exchange_mtu_request( TransferFormat::from( &self.pdu_raw_data)? ),
-            super::client::ClientPduName::WriteRequest =>
+            Some( super::client::ClientPduName::WriteRequest ) =>
                 self.server.process_write_request( &self.pdu_raw_data ),
-            super::client::ClientPduName::ReadRequest =>
+            Some( super::client::ClientPduName::ReadRequest ) =>
                 self.server.process_read_request( TransferFormat::from(&self.pdu_raw_data)? ),
-            super::client::ClientPduName::FindInformationRequest =>
+            Some( super::client::ClientPduName::FindInformationRequest ) =>
                 self.server.process_find_information_request( TransferFormat::from(&self.pdu_raw_data)? ),
-            super::client::ClientPduName::FindByTypeValueRequest =>
+            Some( super::client::ClientPduName::FindByTypeValueRequest ) =>
                 self.server.process_find_by_type_value_request( &self.pdu_raw_data ),
-            super::client::ClientPduName::ReadByTypeRequest =>
+            Some( super::client::ClientPduName::ReadByTypeRequest ) =>
                 self.server.process_read_by_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
-            super::client::ClientPduName::ReadBlobRequest |
-            super::client::ClientPduName::ReadMultipleRequest |
-            super::client::ClientPduName::ReadByGroupTypeRequest |
-            super::client::ClientPduName::WriteCommand |
-            super::client::ClientPduName::PrepareWriteRequest |
-            super::client::ClientPduName::ExecuteWriteRequest |
-            super::client::ClientPduName::HandleValueConfirmation |
-            super::client::ClientPduName::SignedWriteCommand =>
-                self.server.send_pdu_error(0, self.pdu_name.into(), pdu::Error::RequestNotSupported),
+            Some( pdu @ super::client::ClientPduName::ReadBlobRequest ) |
+            Some( pdu @ super::client::ClientPduName::ReadMultipleRequest ) |
+            Some( pdu @ super::client::ClientPduName::ReadByGroupTypeRequest ) |
+            Some( pdu @ super::client::ClientPduName::WriteCommand ) |
+            Some( pdu @ super::client::ClientPduName::PrepareWriteRequest ) |
+            Some( pdu @ super::client::ClientPduName::ExecuteWriteRequest ) |
+            Some( pdu @ super::client::ClientPduName::HandleValueConfirmation ) |
+            Some( pdu @ super::client::ClientPduName::SignedWriteCommand ) =>
+                self.server.send_pdu_error(0, pdu.into(), pdu::Error::RequestNotSupported),
+            None =>
+                self.pdu_raw_data.get(0)
+                    .ok_or( super::Error::Empty )
+                    .and_then( |op| Err( super::Error::UnknownOpcode(*op) ) )?
         };
 
         Ok(())
     }
 
     /// Get the request type
-    pub fn get_request_type(&self) -> client::ClientPduName { self.pdu_name }
+    pub fn get_request_type(&self) -> Option<client::ClientPduName> { self.pdu_name }
 
     /// Get the received payload
     pub fn get_request_raw_data(&self) -> &[u8] { &self.pdu_raw_data }
@@ -266,18 +303,20 @@ where C: l2cap::ConnectionChannel
                 .fold( Vec::new(), |mut vec, data| { vec.extend_from_slice(data); vec } );
 
             if data.len() > 1 {
-                match super::client::ClientPduName::try_from(data[0]) {
-                    Ok(pdu_name) => {
-                        if let Some(server) = self.get_mut().server.take() {
-                            Poll::Ready( Ok( RequestProcessor::new(pdu_name, data, server) ) )
-                        } else {
-                            Poll::Pending
-                        }
-                    }
-                    Err(_) => Poll::Ready(Err(pdu::Error::InvalidPDU.into())),
+                use core::convert::TryFrom;
+
+                if let Some(server) = self.get_mut().server.take() {
+                    let pdu = super::client::ClientPduName::try_from(data[0]).ok();
+
+                    Poll::Ready( Ok( RequestProcessor::new(pdu, data, server) ) )
                 }
+                else {
+                   Poll::Ready( Err( TransferFormatError::from("Already processes a \
+                       request with this future. A new future must be created for each \
+                       incoming packet").into() ))
+               }
             } else {
-                Poll::Ready(Err(pdu::Error::InvalidPDU.into()))
+                Poll::Ready(Err( super::Error::Empty ))
             }
         } else {
             Poll::Pending
@@ -549,7 +588,7 @@ where C: l2cap::ConnectionChannel
                         self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
                     },
                     Err(pdu_err) =>
-                        self.send_pdu_error(handle, received_opcode, pdu_err),
+                        self.send_pdu_error(handle, received_opcode, pdu_err.pdu_err),
                 };
             } else {
                 self.send_invalid_handle_error(handle, received_opcode);
