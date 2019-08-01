@@ -15,6 +15,10 @@ use super::{
 };
 use crate::l2cap;
 
+macro_rules! log_debug {
+    ( $arg1:expr $(, $args:expr)* ) => { log::debug!(concat!("(ATT) ", $arg1) $(, $args)*) }
+}
+
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ServerPduName {
     ErrorResponse,
@@ -229,28 +233,39 @@ where C: l2cap::ConnectionChannel
     /// with the opcode.
     pub fn process_request( &mut self )-> Result<(), super::Error>
     {
+        log::info!("(ATT) processing '{:?}'", self.pdu_name);
+
         match self.pdu_name {
             Some( super::client::ClientPduName::ExchangeMtuRequest ) =>
                 self.server.process_exchange_mtu_request( TransferFormat::from( &self.pdu_raw_data)? ),
+
             Some( super::client::ClientPduName::WriteRequest ) =>
                 self.server.process_write_request( &self.pdu_raw_data ),
+
             Some( super::client::ClientPduName::ReadRequest ) =>
                 self.server.process_read_request( TransferFormat::from(&self.pdu_raw_data)? ),
+
             Some( super::client::ClientPduName::FindInformationRequest ) =>
                 self.server.process_find_information_request( TransferFormat::from(&self.pdu_raw_data)? ),
+
             Some( super::client::ClientPduName::FindByTypeValueRequest ) =>
                 self.server.process_find_by_type_value_request( &self.pdu_raw_data ),
+
             Some( super::client::ClientPduName::ReadByTypeRequest ) =>
                 self.server.process_read_by_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
+
+            Some( super::client::ClientPduName::ReadByGroupTypeRequest ) =>
+                self.server.process_read_by_group_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
+
             Some( pdu @ super::client::ClientPduName::ReadBlobRequest ) |
             Some( pdu @ super::client::ClientPduName::ReadMultipleRequest ) |
-            Some( pdu @ super::client::ClientPduName::ReadByGroupTypeRequest ) |
             Some( pdu @ super::client::ClientPduName::WriteCommand ) |
             Some( pdu @ super::client::ClientPduName::PrepareWriteRequest ) |
             Some( pdu @ super::client::ClientPduName::ExecuteWriteRequest ) |
             Some( pdu @ super::client::ClientPduName::HandleValueConfirmation ) |
             Some( pdu @ super::client::ClientPduName::SignedWriteCommand ) =>
                 self.server.send_pdu_error(0, pdu.into(), pdu::Error::RequestNotSupported),
+
             None =>
                 self.pdu_raw_data.get(0)
                     .ok_or( super::Error::Empty )
@@ -521,6 +536,8 @@ where C: l2cap::ConnectionChannel
     /// If the handle is invalid, then this function sends the error PDU with the error InvalidHandle
     #[inline]
     fn send_invalid_handle_error(&self, handle: u16, received_opcode: u8) {
+        log_debug!("Sending error response (invalid handle)");
+
         self.send_pdu_error(handle, received_opcode, pdu::Error::InvalidHandle);
     }
 
@@ -534,6 +551,9 @@ where C: l2cap::ConnectionChannel
         );
 
         let data = TransferFormat::into(&err_pdu);
+
+        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:#x}', error: '{}'",
+            received_opcode, handle, pdu_error);
 
         self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
     }
@@ -549,6 +569,8 @@ where C: l2cap::ConnectionChannel
 
         let data = TransferFormat::into(&response_pdu);
 
+        log_debug!("Sending exchange mtu response");
+
         self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID) );
     }
 
@@ -562,6 +584,8 @@ where C: l2cap::ConnectionChannel
             data.extend_from_slice( &attribute.get_val_as_transfer_format().into() );
 
             let acl_data = l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID );
+
+            log_debug!("Sending read response");
 
             self.connection.send( acl_data );
         } else {
@@ -585,6 +609,9 @@ where C: l2cap::ConnectionChannel
                 match data.set_val_from_raw( raw_data ) {
                     Ok(_) => {
                         let data = TransferFormat::into(&pdu::write_response());
+
+                        log_debug!("Sending write response");
+
                         self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
                     },
                     Err(pdu_err) =>
@@ -594,20 +621,15 @@ where C: l2cap::ConnectionChannel
                 self.send_invalid_handle_error(handle, received_opcode);
             }
         } else {
-            let err_pdu = pdu::error_response(
-                received_opcode,
-                0,
-                pdu::Error::InvalidPDU
-            );
-
-            let data = TransferFormat::into(&err_pdu);
-
-            self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
+            self.send_pdu_error(0, received_opcode, pdu::Error::InvalidPDU);
         }
     }
 
     fn process_find_information_request(&mut self, pdu: pdu::Pdu<pdu::HandleRange>) {
         use pdu::HandleRange;
+
+        log::debug!("HandleRange: starting_handle: {}, ending_handle: {}",
+            pdu.get_parameters().starting_handle, pdu.get_parameters().ending_handle );
 
         match pdu.get_parameters() {
             HandleRange { starting_handle: 0, .. } => {
@@ -679,7 +701,7 @@ where C: l2cap::ConnectionChannel
                             }
                         }
 
-                        log::debug!("Sending a 'find information response' with 16 bit UUIDs");
+                        log_debug!("Sending a 'find information response' with 16 bit UUIDs");
 
                         Ok( (Format::Uuid16Bit, v) )
                     })
@@ -717,7 +739,7 @@ where C: l2cap::ConnectionChannel
                             }
                         }
 
-                        log::debug!("Sending a 'find information response' with 128 bit UUIDs");
+                        log_debug!("Sending a 'find information response' with 128 bit UUIDs");
 
                         Ok( (Format::Uuid128Bit, v) )
                     })
@@ -747,9 +769,6 @@ where C: l2cap::ConnectionChannel
                     let starting_handle = *sh;
 
                     let oc = super::client::ClientPduName::FindInformationRequest.into();
-
-                    log::info!("Sending Error response for 'find information request' as no
-                        attributes were found within the requested handle range");
 
                     self.send_pdu_error(starting_handle, oc, pdu::Error::AttributeNotFound);
 
@@ -827,7 +846,7 @@ where C: l2cap::ConnectionChannel
 
                 if handles_information_list.len() > 1 {
 
-                    log::info!("Sending 'find by type value response'");
+                    log_debug!("Sending 'find by type value response'");
 
                     self.connection.send(
                         l2cap::AclData::new(
@@ -838,9 +857,6 @@ where C: l2cap::ConnectionChannel
 
                 } else {
                     let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
-
-                    log::info!("No attributes were found within the provided range with the given \
-                        type and value in the received 'find by type value request'");
 
                     self.send_pdu_error(starting_handle, oc, pdu::Error::AttributeNotFound);
                 }
@@ -861,7 +877,7 @@ where C: l2cap::ConnectionChannel
         }
     }
 
-    fn process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest> ) {
+    fn common_process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>, is_group_type: bool ) {
 
         use pdu::HandleRange;
 
@@ -882,7 +898,11 @@ where C: l2cap::ConnectionChannel
 
         match handle_range {
             HandleRange{ starting_handle: 0, .. } => {
-                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
+                let oc = if is_group_type {
+                    super::client::ClientPduName::ReadByGroupTypeRequest.into()
+                } else {
+                    super::client::ClientPduName::ReadByTypeRequest.into()
+                };
 
                 log::error!("Received 'read by type request' with a handle range starting with 0");
 
@@ -900,18 +920,31 @@ where C: l2cap::ConnectionChannel
 
                 read_by_type_response.push( ServerPduName::ReadByTypeResponse.into() );
 
+                log::info!("(ATT) finding attributes with type {:#x}", desired_att_type);
+
                 let first_match = self.attributes[start..end].iter()
                     .enumerate()
-                    .filter( |(_,att)| att.get_type() == desired_att_type )
+                    .filter( |(_,att)| {
+                        log::trace!("attribute type: '{:#x}', desired type: '{:#x}'",
+                            att.get_type(), desired_att_type);
+
+                        att.get_type() == desired_att_type
+                    })
                     .next();
 
                 first_match.and_then( |(cnt, att)| {
 
+                    log::info!("(ATT) matched type");
+
                     if let Some(permission) = self.validate_permissions(att.as_ref(), required, restricted) {
 
-                        let oc = super::client::ClientPduName::ReadByTypeRequest.into();
+                        let oc = if is_group_type {
+                            super::client::ClientPduName::ReadByGroupTypeRequest.into()
+                        } else {
+                            super::client::ClientPduName::ReadByTypeRequest.into()
+                        };
 
-                        log::info!("Client doesn't requires permission {:?} to access attribute",
+                        log_debug!("Client requires permission {:?} to access attribute",
                             permission);
 
                         self.send_pdu_error(*sh, oc, permission.into());
@@ -974,22 +1007,29 @@ where C: l2cap::ConnectionChannel
                 // the error that no attributes were found.
                 if read_by_type_response.len() > 1 {
 
+                    log_debug!("Sending 'read by type response'");
+
                     self.connection.send( l2cap::AclData::new(
                         read_by_type_response,
                         super::L2CAP_CHANNEL_ID
                     ));
 
                 } else {
-                    let oc = super::client::ClientPduName::ReadByTypeRequest.into();
-
-                    log::info!("No attributes were found within the provided range with the given \
-                        type and value in the received 'find by type value request'");
+                    let oc = if is_group_type {
+                        super::client::ClientPduName::ReadByGroupTypeRequest.into()
+                    } else {
+                        super::client::ClientPduName::ReadByTypeRequest.into()
+                    };
 
                     self.send_invalid_handle_error(*sh, oc);
                 }
             },
             HandleRange{ starting_handle: sh @ _, .. } => {
-                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
+                let oc = if is_group_type {
+                    super::client::ClientPduName::ReadByGroupTypeRequest.into()
+                } else {
+                    super::client::ClientPduName::ReadByTypeRequest.into()
+                };
 
                 log::error!("Sending Error response to 'read by type request', invalid
                     handles receive");
@@ -997,6 +1037,14 @@ where C: l2cap::ConnectionChannel
                 self.send_invalid_handle_error(*sh, oc);
             }
         }
+    }
+
+    fn process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>) {
+        self.common_process_read_by_type_request(pdu, false)
+    }
+
+    fn process_read_by_group_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>) {
+        self.common_process_read_by_type_request(pdu, true)
     }
 }
 
