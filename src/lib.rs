@@ -97,6 +97,36 @@ impl UUID {
     }
 }
 
+impl core::fmt::LowerHex for UUID {
+    fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
+        match core::convert::TryInto::<u16>::try_into(*self) {
+            Ok(val) => {
+                core::fmt::LowerHex::fmt(&val, f)?;
+                write!(f, " (16b)")
+            },
+            Err(_) => {
+                core::fmt::LowerHex::fmt(&self.base_uuid, f)?;
+                write!(f, " (128b)")
+            },
+        }
+    }
+}
+
+impl core::fmt::UpperHex for UUID {
+    fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
+        match core::convert::TryInto::<u16>::try_into(*self) {
+            Ok(val) => {
+                core::fmt::UpperHex::fmt(&val, f)?;
+                write!(f, " (16b)")
+            },
+            Err(_) => {
+                core::fmt::UpperHex::fmt(&self.base_uuid, f)?;
+                write!(f, " (128b)")
+            },
+        }
+    }
+}
+
 impl From<u128> for UUID {
     fn from(v: u128) -> UUID {
         Self::from_u128(v)
@@ -217,8 +247,8 @@ impl core::convert::TryFrom<UUID> for u32 {
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u32, ()> {
-        match !(((!0u32) as u128) << 96) | uuid.base_uuid {
-            0 => Ok((uuid.base_uuid >> 96) as u32),
+        match !(((!0u32) as u128) << 96) & uuid.base_uuid {
+            Self::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u32),
             _ => Err(())
         }
     }
@@ -230,8 +260,8 @@ impl core::convert::TryFrom<UUID> for u16 {
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u16, ()> {
-        match !(((!0u16) as u128) << 96) | uuid.base_uuid {
-            0 => Ok((uuid.base_uuid >> 96) as u16),
+        match !(((!0u16) as u128) << 96) & uuid.base_uuid {
+            Self::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u16),
             _ => Err(())
         }
     }
