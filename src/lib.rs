@@ -248,7 +248,7 @@ impl core::convert::TryFrom<UUID> for u32 {
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u32, ()> {
         match !(((!0u32) as u128) << 96) & uuid.base_uuid {
-            Self::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u32),
+            UUID::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u32),
             _ => Err(())
         }
     }
@@ -261,7 +261,7 @@ impl core::convert::TryFrom<UUID> for u16 {
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u16, ()> {
         match !(((!0u16) as u128) << 96) & uuid.base_uuid {
-            Self::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u16),
+            UUID::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u16),
             _ => Err(())
         }
     }
