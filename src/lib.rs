@@ -292,7 +292,7 @@ impl AdapterThread {
                                 CtrlMsgType::SyncData => { log::error!("SCO data unimplemented")},
                             }
                         } else {
-                            log::debug!("Received unknown packet indicator type '{:#x}", buffer[0])
+                            log::warn!("Received unknown packet indicator type '{:#x}", buffer[0])
                         }
                     },
 
@@ -534,13 +534,16 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
 
     fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
         use nix::sys::uio;
+        use nix::sys::socket;
 
-        let packet_indicator = &[ CtrlMsgType::Command.into() ];
+        let packet_indicator = &[ CtrlMsgType::ACLData.into() ];
         let packet_data = &data.into_packet();
 
         let io_vec = &[uio::IoVec::from_slice(packet_indicator), uio::IoVec::from_slice(packet_data)];
 
-        uio::writev(self.adapter_fd.raw_fd(), io_vec)
+        let flags = socket::MsgFlags::MSG_DONTWAIT;
+
+        socket::sendmsg(self.adapter_fd.raw_fd(), io_vec, &[], flags, None)
     }
 
     fn start_receiver(&self, handle: ConnectionHandle) {
