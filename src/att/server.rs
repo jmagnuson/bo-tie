@@ -176,28 +176,6 @@ impl ServerPduName {
     }
 }
 
-/// The Reserved Handle
-///
-/// The first handle (value of '0') is reserved for future use. This is used to represent that
-/// handle when creating a new Attribute Bearer
-struct ReservedHandle;
-
-impl super::AnyAttribute for ReservedHandle {
-    fn get_type(&self) -> crate::UUID { Into::<crate::UUID>::into(0u128) }
-
-    fn get_permissions(&self) -> Box<[super::AttributePermissions]> {
-        alloc::vec!(super::AttributePermissions::Read).into_boxed_slice()
-    }
-
-    fn get_handle(&self) -> u16 { 0 }
-
-    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
-
-    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), TransferFormatError> {
-        Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
-    }
-}
-
 pub struct RequestProcessor<'a, C>
 where C: l2cap::ConnectionChannel
 {
@@ -229,8 +207,17 @@ where C: l2cap::ConnectionChannel
     ///
     /// If an opcode that isn't part of the opcodes assigned to the attribute protocol is received,
     /// then this function will return a
-    /// [`UnknownOpcode`](UnknownOpcode)
+    /// [`UnknownOpcode`](../enum.Error.html#variant.UnknownOpcode)
     /// with the opcode.
+    ///
+    /// # Note
+    /// The
+    /// ['ReadByGroupTypeRequest'](../../client/enum.ClientPduName.html#variant.ReadByGroupTypeRequest)
+    /// cannot be processed by the attribute protocol. If this request is used by a higher layer
+    /// protocol, it must be both checked for an processed at that layer. If the
+    /// `ReadByGroupTypeRequest` is processed by this function, then an error PDU will be sent to
+    /// client with the error code
+    /// [`RequestNotSupported`](../../pdu/enum.Error.html#variant.RequestNotSupported).
     pub fn process_request( &mut self )-> Result<(), super::Error>
     {
         log::info!("(ATT) processing '{:?}'", self.pdu_name);
@@ -254,17 +241,15 @@ where C: l2cap::ConnectionChannel
             Some( super::client::ClientPduName::ReadByTypeRequest ) =>
                 self.server.process_read_by_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
 
-            Some( super::client::ClientPduName::ReadByGroupTypeRequest ) =>
-                self.server.process_read_by_group_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
-
             Some( pdu @ super::client::ClientPduName::ReadBlobRequest ) |
             Some( pdu @ super::client::ClientPduName::ReadMultipleRequest ) |
             Some( pdu @ super::client::ClientPduName::WriteCommand ) |
             Some( pdu @ super::client::ClientPduName::PrepareWriteRequest ) |
             Some( pdu @ super::client::ClientPduName::ExecuteWriteRequest ) |
             Some( pdu @ super::client::ClientPduName::HandleValueConfirmation ) |
-            Some( pdu @ super::client::ClientPduName::SignedWriteCommand ) =>
-                self.server.send_pdu_error(0, pdu.into(), pdu::Error::RequestNotSupported),
+            Some( pdu @ super::client::ClientPduName::SignedWriteCommand ) |
+            Some( pdu @ super::client::ClientPduName::ReadByGroupTypeRequest ) =>
+                self.server.send_error(0, pdu.into(), pdu::Error::RequestNotSupported),
 
             None =>
                 self.pdu_raw_data.get(0)
@@ -280,6 +265,13 @@ where C: l2cap::ConnectionChannel
 
     /// Get the received payload
     pub fn get_request_raw_data(&self) -> &[u8] { &self.pdu_raw_data }
+}
+
+impl<'a, C> AsRef<Server<C>> for RequestProcessor<'a, C> where C: l2cap::ConnectionChannel
+{
+    fn as_ref(&self) -> &Server<C> {
+        &self.server
+    }
 }
 
 struct ServerReceiver<'a, C>
@@ -378,8 +370,6 @@ where C: l2cap::ConnectionChannel
     where Mtu: Into<Option<u16>>,
           A: Into<Option<ServerAttributes>>
     {
-        use alloc::vec;
-
         let actual_max_mtu = if let Some(val) = max_mtu.into() {
             if val >= C::DEFAULT_ATT_MTU {
                 val
@@ -393,7 +383,7 @@ where C: l2cap::ConnectionChannel
         let attributes: Vec<Box<dyn super::AnyAttribute + Unpin>> = match server_attributes.into()
         {
             Some(a) => a.attributes,
-            None => vec!(Box::new(ReservedHandle)),
+            None => ServerAttributes::new().attributes,
         };
 
         Self {
@@ -405,8 +395,10 @@ where C: l2cap::ConnectionChannel
         }
     }
 
-    #[inline]
-    fn get_connection_mtu(&self) -> u16 {
+    /// Get the maximum transfer unit of the connection
+    ///
+    /// The is the current mtu as agreed upon by the client and server
+    pub fn get_mtu(&self) -> u16 {
         match self.set_mtu { Some(mtu) => mtu, None => C::DEFAULT_ATT_MTU }
     }
 
@@ -436,9 +428,97 @@ where C: l2cap::ConnectionChannel
     ///
     /// This doesn't check that the client is qualified to receive the permission, it just adds an
     /// indication on the server that the client has it.
-    pub fn give_permission_to_clinet(&mut self, permission: super::AttributePermissions) {
+    pub fn give_permission_to_client(&mut self, permission: super::AttributePermissions) {
         if !self.given_permissions.contains(&permission) {
             self.given_permissions.push(permission);
+        }
+    }
+
+    /// Remove one or more permission given to the client
+    ///
+    /// This will remove every permission in `permissions` from the client.
+    pub fn revoke_permissions_of_client(&mut self, permissions: &[super::AttributePermissions]) {
+        self.given_permissions = self.given_permissions.clone().into_iter()
+            .filter(|p| !permissions.contains(p) )
+            .collect();
+    }
+
+    /// Check if the client has acceptable permissions for the attribute with the provided handle
+    ///
+    /// This function checks two sets of premissions against the both the client and the attribute
+    /// at `handle`. The `required` input is used to check that both the client and attribute have
+    /// all permissions in `required`. The `restricted` input is a list of permissions that the
+    /// client must have if (but only it) the attribute has them.
+    ///
+    /// To better explain with an example, say we are going to create a read attribute request and
+    /// response procedure. The responder (the server) would use this function by setting the `required`
+    /// input to contain the permission
+    /// [`Read`](super::AttributePermissions::Read)
+    /// and the `restricted` to contain
+    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits128`](super::EncryptionKeySize::Bits128)),
+    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits192`](super::EncryptionKeySize::Bits192)),
+    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits256`](super::EncryptionKeySize::Bits256)),
+    /// [`Authentication`](super::AttributePermissions::Authentication)([`Read`](super::AttributePermissions::Read)),
+    /// and
+    /// [`Authorization`](super::AttributePermissions::Authorization)([`Read`](super::AttributePermissions::Read))
+    /// to see if the requester (the client) has the adequate rights to read the requested attribute.
+    /// If the attribute with handle `handle` doesn't have the read permission, then
+    /// `check_permission` will always return an error. However, to continue the example, lets say
+    /// that the permissions of the attribute are `Read`, `Encryption`(`Read`,`Bits128`), and
+    /// `Authentication`(`Read`), and `Write`. Now the attribue satisfies all the required permissions,
+    /// but the client also needs to have the required permission as well as
+    /// `Encryption`(`Read`,`Bits128`) and `Authentication`(`Read`) because they are in both the
+    /// restricted permissions and the attribute permissions. The client doesn't need the other
+    /// permissions in the restricted input because they are not part of the permissions set of the
+    /// attribute (also the client doesn't need the `write` permission because it is not part of
+    /// either the `required` or `restricted` lists)
+    ///
+    /// # Inputs
+    /// - `required` -> The list of permissions that the attribute and client must have for the
+    /// operation
+    /// - `restricted` -> The list of all possible permissions that the client would be required to
+    /// have if the attribute had them. These permissions do not need to be part of the list of
+    /// permissions assigned to the attribute, they are just a list of permissions that the
+    /// attribute *could* have one or more of.
+    ///
+    /// # Note
+    /// There is no hierarcy of permissions, one permission doesn't supersede another. Also
+    /// the variant values further differentiate each permission, as such the variant
+    /// `Encryption`(`Read`, `Bits128`) is a different permission to
+    /// `Encryption`(`Read`, `Bits256`).
+    ///
+    /// # Errors
+    /// If a permisson is not satisfied, this function will return a corresponding error to the
+    /// permission
+    /// - [`Read`](super::AttributePermissions::Read) ->
+    /// [`ReadNotPermitted`](super::pdu::Error::ReadNotPermitted)
+    /// - [`Write`](super::AttributePermissions::Write) ->
+    /// [`WriteNotPermitted`](super::pdu::Error::WriteNotPermitted)
+    /// - [`Encryption`](super::AttributePermissions::Encryption)(`restriction`, _) where
+    /// `restriction` isn't matched -> [`InsufficientEncryption`](pdu::Error::InsufficientEncryption)
+    /// - [`Encryption`](super::AttributePermissions::Encryption)(`restriction`, `key`) where
+    /// `restriction` is matched but `key` is not matched ->
+    /// [`InsufficientEncryptionKeySize`](pdu::Error::InsufficientEncryptionKeySize)
+    /// - [`Authentication`](super::AttributePermissions::Authentication) ->
+    /// [`InsufficientAuthentication`](pdu::Error::InsufficientAuthentication)
+    /// - [`Authorization`](super::AttributePermissions::Authorization) ->
+    /// [`InsufficientAuthorization`](pdu::Error::InsufficientAuthorization)
+    ///
+    /// If there is no attribute with the handle `handle`, then the error
+    /// [`InvalidHandle`](super::pdu::Error::InvalidHandle) is returned.
+    pub fn check_permission(
+        &self,
+        handle: u16,
+        required: &[super::AttributePermissions],
+        restricted: &[super::AttributePermissions])
+    -> Result<(), pdu::Error>
+    {
+        let any_attribute = self.attributes.get(handle as usize)
+            .ok_or(super::pdu::Error::InvalidHandle)?;
+
+        match self.validate_permissions(any_attribute.as_ref(), required, restricted) {
+            None => Ok(()),
+            Some(e) => Err(e),
         }
     }
 
@@ -500,10 +580,6 @@ where C: l2cap::ConnectionChannel
     /// [`Poll::Ready`](https://doc.rust-lang.org/nightly/std/task/enum.Poll.html#variant.Ready)
     /// when there is an ACL packet to process. This assumes that the packet received is part of
     /// the Attribute (ATT) protocol.
-    ///
-    /// # temporary
-    /// For now this will automatically process the request command from the Attribute Client. This
-    /// is
     pub fn receiver<'a>(&'a mut self)
     -> impl Future<Output=Result<RequestProcessor<'a,C>, super::Error>> + 'a
     {
@@ -535,14 +611,15 @@ where C: l2cap::ConnectionChannel
     ///
     /// If the handle is invalid, then this function sends the error PDU with the error InvalidHandle
     #[inline]
-    fn send_invalid_handle_error(&self, handle: u16, received_opcode: u8) {
-        log_debug!("Sending error response (invalid handle)");
+    pub fn send_invalid_handle_error(&self, handle: u16, received_opcode: u8) {
+        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:#x}', error: '{}'",
+            received_opcode, handle, pdu::Error::InvalidHandle);
 
-        self.send_pdu_error(handle, received_opcode, pdu::Error::InvalidHandle);
+        self.send_error(handle, received_opcode, pdu::Error::InvalidHandle);
     }
 
     #[inline]
-    fn send_pdu_error(&self, handle: u16, received_opcode: u8, pdu_error: pdu::Error) {
+    pub fn send_error(&self, handle: u16, received_opcode: u8, pdu_error: pdu::Error) {
 
         let err_pdu = pdu::error_response(
             received_opcode,
@@ -565,7 +642,7 @@ where C: l2cap::ConnectionChannel
             self.set_mtu = Some(client_mtu.into());
         }
 
-        let response_pdu = pdu::exchange_mtu_response(self.get_connection_mtu());
+        let response_pdu = pdu::exchange_mtu_response(self.get_mtu());
 
         let data = TransferFormat::into(&response_pdu);
 
@@ -615,13 +692,13 @@ where C: l2cap::ConnectionChannel
                         self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
                     },
                     Err(pdu_err) =>
-                        self.send_pdu_error(handle, received_opcode, pdu_err.pdu_err),
+                        self.send_error(handle, received_opcode, pdu_err.pdu_err),
                 };
             } else {
                 self.send_invalid_handle_error(handle, received_opcode);
             }
         } else {
-            self.send_pdu_error(0, received_opcode, pdu::Error::InvalidPDU);
+            self.send_error(0, received_opcode, pdu::Error::InvalidPDU);
         }
     }
 
@@ -676,7 +753,7 @@ where C: l2cap::ConnectionChannel
                         // * the end of `attributes`
                         // * the packet MTU was reached
 
-                        let mtu = self.get_connection_mtu() as usize;
+                        let mtu = self.get_mtu() as usize;
 
                         let vec_cap = min( (stop - start) * (2 + size_of::<u16>()), mtu - 2 );
 
@@ -717,7 +794,7 @@ where C: l2cap::ConnectionChannel
                         // This is greedy, attributes that have a type that can be converted into a
                         // 16 bit UUID are included.
 
-                        let mtu = self.get_connection_mtu() as usize;
+                        let mtu = self.get_mtu() as usize;
 
                         let vec_cap = min( (stop - start) * (2 + size_of::<u128>()), mtu - 2 );
 
@@ -770,7 +847,7 @@ where C: l2cap::ConnectionChannel
 
                     let oc = super::client::ClientPduName::FindInformationRequest.into();
 
-                    self.send_pdu_error(starting_handle, oc, pdu::Error::AttributeNotFound);
+                    self.send_error(starting_handle, oc, pdu::Error::AttributeNotFound);
 
                     None
                 });
@@ -815,7 +892,7 @@ where C: l2cap::ConnectionChannel
                 let start = min( starting_handle as usize, self.attributes.len() );
                 let end   = min( ending_handle   as usize, self.attributes.len() );
 
-                let mtu = self.get_connection_mtu() as usize;
+                let mtu = self.get_mtu() as usize;
 
                 let attributes = &self.attributes[start..end];
 
@@ -858,7 +935,7 @@ where C: l2cap::ConnectionChannel
                 } else {
                     let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
 
-                    self.send_pdu_error(starting_handle, oc, pdu::Error::AttributeNotFound);
+                    self.send_error(starting_handle, oc, pdu::Error::AttributeNotFound);
                 }
 
             } else {
@@ -873,11 +950,11 @@ where C: l2cap::ConnectionChannel
 
             log::error!("Invalid 'find by type value request' received");
 
-            self.send_pdu_error(0, 0, pdu::Error::InvalidPDU);
+            self.send_error(0, 0, pdu::Error::InvalidPDU);
         }
     }
 
-    fn common_process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>, is_group_type: bool ) {
+    fn process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest> ) {
 
         use pdu::HandleRange;
 
@@ -892,62 +969,46 @@ where C: l2cap::ConnectionChannel
 
         let restricted = &[
             super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits128),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits192),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits256),
             super::AttributePermissions::Authentication(super::AttributeRestriction::Read),
             super::AttributePermissions::Authorization(super::AttributeRestriction::Read),
         ];
 
         match handle_range {
             HandleRange{ starting_handle: 0, .. } => {
-                let oc = if is_group_type {
-                    super::client::ClientPduName::ReadByGroupTypeRequest.into()
-                } else {
-                    super::client::ClientPduName::ReadByTypeRequest.into()
-                };
+                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
                 log::error!("Received 'read by type request' with a handle range starting with 0");
 
                 self.send_invalid_handle_error(0, oc);
             },
-            HandleRange{ starting_handle: sh @ _, ending_handle: eh @ _ } if eh > sh => {
+            HandleRange{ starting_handle: sh @ _, ending_handle: eh @ _ } if eh >= sh => {
                 use core::cmp::min;
 
                 let start = min( *sh as usize, self.attributes.len() );
                 let end   = min( *eh as usize, self.attributes.len() );
 
-                let vec_cap = min(self.get_connection_mtu() as usize, 256);
+                let vec_cap = min(self.get_mtu() as usize, 256);
 
                 let mut read_by_type_response = Vec::with_capacity(vec_cap);
 
                 read_by_type_response.push( ServerPduName::ReadByTypeResponse.into() );
 
-                log::info!("(ATT) finding attributes with type {:#x}", desired_att_type);
+                log::trace!("(ATT) searching for attributes with type {:#x}", desired_att_type);
 
                 let first_match = self.attributes[start..end].iter()
                     .enumerate()
-                    .filter( |(_,att)| {
-                        log::trace!("attribute type: '{:#x}', desired type: '{:#x}'",
-                            att.get_type(), desired_att_type);
-
-                        att.get_type() == desired_att_type
-                    })
+                    .filter( |(_,att)| att.get_type() == desired_att_type )
                     .next();
 
                 first_match.and_then( |(cnt, att)| {
 
-                    log::info!("(ATT) matched type");
-
                     if let Some(permission) = self.validate_permissions(att.as_ref(), required, restricted) {
 
-                        let oc = if is_group_type {
-                            super::client::ClientPduName::ReadByGroupTypeRequest.into()
-                        } else {
-                            super::client::ClientPduName::ReadByTypeRequest.into()
-                        };
+                        let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
-                        log_debug!("Client requires permission {:?} to access attribute",
-                            permission);
-
-                        self.send_pdu_error(*sh, oc, permission.into());
+                        self.send_error(*sh, oc, permission.into());
 
                         None
 
@@ -1015,63 +1076,101 @@ where C: l2cap::ConnectionChannel
                     ));
 
                 } else {
-                    let oc = if is_group_type {
-                        super::client::ClientPduName::ReadByGroupTypeRequest.into()
-                    } else {
-                        super::client::ClientPduName::ReadByTypeRequest.into()
-                    };
+                    let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
-                    self.send_invalid_handle_error(*sh, oc);
+                    self.send_error(*sh, oc, super::pdu::Error::AttributeNotFound);
                 }
             },
             HandleRange{ starting_handle: sh @ _, .. } => {
-                let oc = if is_group_type {
-                    super::client::ClientPduName::ReadByGroupTypeRequest.into()
-                } else {
-                    super::client::ClientPduName::ReadByTypeRequest.into()
-                };
-
-                log::error!("Sending Error response to 'read by type request', invalid
-                    handles receive");
+                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
                 self.send_invalid_handle_error(*sh, oc);
             }
         }
     }
+}
 
-    fn process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>) {
-        self.common_process_read_by_type_request(pdu, false)
-    }
-
-    fn process_read_by_group_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest>) {
-        self.common_process_read_by_type_request(pdu, true)
+impl<C> AsRef<C> for Server<C> where C: l2cap::ConnectionChannel {
+    fn as_ref(&self) -> &C {
+        &self.connection
     }
 }
 
+/// The Reserved Handle
+///
+/// The first handle (value of '0') is reserved for future use. This is used to represent that
+/// handle when creating a new Attribute Bearer
+struct ReservedHandle;
+
+impl super::AnyAttribute for ReservedHandle {
+    fn get_type(&self) -> crate::UUID { Into::<crate::UUID>::into(0u128) }
+
+    fn get_permissions(&self) -> Box<[super::AttributePermissions]> {
+        alloc::vec!(super::AttributePermissions::Read).into_boxed_slice()
+    }
+
+    fn get_handle(&self) -> u16 { 0 }
+
+    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
+
+    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), TransferFormatError> {
+        Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
+    }
+}
+
+/// The constructor of attributes on an Attribute Server
+///
+/// `ServerAttributes` construsts a list of attributes.
 pub struct ServerAttributes {
     attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>
 }
 
 impl ServerAttributes {
-    pub fn new() -> Self { Self { attributes: Vec::new() } }
 
-    pub(crate) fn append(&mut self, server_attributes: &mut ServerAttributes) {
-        self.attributes.append(&mut server_attributes.attributes)
+    /// Create a new `ServiceAttributes`
+    pub fn new() -> Self {
+
+        Self { attributes: alloc::vec![ Box::new(ReservedHandle) ] }
     }
 
-    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
+    /// Push an attribute to `ServiceAttributes`
+    ///
+    /// This will push the attribute onto the list of server attributes and return the handle of
+    /// the pushed attribute.
+    pub fn push<V>(&mut self, mut attribute: super::Attribute<V>) -> u16
     where V: TransferFormat + Sized + Unpin + 'static
     {
         use core::convert::TryInto;
 
         let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
 
+        // Set the handle now that the attribute is part of the list
+        attribute.handle = Some(ret);
+
+        log::trace!("Adding attribute with type '{:#x}' to server attributes", attribute.ty );
+
         self.attributes.push( Box::new(attribute) );
 
         ret
     }
 
-    /// Get the next handle to push an attribute into
+    /// Get the next available handle
+    ///
+    /// This is the handle that is assigned to the next attribute to be
+    /// [`push`](#method.push)ed to the `ServerAttributes`. This is generally used to get the
+    /// handle of the attribute that is about to be pushed to `ServerAttributes`
+    ///
+    /// ```rust
+    /// # use bo_tie::att::server::ServerAttributes;
+    /// # let attribute = bo_tie::att::Attribute::new( bo_tie::UUID::default(), Box::new(), () );
+    ///
+    /// let server_attributes = ServerAttributes::new();
+    ///
+    /// let first_handle = server_attributes.next_handle();
+    ///
+    /// let pushed_handle = server_attributes.push(attribute);
+    ///
+    /// assert_eq!( first_handle, pushed_handle );
     pub fn next_handle(&self) -> u16 {
         self.attributes.len() as u16
     }

@@ -127,17 +127,21 @@ async fn disconnect(
 /// The attribute server is organized via the gatt protocol. This example is about connecting
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
-fn gatt_server_init<C>(channel: C, local_name: &str) -> att::server::Server<C>
+fn gatt_server_init<C>(channel: C, local_name: &str) -> gatt::Server<C>
 where C: bo_tie::l2cap::ConnectionChannel
 {
     let att_mtu = 256;
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
-    gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu)
+    let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu);
+
+    server.as_mut().give_permission_to_client(att::AttributePermissions::Read);
+
+    server
 }
 
-fn att_server_loop<C>(mut server: att::server::Server<C> ) where C: bo_tie::l2cap::ConnectionChannel {
+fn att_server_loop<C>(mut server: gatt::Server<C> ) where C: bo_tie::l2cap::ConnectionChannel {
 
     loop {
         futures::executor::block_on(server.receiver())
@@ -182,7 +186,7 @@ fn main() {
 
     let local_name = "Connection Test";
 
-    TermLogger::init( LevelFilter::Debug, Config::default(), TerminalMode::Mixed ).unwrap();
+    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 

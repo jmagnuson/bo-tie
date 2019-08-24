@@ -11,13 +11,6 @@ extern crate bincode as serializer;
 #[cfg(test)]
 extern crate test;
 
-// So this library can be used with no_core targets
-#[cfg_attr(not(any(
-    test,
-    unix,
-)), no_core)]
-extern crate core;
-
 pub mod att;
 pub mod gap;
 pub mod gatt;
@@ -116,12 +109,10 @@ impl core::fmt::UpperHex for UUID {
     fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
         match core::convert::TryInto::<u16>::try_into(*self) {
             Ok(val) => {
-                core::fmt::UpperHex::fmt(&val, f)?;
-                write!(f, " (16b)")
+                core::fmt::UpperHex::fmt(&val, f)
             },
             Err(_) => {
-                core::fmt::UpperHex::fmt(&self.base_uuid, f)?;
-                write!(f, " (128b)")
+                core::fmt::UpperHex::fmt(&self.base_uuid, f)
             },
         }
     }

@@ -434,6 +434,16 @@ pub struct HandleRange {
     pub ending_handle: u16
 }
 
+impl HandleRange {
+
+    /// Check that the handle range is valid
+    ///
+    /// This will return true if `starting_handle` <= `ending_handle`
+    pub fn is_valid(&self) -> bool {
+        self.starting_handle <= self.ending_handle
+    }
+}
+
 impl TransferFormat for HandleRange {
     fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if 4 == raw.len() {
@@ -968,34 +978,34 @@ where R: Into<HandleRange>
 /// A single read by group type response
 ///
 /// The read by group type response will contain one or more of these
-pub struct ReadGroupTypeResponse<D> where D: TransferFormat {
+#[derive(Debug)]
+pub struct ReadGroupTypeData<D> where D: TransferFormat {
     handle: u16,
     end_group_handle: u16,
     data: D
 }
 
-impl<D> ReadGroupTypeResponse<D> where D: TransferFormat {
+impl<D> ReadGroupTypeData<D> where D: TransferFormat {
     pub fn new( handle: u16, end_group_handle: u16, data: D) -> Self {
         Self { handle, end_group_handle, data}
     }
 }
 
-impl<D> TransferFormat for ReadGroupTypeResponse<D> where D: TransferFormat {
+impl<D> TransferFormat for ReadGroupTypeData<D> where D: TransferFormat {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized {
-        if raw.len() == 4 + core::mem::size_of::<D>() {
+    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+        if raw.len() >= 4 {
             Ok( Self{
                 handle: <u16>::from_le_bytes( [ raw[0], raw[1] ]),
                 end_group_handle: <u16>::from_le_bytes( [ raw[2], raw[3] ] ),
                 data: TransferFormat::from( &raw[4..] )?,
             })
         } else {
-            Err( TransferFormatError::bad_size(stringify!(ReadGroupTypeResponse),
-                4 + core::mem::size_of::<D>(), raw.len()) )
+            Err( TransferFormatError::bad_min_size(stringify!(ReadGroupTypeData), 4, raw.len()) )
         }
     }
 
-    fn into(&self) -> Box<[u8]> where Self: Sized {
+    fn into(&self) -> Box<[u8]> {
 
         let mut v = Vec::new();
 
@@ -1009,20 +1019,77 @@ impl<D> TransferFormat for ReadGroupTypeResponse<D> where D: TransferFormat {
     }
 }
 
-impl<D> TransferFormatSize for ReadGroupTypeResponse<D>
-where D: TransferFormatSize + TransferFormat
-{
-    const SIZE: usize = 4 + D::SIZE;
+/// The full list of response data for read by group type
+#[derive(Debug)]
+pub struct ReadByGroupTypeResponse<D> where D: TransferFormat {
+    data: Vec<ReadGroupTypeData<D>>,
+}
+
+impl<D> ReadByGroupTypeResponse<D> where D: TransferFormat {
+
+    /// Create a new `ReadByGroupTypeResponse`
+    ///
+    /// Returns a `ReadByGroupTypeResponse` if input `data` is not empty, otherwise an `Err` is
+    /// returned.
+    pub fn new(data: Vec<ReadGroupTypeData<D>>) -> Result<Self, ()> {
+        match data.len() {
+            0 => Err(()),
+            _ => Ok( ReadByGroupTypeResponse { data } )
+        }
+    }
+}
+
+impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
+    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+        if raw.len() >= 5 {
+            let item_len = raw[0] as usize;
+
+            let exact_chunks = raw[1..].chunks_exact(item_len);
+
+            if exact_chunks.remainder().len() == 0 {
+
+                exact_chunks
+                .map( |raw| TransferFormat::from(raw) )
+                .try_fold( Vec::new(), |mut v, rslt| { v.push(rslt?); Ok(v) } )
+                .and_then( |v| Ok(ReadByGroupTypeResponse { data: v }) )
+                .or_else( |e: TransferFormatError| Err(e.into()) )
+
+            } else {
+                Err( TransferFormatError::bad_exact_chunks(
+                    stringify!(ReadByGroupTypeResponse), item_len, raw[1..].len() ) )
+            }
+        } else {
+            Err( TransferFormatError::bad_min_size(stringify!(ReadByGroupTypeResponse), 5, raw.len()) )
+        }
+    }
+
+    /// # Panic
+    /// This can panic if
+    fn into(&self) -> Box<[u8]> {
+
+        let first = self.data.first().unwrap();
+
+        let first_raw = TransferFormat::into( first );
+
+        let mut v = alloc::vec!( first_raw.len() as u8 );
+
+        v.extend_from_slice( &first_raw );
+
+        self.data[1..].iter()
+        .map( |d| TransferFormat::into(d) )
+        .fold(v, |mut v,rd| { v.extend_from_slice(&rd); v } )
+        .into_boxed_slice()
+    }
 }
 
 /// Read an attribute group response
-pub fn read_by_group_type_response<D>( responses: Box<[ReadGroupTypeResponse<D>]>)
--> Pdu<Box<[ReadGroupTypeResponse<D>]>>
-where D: TransferFormat + TransferFormatSize
+pub fn read_by_group_type_response<D>( response: ReadByGroupTypeResponse<D>)
+-> Pdu<ReadByGroupTypeResponse<D>>
+where D: TransferFormat
 {
     Pdu {
         opcode: From::from(ServerPduName::ReadByGroupTypeResponse),
-        parameters: responses,
+        parameters: response,
         signature: None,
     }
 }

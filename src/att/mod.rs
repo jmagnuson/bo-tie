@@ -21,7 +21,7 @@ pub mod server;
 
 use crate::l2cap;
 
-const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
+pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
 /// Avanced Encryption Standard (AES) key sizes
@@ -496,7 +496,7 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
     fn get_permissions(&self) -> Box<[AttributePermissions]> { self.permissions.clone() }
 
     /// This will panic if the handle value hasn't been set yet
-    fn get_handle(&self) -> u16 { self.handle.unwrap() }
+    fn get_handle(&self) -> u16 { self.handle.expect("Handle value not set") }
 
     fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat {
         &self.value

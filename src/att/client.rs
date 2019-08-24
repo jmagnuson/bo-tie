@@ -527,7 +527,7 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
     }
 
     pub fn read_by_group_type_request<'a,R,D>(&'a self, handle_range: R, group_type: crate::UUID)
-    -> impl Future<Output = Result<Box<[pdu::ReadGroupTypeResponse<D>]>, super::Error>> + 'a
+    -> impl Future<Output = Result<pdu::ReadByGroupTypeResponse<D>, super::Error>> + 'a
     where R: Into<pdu::HandleRange>,
           D: TransferFormat + TransferFormatSize + Unpin + 'a
     {

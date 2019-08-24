@@ -2,6 +2,7 @@ use alloc::{
     boxed::Box,
     vec::Vec,
 };
+use core::future::Future;
 use crate::{ att, l2cap, UUID};
 
 pub mod characteristic;
@@ -73,57 +74,44 @@ impl ServiceInclude {
 pub struct ServiceBuilder<'a>
 {
     service_type: UUID,
+    /// The list of primary services. This is none if the service builder is constructing a
+    /// secondary service.
     is_primary: bool,
-    attributes: &'a mut att::server::ServerAttributes,
+    handle: u16,
+    server_builder: &'a mut ServerBuilder,
 }
 
 impl<'a> ServiceBuilder<'a>
 {
 
     fn new(
-        attributes: &'a mut att::server::ServerAttributes,
+        server_builder: &'a mut ServerBuilder,
         service_type: UUID,
         is_primary: bool
     ) -> Self
     {
-        ServiceBuilder { service_type, is_primary, attributes }
-    }
-
-    fn push_declaration(&mut self) -> u16 {
-        self.attributes.push(
+        let handle = server_builder.attributes.push(
             att::Attribute::new(
-                if self.is_primary {
+                if is_primary {
                     ServiceDefinition::PRIMARY_SERVICE_TYPE
                 } else {
                     ServiceDefinition::SECONDARY_SERVICE_TYPE
                 },
                 ServiceDefinition::PERMISSIONS.into(),
-                self.service_type
+                service_type
             )
-        )
-    }
+        );
 
-    pub fn set_type(&mut self, uuid: UUID ) -> &mut Self {
-        self.service_type = uuid;
-        self
+        ServiceBuilder { service_type, is_primary, handle, server_builder }
     }
-
-    pub fn make_primary(&mut self, primary: bool) -> &mut Self {
-        self.is_primary = primary;
-        self
-    }
-
 
     /// Start including other services
     ///
     /// This converts a `Service Builder` into a `IncludesAdder`. The returned `IncludesAdder`
     /// will allow for the addition of include definitions for other services. Afterwards an
     /// `IncludesAdder` can be further converted into a `CharacteristicAdder`
-    pub fn into_includes_adder(mut self) -> IncludesAdder<'a> {
-
-        let service_handle = self.push_declaration();
-
-        IncludesAdder::new(service_handle, self.service_type, self.attributes)
+    pub fn into_includes_adder(self) -> IncludesAdder<'a> {
+        IncludesAdder::new(self)
     }
 
     /// Start adding characteristics
@@ -137,11 +125,9 @@ impl<'a> ServiceBuilder<'a>
     /// `[into_includes_adder](#add_service_includes)`
     /// function. That function will return a `IncludesAdder` which can be then converted into
     /// a `CharacteristicAdder` for adding characteristics to the service.
-    pub fn into_characteristics_adder(mut self) -> CharacteristicAdder<'a> {
-
-        let handle = self.push_declaration();
-
-        CharacteristicAdder::new( handle, handle, self.service_type, self.attributes)
+    pub fn into_characteristics_adder(self) -> CharacteristicAdder<'a> {
+        let handle = self.handle;
+        CharacteristicAdder::new(self, handle)
     }
 
     /// Create an empty service
@@ -150,12 +136,18 @@ impl<'a> ServiceBuilder<'a>
     /// the service will contain no data other then what is in the service definition. As a result
     /// an empty service will only contain its UUID.
     pub fn make_empty(mut self) -> Service {
-
-        let handle = self.push_declaration();
-
         // There is only one handle in an empty Service so both the service handle and end group
         // handle are the same
-        Service::new( handle, handle, self.service_type )
+        self.make_service(self.handle)
+    }
+
+    fn make_service(&mut self, end_service_handle: u16 ) -> Service {
+
+        let service = Service::new( self.handle, end_service_handle, self.service_type);
+
+        if self.is_primary { self.server_builder.add_primary_service(service)}
+
+        service
     }
 }
 
@@ -170,27 +162,25 @@ impl<'a> ServiceBuilder<'a>
 /// function.
 pub struct IncludesAdder<'a>
 {
-    service_handle: u16,
-    service_type: UUID,
-    attributes: &'a mut att::server::ServerAttributes,
-    end_group_handle: core::cell::Cell<u16>
+    service_builder: ServiceBuilder<'a>,
+    end_group_handle: u16
 }
 
 impl<'a> IncludesAdder<'a>
 {
-    fn new( service_handle: u16, service_type: UUID, attributes: &'a mut att::server::ServerAttributes)
+    fn new( service_builder: ServiceBuilder<'a>)
     -> Self
     {
+        let handle = service_builder.handle;
+
         IncludesAdder {
-            service_handle: service_handle,
-            service_type: service_type,
-            attributes: attributes,
-            end_group_handle: service_handle.into(),
+            service_builder: service_builder,
+            end_group_handle: handle,
         }
     }
 
     /// Add a service to include
-    pub fn include_service( self, service: &Service ) -> Self {
+    pub fn include_service( mut self, service: &Service ) -> Self {
         use core::convert::TryInto;
 
         let include = ServiceInclude {
@@ -205,7 +195,7 @@ impl<'a> IncludesAdder<'a>
             include
         );
 
-        self.end_group_handle.set( self.attributes.push(attribute) );
+        self.end_group_handle = self.service_builder.server_builder.attributes.push(attribute);
 
         self
     }
@@ -213,10 +203,8 @@ impl<'a> IncludesAdder<'a>
     /// Convert to a CharacteristicAdder
     pub fn into_characteristics_adder(self) -> CharacteristicAdder<'a> {
         CharacteristicAdder::new(
-            self.service_handle,
-            self.end_group_handle.into_inner(),
-            self.service_type,
-            self.attributes
+            self.service_builder,
+            self.end_group_handle
         )
     }
 
@@ -224,8 +212,9 @@ impl<'a> IncludesAdder<'a>
     ///
     /// This will create a service that only has the service definition and service includes (if
     /// any). There will be no characteristics added to the service.
-    pub fn finish_service(self) -> Service {
-        Service::new( self.service_handle, self.end_group_handle.into_inner(), self.service_type )
+    pub fn finish_service(mut self) -> Service {
+
+        self.service_builder.make_service(self.end_group_handle)
     }
 }
 
@@ -241,27 +230,18 @@ impl<'a> IncludesAdder<'a>
 /// functions.
 pub struct CharacteristicAdder<'a>
 {
-    service_handle: u16,
-    service_type: UUID,
-    attributes: &'a mut att::server::ServerAttributes,
-    end_group_handle: core::cell::Cell<u16>
+    service_builder: ServiceBuilder<'a>,
+    end_group_handle: u16
 }
 
 impl<'a> CharacteristicAdder<'a>
 {
     fn new(
-        service_handle: u16,
+        service_builder: ServiceBuilder<'a>,
         end_group_handle: u16,
-        service_type: UUID,
-        attributes: &'a mut att::server::ServerAttributes
     ) -> Self
     {
-        CharacteristicAdder {
-            service_handle: service_handle,
-            service_type: service_type,
-            attributes: attributes,
-            end_group_handle: end_group_handle.into(),
-        }
+        CharacteristicAdder { service_builder, end_group_handle }
     }
 
     pub fn build_characteristic<V>(
@@ -284,29 +264,32 @@ impl<'a> CharacteristicAdder<'a>
     }
 
     /// Finish the service
-    pub fn finish_service(self) -> Service {
-        Service::new( self.service_handle, self.end_group_handle.into_inner(), self.service_type )
+    pub fn finish_service(mut self) -> Service {
+        self.service_builder.make_service( self.end_group_handle )
     }
 }
 
+#[derive(Clone,Copy,PartialEq,PartialOrd,Eq,Ord,Debug)]
 pub struct Service {
     /// The handle of the Service declaration attribute
     service_handle: u16,
     /// The handle of the last attribute in the service
     end_group_handle: u16,
-    /// The UUID (also known as the attribute type) of the service
+    /// The UUID (also known as the attribute type) of the service. This is also the attribute
+    /// value in the service definition.
     service_type: UUID,
 }
 
 impl Service {
 
-    fn new( service_handle: u16, end_group_handle: u16, service_type: UUID ) -> Self {
+    fn new( service_handle: u16, end_group_handle: u16, service_type: UUID ) -> Self
+    {
         Service { service_handle, end_group_handle, service_type }
     }
 }
 
 pub struct GapServiceBuilder {
-    attributes: att::server::ServerAttributes
+    server_builder: ServerBuilder
 }
 
 impl GapServiceBuilder {
@@ -320,7 +303,7 @@ impl GapServiceBuilder {
     ///
     /// The `device_name` is a readable string for the client. The appperance is an assigned number
     /// to indiciate to the client the external appearance of the device. Both these fields are
-    /// optional with `device_name` defaulting to an empty string and
+    /// optional with `device_name` defaulting to an empty string and 'unknown apperance'
     pub fn new<'a,D,A>(device_name: D, apperance: A) -> Self
     where D: Into<Option<&'a str>>,
           A: Into<Option<u16>>
@@ -349,16 +332,17 @@ impl GapServiceBuilder {
         let device_name_att_perms = [AttributePermissions::Read].to_vec();
         let apperance_att_perms = [AttributePermissions::Read].to_vec();
 
-        let mut attributes = att::server::ServerAttributes::new();
+        let mut server_builder = ServerBuilder::new_empty();
 
-        ServiceBuilder::new(&mut attributes, Self::GAP_SERVICE_TYPE, true)
+        server_builder.new_service_constructor(Self::GAP_SERVICE_TYPE, true)
         .into_characteristics_adder()
         .build_characteristic(device_name_props, device_name_type, device_name_val, device_name_att_perms)
         .finish_characteristic()
         .build_characteristic(apperance_props, apperance_type, apperance_val, apperance_att_perms)
-        .finish_characteristic();
+        .finish_characteristic()
+        .finish_service();
 
-        GapServiceBuilder { attributes }
+        GapServiceBuilder { server_builder }
     }
 }
 
@@ -367,12 +351,23 @@ impl GapServiceBuilder {
 /// This will construct a GATT server for use with BR/EDR/LE bluetooth operation.
 pub struct ServerBuilder
 {
-    gap_service_att: GapServiceBuilder,
+    primary_services: Vec<Service>,
     attributes: att::server::ServerAttributes,
 }
 
 impl ServerBuilder
 {
+
+    /// Construct an empty `ServerBuilder`
+    ///
+    /// This creates a `ServerBuilder` without the specification required GAP service.
+    pub fn new_empty() -> Self {
+        Self {
+            primary_services: Vec::new(),
+            attributes: att::server::ServerAttributes::new(),
+        }
+    }
+
     /// Construct a new `ServicesBuiler`
     ///
     /// This will make a `ServiceBuilder` with the basic requirements for a GATT server. This
@@ -380,10 +375,7 @@ impl ServerBuilder
     /// *Appearance*, but both of these characteristics contain no information.
     pub fn new() -> Self
     {
-        ServerBuilder {
-            gap_service_att: GapServiceBuilder::new("", GapServiceBuilder::UNKNOWN_APPERANCE),
-            attributes: att::server::ServerAttributes::new(),
-        }
+        GapServiceBuilder::new("", GapServiceBuilder::UNKNOWN_APPERANCE).server_builder
     }
 
     /// Construct a new `ServiceBuilder` with the provided GAP service builder
@@ -391,32 +383,258 @@ impl ServerBuilder
     /// The provided GAP service builder will be used to construct the required GAP service for the
     /// GATT server.
     pub fn new_with_gap(gap: GapServiceBuilder) -> Self {
-        ServerBuilder {
-            gap_service_att: gap,
-            attributes: att::server::ServerAttributes::new()
-        }
+        gap.server_builder
     }
 
     /// Create a service constructor
     pub fn new_service_constructor<'a>(&'a mut self, service_type: UUID, is_primary: bool)
     -> ServiceBuilder<'a>
     {
-        ServiceBuilder::new(&mut self.attributes, service_type, is_primary)
+        ServiceBuilder::new(self, service_type, is_primary)
     }
 
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C,Mtu>(mut self, connection_channel: C, server_mtu: Mtu)
-    -> att::server::Server<C>
+    pub fn make_server<C,Mtu>(self, connection_channel: C, server_mtu: Mtu)
+    -> Server<C>
     where C: l2cap::ConnectionChannel,
           Mtu: Into<Option<u16>>
     {
-        let mut attributes = self.gap_service_att.attributes;
+        Server {
+            primary_services: self.primary_services,
+            server: att::server::Server::new(connection_channel, server_mtu.into(), Some(self.attributes))
+        }
+    }
 
-        attributes.append(&mut self.attributes);
+    fn add_primary_service(&mut self, service: Service ) {
+        self.primary_services.push(service)
+    }
+}
 
-        att::server::Server::new(connection_channel, server_mtu.into(), Some(attributes))
+pub struct Server<C>
+where C: l2cap::ConnectionChannel
+{
+    primary_services: Vec<Service>,
+    server: att::server::Server<C>
+}
+
+impl<C> Server<C> where C: l2cap::ConnectionChannel
+{
+    pub fn receiver<'a>(&'a mut self)
+    -> impl Future<Output = Result<GattRequestProcessor<'a, C>, att::Error>> + 'a
+    {
+        GattReceiver {
+            primary_services: &self.primary_services,
+            att_receiver: self.server.receiver()
+        }
+    }
+}
+
+impl<C> AsRef<att::server::Server<C>> for Server<C> where C: l2cap::ConnectionChannel {
+    fn as_ref(&self) -> &att::server::Server<C> {
+        &self.server
+    }
+}
+
+impl <C> AsMut<att::server::Server<C>> for Server<C> where C: l2cap::ConnectionChannel {
+    fn as_mut(&mut self) -> &mut att::server::Server<C> {
+        &mut self.server
+    }
+}
+
+struct GattReceiver<'a, C, R>
+where C: l2cap::ConnectionChannel + 'a,
+      R: Future<Output = Result<att::server::RequestProcessor<'a, C>, att::Error>> + Unpin + 'a
+{
+    primary_services: &'a [Service],
+    att_receiver: R
+}
+
+impl<'a,C,R> Future for GattReceiver<'a, C, R>
+where C: l2cap::ConnectionChannel,
+      R: Future<Output = Result<att::server::RequestProcessor<'a, C>, att::Error>> + Unpin + 'a
+{
+    type Output = Result<GattRequestProcessor<'a, C>, att::Error>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
+        use core::pin::Pin;
+        use core::task;
+
+        let this = self.get_mut();
+
+        match Pin::new(&mut this.att_receiver).poll(cx) {
+            task::Poll::Pending => task::Poll::Pending,
+
+            task::Poll::Ready(Ok(rp)) =>
+                task::Poll::Ready( Ok(
+                    GattRequestProcessor {
+                        primary_services: this.primary_services,
+                        att_recq_proc: rp
+                    }
+                )),
+
+            task::Poll::Ready(Err(e)) => task::Poll::Ready(Err(e)),
+        }
+    }
+}
+
+/// Gatt client requests processor
+///
+/// This structure is created by polling to completion the future returned by
+/// [`Server::receiver`](Server::receiver).
+/// This is used to process client requests and send the coresponding response to the client.
+/// To process the request, the function
+/// [`process_request`](GattRequestProcessor::process_request)
+/// must be called.
+pub struct GattRequestProcessor<'a,C>
+where C: l2cap::ConnectionChannel
+{
+    primary_services: &'a [Service],
+    att_recq_proc: att::server::RequestProcessor<'a, C>
+}
+
+impl<'a, C> GattRequestProcessor<'a, C>
+where C: l2cap::ConnectionChannel
+{
+    pub fn process_request(&mut self) -> Result<(), att::Error> {
+
+        match self.att_recq_proc.get_request_type() {
+            Some( att::client::ClientPduName::ReadByGroupTypeRequest ) => {
+                log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
+
+                self.process_read_by_group_type_request(
+                    att::TransferFormat::from(self.att_recq_proc.get_request_raw_data())?
+                )
+            },
+            _ => self.att_recq_proc.process_request()?
+        }
+
+        Ok(())
+    }
+
+    fn process_read_by_group_type_request(&self, pdu: att::pdu::Pdu<att::pdu::TypeRequest>)
+    {
+        let handle_range = &pdu.get_parameters().handle_range;
+
+        let err_rsp = | pdu_err | {
+
+            let handle = handle_range.starting_handle;
+            let opcode = pdu.get_opcode().into_raw();
+
+            self.att_recq_proc.as_ref().send_error(handle, opcode, pdu_err);
+
+            None
+        };
+
+        if ! handle_range.is_valid() {
+
+            err_rsp( att::pdu::Error::InvalidHandle );
+
+        } else if pdu.get_parameters().attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
+
+            use core::convert::TryInto;
+
+            const REQUIRED_PERMS: &[att::AttributePermissions] = &[
+                att::AttributePermissions::Read
+            ];
+
+            const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
+                att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
+                att::AttributePermissions::Authorization(att::AttributeRestriction::Write),
+            ];
+
+            let permissions_error = | service: &Service | -> Option<att::pdu::Error> {
+                self.att_recq_proc
+                .as_ref()
+                .check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
+                .err()
+            };
+
+            self.primary_services.iter()
+            .filter(|s| s.service_handle >= handle_range.starting_handle)
+            .next()
+            .or_else( || err_rsp( att::pdu::Error::AttributeNotFound) )
+            .and_then( |first_service| -> Option<()> {
+
+                let predicate_short_uuid = |service: &&Service| {
+                    service.service_handle <= handle_range.ending_handle &&
+                    TryInto::<u16>::try_into(service.service_type).is_ok() &&
+                    permissions_error(service).is_none()
+                };
+
+                let predicate_normal_uuid = |service: &&Service| {
+                    service.service_handle <= handle_range.ending_handle &&
+                    permissions_error(service).is_none()
+                };
+
+                let ( size, predicate ): (usize, &dyn Fn(&&Service) -> bool) =
+                    if TryInto::<u16>::try_into(first_service.service_type).is_ok() {
+                        (2, &predicate_short_uuid)
+                    } else {
+                        (16, &predicate_normal_uuid)
+                    };
+
+                match permissions_error(first_service) {
+                    None => {
+                        let max_data = core::cmp::min(
+                            core::u8::MAX as u16,
+                            self.att_recq_proc.as_ref().get_mtu()
+                        ) as usize;
+
+                        let data_response = self.primary_services
+                            .iter()
+                            .take_while(predicate)
+                            .map( |service|
+                                att::pdu::ReadGroupTypeData::new(
+                                    service.service_handle,
+                                    service.end_group_handle,
+                                    service.service_type,
+                                )
+                            )
+                            .enumerate()
+                            .take_while( |(cnt,_)| (cnt * (4 + size)) <= max_data )
+                            .fold( Vec::new(), |mut v, (_,rgtd)| { v.push(rgtd); v } );
+
+                        let response_data = att::pdu::ReadByGroupTypeResponse::new(data_response)
+                            .expect("data_response is empty");
+
+                        let pdu = att::pdu::read_by_group_type_response(response_data);
+
+                        let tx_data = att::TransferFormat::into( &pdu );
+
+                        let acl_data = l2cap::AclData::new(tx_data.to_vec(), att::L2CAP_CHANNEL_ID );
+
+                        self.att_recq_proc.as_ref().as_ref().send(acl_data);
+                    },
+                    Some(e) => { err_rsp(e); },
+                }
+
+                None
+            });
+
+        } else {
+            err_rsp( att::pdu::Error::UnsupportedGroupType );
+        }
+    }
+}
+
+impl<'a,C> AsRef<att::server::RequestProcessor<'a, C>> for GattRequestProcessor<'a, C>
+where C: l2cap::ConnectionChannel
+{
+    fn as_ref(&self) -> &att::server::RequestProcessor<'a,C> {
+        &self.att_recq_proc
+    }
+}
+
+impl<'a,C> AsMut<att::server::RequestProcessor<'a, C>> for GattRequestProcessor<'a, C>
+where C: l2cap::ConnectionChannel
+{
+    fn as_mut(&mut self) -> &mut att::server::RequestProcessor<'a,C> {
+        &mut self.att_recq_proc
     }
 }
 

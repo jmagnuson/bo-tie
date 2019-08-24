@@ -358,7 +358,7 @@ where Box<V>: att::TransferFormat + Unpin + 'static,
     {
         use att::Attribute;
 
-        let attributes = &mut self.characteristic_adder.attributes;
+        let attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
 
         // The value handle will be the handle after the declaration
         self.declaration.value_handle = attributes.next_handle() + 1;
@@ -420,7 +420,7 @@ where Box<V>: att::TransferFormat + Unpin + 'static,
             );
         }
 
-        self.characteristic_adder.end_group_handle.set(last_attr);
+        self.characteristic_adder.end_group_handle =last_attr;
 
         self.characteristic_adder
     }
