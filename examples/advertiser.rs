@@ -5,14 +5,9 @@
 //! the example is sent a signal (e.g. by pressing ctrl-c on a unix system).
 //!
 //! # Note
-//! Super User privaleges may be required to interact with your bluetooth peripheral. To do will
+//! Super User privileges may be required to interact with your bluetooth peripheral. To do will
 //! probably require the full path to cargo. The cargo binary is usually locacted in your home
 //! directory at `.cargo/bin/cargo`.
-
-#![feature(async_await)]
-#![feature(await_macro)]
-#![feature(gen_future)]
-
 use bo_tie::hci;
 use bo_tie::gap::advertise;
 use bo_tie::hci::le::transmitter::{
@@ -30,11 +25,11 @@ async fn advertise_setup (
 
     println!("Advertising Setup:");
 
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
+    set_advertising_enable::send(&hi, false).await.unwrap();
 
     println!("{:5>}", "Advertising Disabled");
 
-    await!(set_advertising_data::send(&hi, data)).unwrap();
+    set_advertising_data::send(&hi, data).await.unwrap();
 
     println!("{:5>}", "Set Advertising Data");
 
@@ -42,17 +37,17 @@ async fn advertise_setup (
 
     adv_prams.advertising_type = set_advertising_parameters::AdvertisingType::NonConnectableUndirectedAdvertising;
 
-    await!(set_advertising_parameters::send(&hi, adv_prams)).unwrap();
+    set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
 
     println!("{:5>}", "Set Advertising Parameters");
 
-    await!(set_advertising_enable::send(&hi, flag.load(Ordering::Relaxed) )).unwrap();
+    set_advertising_enable::send(&hi, flag.load(Ordering::Relaxed) ).await.unwrap();
 
     println!("{:5>}", "Advertising Enabled");
 }
 
 async fn advertise_teardown(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
+    set_advertising_enable::send(&hi, false).await.unwrap();
 }
 
 #[cfg(unix)]

@@ -3,3 +3,4 @@
 /temp
 /build/generated_bindings/*
 /crate-derivatives
+.idea
