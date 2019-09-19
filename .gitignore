@@ -1,5 +1,6 @@
 /target
 **/*.rs.bk
+Cargo.lock
 /temp
 /build/generated_bindings/*
 /crate-derivatives
