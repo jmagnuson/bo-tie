@@ -537,7 +537,7 @@ pub mod service_uuids {
         fn new( complete: bool ) -> Self {
             Self {
                 set: BTreeSet::new(),
-                complete: complete
+                complete
             }
         }
 
@@ -694,12 +694,29 @@ pub mod service_uuids {
                     from_raw!{raw, Self::COMPLETE, Self::INCOMPLETE, {
                         use core::mem::size_of;
 
+                        let chunks_exact = raw[1..].chunks_exact(size_of::<$type>());
+
+
                         Services::<$type> {
-                            set: raw[1..].chunks_exact(size_of::<$type>())
+                            set: if chunks_exact.remainder().len() == 0 {
+
+                                chunks_exact
                                 .map( |raw_uuid| {
-                                    unsafe{ $type::from_le(*(raw_uuid.as_ptr() as *const $type)) }
+
+                                    let sized_raw_uuid = (0..size_of::<$type>())
+                                        .fold(
+                                            [0u8;size_of::<$type>()],
+                                            |mut a, i| { a[i] = raw_uuid[i]; a }
+                                        );
+
+                                    $type::from_le_bytes(sized_raw_uuid)
                                 })
-                                .collect::<BTreeSet<$type>>(),
+                                .collect::<BTreeSet<$type>>()
+
+                            } else {
+                                return Err(super::Error::IncorrectLength)
+                            },
+
                             // from_raw does the check to see if the data is Self::COMPLETE or
                             // Self::INCOMPLETE. All that needs to be done here is to check
                             // if this is the complete one or not.
@@ -731,43 +748,33 @@ pub mod service_uuids {
             let t32 = test_32.to_le_bytes();
             let t128 = test_128.to_le_bytes();
 
-            let t16l = t16.len() as u8;
-            let t32l = t32.len() as u8;
-            let t128l = t128.len() as u8;
-
             let test_u16_comp_adv_data = &[
-                t16l,
                 AssignedTypes::CompleteListOf16bitServiceClassUUIDs.val(),
                 t16[0], t16[1]
             ];
 
             let test_u16_icom_adv_data = &[
-                t16l,
                 AssignedTypes::IncompleteListOf16bitServiceClassUUIDs.val(),
                 t16[0], t16[1]
             ];
 
             let test_u32_comp_adv_data = &[
-                t32l,
                 AssignedTypes::CompleteListOf32bitServiceClassUUIDs.val(),
                 t32[0], t32[1], t32[2], t32[3]
             ];
 
             let test_u32_icom_adv_data = &[
-                t32l,
                 AssignedTypes::IncompleteListOf32bitServiceClassUUIDs.val(),
                 t32[0], t32[1], t32[2], t32[3]
             ];
 
             let test_u128_comp_adv_data = &[
-                t128l,
                 AssignedTypes::CompleteListOf128bitServiceClassUUIDs.val(),
                 t128[0], t128[1], t128[2], t128[3], t128[4], t128[5], t128[6], t128[7],
                 t128[8], t128[9], t128[10], t128[11], t128[12], t128[13], t128[14], t128[15]
             ];
 
             let test_u128_icom_adv_data = &[
-                t128l,
                 AssignedTypes::IncompleteListOf128bitServiceClassUUIDs.val(),
                 t128[0], t128[1], t128[2], t128[3], t128[4], t128[5], t128[6], t128[7],
                 t128[8], t128[9], t128[10], t128[11], t128[12], t128[13], t128[14], t128[15]
@@ -780,12 +787,29 @@ pub mod service_uuids {
             let rslt_5 = Services::<u128>::try_from_raw(test_u128_comp_adv_data);
             let rslt_6 = Services::<u128>::try_from_raw(test_u128_icom_adv_data);
 
-            assert_eq!(rslt_1.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),  Some(test_16));
-            assert_eq!(rslt_2.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),  Some(test_16));
-            assert_eq!(rslt_3.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),  Some(test_32));
-            assert_eq!(rslt_4.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),  Some(test_32));
-            assert_eq!(rslt_5.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()), Some(test_128));
-            assert_eq!(rslt_6.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()), Some(test_128));
+            assert_eq!(
+                rslt_1.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),
+                Some(test_16));
+
+            assert_eq!(
+                rslt_2.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),
+                Some(test_16));
+
+            assert_eq!(
+                rslt_3.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),
+                Some(test_32));
+
+            assert_eq!(
+                rslt_4.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),
+                Some(test_32));
+
+            assert_eq!(
+                rslt_5.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()),
+                Some(test_128));
+
+            assert_eq!(
+                rslt_6.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()),
+                Some(test_128));
         }
     }
 }
