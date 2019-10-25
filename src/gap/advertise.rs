@@ -773,15 +773,19 @@ pub mod service_uuids {
                 t128[8], t128[9], t128[10], t128[11], t128[12], t128[13], t128[14], t128[15]
             ];
 
-            assert_eq!(Ok(test_16), Services::<u16>::try_from_raw(test_u16_comp_adv_data));
-            assert_eq!(Ok(test_16), Services::<u16>::try_from_raw(test_u16_icom_adv_data));
+            let rslt_1 = Services::<u16>::try_from_raw(test_u16_comp_adv_data);
+            let rslt_2 = Services::<u16>::try_from_raw(test_u16_icom_adv_data);
+            let rslt_3 = Services::<u32>::try_from_raw(test_u32_comp_adv_data);
+            let rslt_4 = Services::<u32>::try_from_raw(test_u32_icom_adv_data);
+            let rslt_5 = Services::<u128>::try_from_raw(test_u128_comp_adv_data);
+            let rslt_6 = Services::<u128>::try_from_raw(test_u128_icom_adv_data);
 
-            assert_eq!(Ok(test_32), Services::<u32>::try_from_raw(test_u32_comp_adv_data));
-            assert_eq!(Ok(test_32), Services::<u32>::try_from_raw(test_u32_icom_adv_data));
-
-            assert_eq!(Ok(test_128), Services::<u128>::try_from_raw(test_u128_comp_adv_data));
-            assert_eq!(Ok(test_128), Services::<u128>::try_from_raw(test_u128_icom_adv_data));
-
+            assert_eq!(rslt_1.map(|r| r.get(test_16)),  Ok(Some(test_16)));
+            assert_eq!(rslt_2.map(|r| r.get(test_16)),  Ok(Some(test_16)));
+            assert_eq!(rslt_3.map(|r| r.get(test_32)),  Ok(Some(test_32)));
+            assert_eq!(rslt_4.map(|r| r.get(test_32)),  Ok(Some(test_32)));
+            assert_eq!(rslt_5.map(|r| r.get(test_128)), Ok(Some(test_128)));
+            assert_eq!(rslt_6.map(|r| r.get(test_128)), Ok(Some(test_128)));
         }
     }
 }

@@ -617,6 +617,8 @@ mod test {
         let test_val_2 = 64u64;
         let test_val_3 = -11i8;
 
+        let test_cnt = 3;
+
         let (c1,c2) = TwoWayChannel::new();
 
         thread::spawn( move || {
@@ -646,13 +648,15 @@ mod test {
             server.push(attribute_1); // has handle value of 2
             server.push(attribute_3); // has handle value of 3
 
-            loop {
+            for _ in 0..test_cnt {
                 use async_timer::Timed;
 
-                if let Err(e) = futures::executor::block_on(
+                match futures::executor::block_on(
                     Timed::platform_new(server.receiver(), std::time::Duration::from_millis(1500))
                 ) {
-                    panic!("Pdu error: {:?}", e);
+                    Err(e) => panic!("Timed: {:?}", e),
+                    Ok(Err(e)) => panic!("Pdu error: {:?}", e),
+                    _ => ()
                 }
             }
         });
