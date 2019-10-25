@@ -728,10 +728,10 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     /// Make an ACL data connection channel
     ///
     /// Make a connection channel for the provided connection handle.
-    pub fn new_le_acl_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
-    -> impl crate::l2cap::ConnectionChannel + 'a
+    pub fn new_le_acl_connection_channel<'a>(&'a self, connection_event_data: &events::LEConnectionCompleteData)
+        -> impl crate::l2cap::ConnectionChannel + 'a
     {
-        LeAclHciChannel::new(self, connection_handle)
+        LeAclHciChannel::new(self, connection_event_data.connection_handle.clone())
     }
 }
 

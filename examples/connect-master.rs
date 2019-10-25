@@ -1,7 +1,3 @@
-#![feature(async_await)]
-#![feature(await_macro)]
-#![feature(gen_future)]
-
 extern crate bo_tie;
 
 use bo_tie::hci;
@@ -26,7 +22,7 @@ async fn remove_from_white_list(
     use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
     use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
 
-    await!(send(&hi, RandomDeviceAddress, address)).unwrap();
+    send(&hi, RandomDeviceAddress, address).await.unwrap();
 }
 
 async fn scan_for_local_name<'a>(
@@ -46,16 +42,16 @@ async fn scan_for_local_name<'a>(
 
     let le_event = LEMeta::AdvertisingReport;
 
-    await!(set_scan_enable::send(&hi, false, false)).unwrap();
+    set_scan_enable::send(&hi, false, false).await.unwrap();
 
-    await!(set_event_mask::send(&hi, vec![le_event])).unwrap();
+    set_event_mask::send(&hi, vec![le_event]).await.unwrap();
 
-    await!(set_scan_parameters::send(&hi, scan_prms)).unwrap();
+    set_scan_parameters::send(&hi, scan_prms).await.unwrap();
 
-    await!(set_scan_enable::send(&hi, true, true)).unwrap();
+    set_scan_enable::send(&hi, true, true).await.unwrap();
 
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = await!( hi.wait_for_event( le_event.into(), Duration::from_secs(5)) )
+    while let Ok(event) = hi.wait_for_event( le_event.into(), Duration::from_secs(5)).await
     {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
             for report_result in reports.iter() {
@@ -65,7 +61,7 @@ async fn scan_for_local_name<'a>(
                             if let Ok(local_name) = local_name::LocalName::try_from_raw(data_rsl.unwrap())
                             {
                                 if is_desired_device( name, local_name.as_ref()) {
-                                    await!(set_scan_enable::send(&hi, false, false)).unwrap();
+                                    set_scan_enable::send(&hi, false, false).await.unwrap();
                                     return Some(Box::new(report.clone()));
                                 }
                             }
@@ -77,7 +73,7 @@ async fn scan_for_local_name<'a>(
         }
     }
 
-    await!(set_scan_enable::send(&hi, false, false)).unwrap();
+    set_scan_enable::send(&hi, false, false).await.unwrap();
     println!("Couldn't find the device");
 
     None
@@ -118,19 +114,19 @@ async fn connect(
     );
 
     // enable the LEConnectionComplete event
-    await!(set_event_mask::send(&hi, vec![connect_event])).unwrap();
+    set_event_mask::send(&hi, vec![connect_event]).await.unwrap();
 
     // create the connection
-    await!(create_connection::send(&hi, parameters)).unwrap();
+    create_connection::send(&hi, parameters).await.unwrap();
 
     // wait for the LEConnectionUpdate event
-    await!(hi.wait_for_event(connect_event.into(), Duration::from_secs(25)))
+    hi.wait_for_event(connect_event.into(), Duration::from_secs(25)).await
 }
 
 async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {
     use bo_tie::hci::le::connection::create_connection_cancel;
 
-    await!(create_connection_cancel::send(&hi)).unwrap();
+    create_connection_cancel::send(&hi).await.unwrap();
 }
 
 async fn disconnect(
@@ -144,7 +140,7 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    await!(disconnect::send(&hi, prams)).unwrap();
+    disconnect::send(&hi, prams).await.unwrap();
 }
 
 fn main() {

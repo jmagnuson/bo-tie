@@ -443,6 +443,24 @@ impl <C> AsMut<att::server::Server<C>> for Server<C> where C: l2cap::ConnectionC
     }
 }
 
+impl<C> core::ops::Deref for Server<C>
+where C:l2cap::ConnectionChannel
+{
+    type Target = att::server::Server<C>;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<C> core::ops::DerefMut for Server<C>
+where C:l2cap::ConnectionChannel
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
 struct GattReceiver<'a, C, R>
 where C: l2cap::ConnectionChannel + 'a,
       R: Future<Output = Result<att::server::RequestProcessor<'a, C>, att::Error>> + Unpin + 'a
@@ -638,6 +656,24 @@ where C: l2cap::ConnectionChannel
     }
 }
 
+impl<'a,C> core::ops::Deref for GattRequestProcessor<'a,C>
+where C:l2cap::ConnectionChannel
+{
+    type Target = att::server::RequestProcessor<'a,C>;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<'a,C> core::ops::DerefMut for GattRequestProcessor<'a,C>
+where C:l2cap::ConnectionChannel
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -651,8 +687,8 @@ mod tests {
     impl ConnectionChannel for DummyConnection {
         const DEFAULT_ATT_MTU: u16 = core::u16::MAX;
 
-        fn send(&self, _: &[u8]) {}
-        fn receive(&self, _: core::task::Waker) -> Option<Box<[u8]>> { None }
+        fn send(&self, _: crate::l2cap::AclData) {}
+        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclData>> { None }
     }
 
     #[test]
@@ -660,7 +696,7 @@ mod tests {
 
         let mut server_builder = ServerBuilder::new();
 
-        let test_service_1 = server_builder.into_service_constructor( UUID::from_u16(0x1234), false )
+        let test_service_1 = server_builder.new_service_constructor( UUID::from_u16(0x1234), false )
             .into_characteristics_adder()
             .build_characteristic(
                 vec!(characteristic::Properties::Read),
@@ -678,7 +714,7 @@ mod tests {
             .finish_characteristic()
             .finish_service();
 
-        let _test_service_2 = server_builder.into_service_constructor( UUID::from_u16(0x3456), true )
+        let _test_service_2 = server_builder.new_service_constructor( UUID::from_u16(0x3456), true )
             .into_includes_adder()
             .include_service(&test_service_1)
             .finish_service();

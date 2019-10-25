@@ -555,25 +555,25 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel1 {
 
-        const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
+        const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
 
-        fn send(&self, data: &[u8]) {
+        fn send(&self, data: crate::l2cap::AclData) {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b1 = Some(data.to_vec());
+            gaurd.b1 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
             }
         }
 
-        fn receive(&self, waker: Waker) -> Option<Box<[u8]>> {
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclData>> {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b2.take() {
-                Some(data.into_boxed_slice())
+                Some(vec![crate::l2cap::AclData::new(data, crate::l2cap::ChannelIdentifier::NullIdentifier)])
             } else {
-                gaurd.w2 = Some(waker);
+                gaurd.w2 = Some(waker.clone());
                 None
             }
         }
@@ -581,25 +581,25 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel2 {
 
-        const DEFAULT_ATT_MTU: u16 = crate::gap::MIN_ATT_MTU_LE;
+        const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
 
-        fn send(&self, data: &[u8]) {
+        fn send(&self, data: crate::l2cap::AclData) {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b2 = Some(data.to_vec());
+            gaurd.b2 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
             }
         }
 
-        fn receive(&self, waker: Waker) -> Option<Box<[u8]>> {
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclData>> {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b1.take() {
-                Some(data.into_boxed_slice())
+                Some(vec![crate::l2cap::AclData::new(data, crate::l2cap::ChannelIdentifier::NullIdentifier)])
             } else {
-                gaurd.w1 = Some(waker);
+                gaurd.w1 = Some(waker.clone());
                 None
             }
         }
@@ -626,19 +626,19 @@ mod test {
 
             let attribute_0 = Attribute::new(
                 From::from(UUID_1),
-                [Read, Write].to_vec().into_boxed_slice(),
+                [Read, Write].to_vec(),
                 0usize
             );
 
             let attribute_1 = Attribute::new(
                 From::from(UUID_2),
-                [Read, Write].to_vec().into_boxed_slice(),
+                [Read, Write].to_vec(),
                 0u64
             );
 
             let attribute_3 = Attribute::new(
                 From::from(UUID_3),
-                [Read, Write].to_vec().into_boxed_slice(),
+                [Read, Write].to_vec(),
                 0i8
             );
 
@@ -647,7 +647,11 @@ mod test {
             server.push(attribute_3); // has handle value of 3
 
             loop {
-                if let Err(e) = futures::executor::block_on( server.on_receive() ) {
+                use async_timer::Timed;
+
+                if let Err(e) = futures::executor::block_on(
+                    Timed::platform_new(server.receiver(), std::time::Duration::from_millis(1500))
+                ) {
                     panic!("Pdu error: {:?}", e);
                 }
             }

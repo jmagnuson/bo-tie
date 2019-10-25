@@ -1,5 +1,3 @@
-#![feature(async_await)]
-#![feature(await_macro)]
 #![feature(gen_future)]
 
 use bo_tie::gap::advertise;
@@ -91,7 +89,7 @@ mod heart_rate_service
 
         impl att::TransferFormat for HrsFlags {
 
-            fn from(_: &[u8]) -> Result<Self, att::pdu::Error> {
+            fn from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
                 panic!("Tried to make Heart Rate Monitor data from raw data")
             }
 
@@ -140,7 +138,7 @@ mod heart_rate_service
         }
 
         impl att::TransferFormat for HeartRateMeasurement {
-            fn from(_: &[u8]) -> Result<Self, att::pdu::Error> {
+            fn from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
 
                 // This is a heart rate monitor, it sends out data. The from function is only used for
                 // receiving raw data.
@@ -172,7 +170,7 @@ mod heart_rate_service
         measurement: characteristics::HeartRateMeasurement,
         connection_chanel: C,
         mtu: Option<u16>
-    ) -> att::server::Server<C>
+    ) -> gatt::Server<C>
     where C: l2cap::ConnectionChannel
     {
         let mut server_builder = gatt::ServerBuilder::new();
@@ -219,17 +217,17 @@ async fn advertise_setup<'a>(
     adv_data.try_push(adv_flags).unwrap();
     adv_data.try_push(adv_uuids).unwrap();
 
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
+    set_advertising_enable::send(&hi, false).await.unwrap();
 
-    await!(set_advertising_data::send(&hi, adv_data)).unwrap();
+    set_advertising_data::send(&hi, adv_data).await.unwrap();
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
 
-    await!(set_advertising_parameters::send(&hi, adv_prams)).unwrap();
+    set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
 
-    await!(set_advertising_enable::send(&hi, true)).unwrap();
+    set_advertising_enable::send(&hi, true).await.unwrap();
 }
 
 // For simplicity, I've left the a race condition in here. There could be a case where the
@@ -239,9 +237,9 @@ async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAda
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let evt_rsl = await!(hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)));
+    let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
 
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
+    set_advertising_enable::send(&hi, false).await.unwrap();
 
     match evt_rsl {
         Ok(event) => {
@@ -273,7 +271,7 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    await!(disconnect::send(&hi, prams)).expect("Failed to disconnect");
+    disconnect::send(&hi, prams).await.expect("Failed to disconnect");
 }
 
 fn handle_sig(
@@ -337,9 +335,9 @@ fn main() {
 
                 let hrm = heart_rate_service::characteristics::HeartRateMeasurement::new(heart_rate.clone());
 
-                let connection_channel = bo_tie::l2cap::LeAclHciChannel::new(&interface, connection_complete_event);
+                let connection_channel = interface.new_le_acl_connection_channel(&connection_complete_event);
 
-                let mut server = heart_rate_service::build_server(hrm, connection_channel, None);
+                let server = heart_rate_service::build_server(hrm, connection_channel, None);
 
                 thread::spawn( move || {
                     use rand::random;

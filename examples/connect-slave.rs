@@ -24,10 +24,6 @@
 //! bluetooth on the device to connect with, but please note this will git rid of all information
 //! associated with the bluetooth and other devices will need to be reconnected.
 
-#![feature(async_await)]
-#![feature(await_macro)]
-#![feature(gen_future)]
-
 use bo_tie:: {
     att,
     gap::advertise,
@@ -68,17 +64,17 @@ async fn advertise_setup<'a>(
     adv_data.try_push(adv_flags).unwrap();
     adv_data.try_push(adv_name).unwrap();
 
-    await!(set_advertising_enable::send(&hi, false)).unwrap();
+    set_advertising_enable::send(&hi, false).await.unwrap();
 
-    await!(set_advertising_data::send(&hi, adv_data)).unwrap();
+    set_advertising_data::send(&hi, adv_data).await.unwrap();
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
 
-    await!(set_advertising_parameters::send(&hi, adv_prams)).unwrap();
+    set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
 
-    await!(set_advertising_enable::send(&hi, true)).unwrap();
+    set_advertising_enable::send(&hi, true).await.unwrap();
 }
 
 // For simplicity, I've left the race condition in here. There could be a case where the connection
@@ -88,7 +84,7 @@ async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAda
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let evt_rsl = await!(hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)));
+    let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
 
     match evt_rsl {
         Ok(event) => {
@@ -119,7 +115,7 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    await!(disconnect::send(&hi, prams)).expect("Failed to disconnect");
+    disconnect::send(&hi, prams).await.expect("Failed to disconnect");
 }
 
 /// Initialize the Attribute Server
@@ -200,15 +196,13 @@ fn main() {
     // on a different thread.
     match executor::block_on(wait_for_connection(&interface)) {
         Ok(event_data) => {
-            let handle = event_data.connection_handle;
-
-            raw_connection_handle.store(handle.get_raw_handle(), Ordering::SeqCst);
+            raw_connection_handle.store(event_data.connection_handle.get_raw_handle(), Ordering::SeqCst);
 
             let interface_clone = interface.clone();
 
             std::thread::spawn( move || {
 
-                let connection_channel = interface_clone.new_le_acl_connection_channel(handle);
+                let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
 
                 let server = gatt_server_init(connection_channel, local_name);
 

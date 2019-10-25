@@ -714,6 +714,76 @@ pub mod service_uuids {
     impl_raw!{u16}
     impl_raw!{u32}
     impl_raw!{u128}
+
+    #[cfg(test)]
+    mod tests {
+
+        use super::*;
+
+        #[test]
+        fn adv_service_uuid_test() {
+
+            let test_16 = 12357u16;
+            let test_32 = 123456789u32;
+            let test_128 = 1372186947123894612389889949u128;
+
+            let t16 = test_16.to_le_bytes();
+            let t32 = test_32.to_le_bytes();
+            let t128 = test_128.to_le_bytes();
+
+            let t16l = t16.len() as u8;
+            let t32l = t32.len() as u8;
+            let t128l = t128.len() as u8;
+
+            let test_u16_comp_adv_data = &[
+                t16l,
+                AssignedTypes::CompleteListOf16bitServiceClassUUIDs.val(),
+                t16[0], t16[1]
+            ];
+
+            let test_u16_icom_adv_data = &[
+                t16l,
+                AssignedTypes::IncompleteListOf16bitServiceClassUUIDs.val(),
+                t16[0], t16[1]
+            ];
+
+            let test_u32_comp_adv_data = &[
+                t32l,
+                AssignedTypes::CompleteListOf32bitServiceClassUUIDs.val(),
+                t32[0], t32[1], t32[2], t32[3]
+            ];
+
+            let test_u32_icom_adv_data = &[
+                t32l,
+                AssignedTypes::IncompleteListOf32bitServiceClassUUIDs.val(),
+                t32[0], t32[1], t32[2], t32[3]
+            ];
+
+            let test_u128_comp_adv_data = &[
+                t128l,
+                AssignedTypes::CompleteListOf128bitServiceClassUUIDs.val(),
+                t128[0], t128[1], t128[2], t128[3], t128[4], t128[5], t128[6], t128[7],
+                t128[8], t128[9], t128[10], t128[11], t128[12], t128[13], t128[14], t128[15]
+            ];
+
+            let test_u128_icom_adv_data = &[
+                t128l,
+                AssignedTypes::IncompleteListOf128bitServiceClassUUIDs.val(),
+                t128[0], t128[1], t128[2], t128[3], t128[4], t128[5], t128[6], t128[7],
+                t128[8], t128[9], t128[10], t128[11], t128[12], t128[13], t128[14], t128[15]
+            ];
+
+            assert_eq!(Ok(test_16), Services::<u16>::try_from_raw(test_u16_comp_adv_data));
+            assert_eq!(Ok(test_16), Services::<u16>::try_from_raw(test_u16_icom_adv_data));
+
+            assert_eq!(Ok(test_32), Services::<u32>::try_from_raw(test_u32_comp_adv_data));
+            assert_eq!(Ok(test_32), Services::<u32>::try_from_raw(test_u32_icom_adv_data));
+
+            assert_eq!(Ok(test_128), Services::<u128>::try_from_raw(test_u128_comp_adv_data));
+            assert_eq!(Ok(test_128), Services::<u128>::try_from_raw(test_u128_icom_adv_data));
+
+        }
+    }
 }
 
 pub mod service_data {
