@@ -780,12 +780,12 @@ pub mod service_uuids {
             let rslt_5 = Services::<u128>::try_from_raw(test_u128_comp_adv_data);
             let rslt_6 = Services::<u128>::try_from_raw(test_u128_icom_adv_data);
 
-            assert_eq!(rslt_1.map(|r| r.get(test_16)),  Ok(Some(test_16)));
-            assert_eq!(rslt_2.map(|r| r.get(test_16)),  Ok(Some(test_16)));
-            assert_eq!(rslt_3.map(|r| r.get(test_32)),  Ok(Some(test_32)));
-            assert_eq!(rslt_4.map(|r| r.get(test_32)),  Ok(Some(test_32)));
-            assert_eq!(rslt_5.map(|r| r.get(test_128)), Ok(Some(test_128)));
-            assert_eq!(rslt_6.map(|r| r.get(test_128)), Ok(Some(test_128)));
+            assert_eq!(rslt_1.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),  Some(test_16));
+            assert_eq!(rslt_2.as_ref().map(|r| r.get(&test_16)).unwrap().map(|v| v.clone()),  Some(test_16));
+            assert_eq!(rslt_3.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),  Some(test_32));
+            assert_eq!(rslt_4.as_ref().map(|r| r.get(&test_32)).unwrap().map(|v| v.clone()),  Some(test_32));
+            assert_eq!(rslt_5.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()), Some(test_128));
+            assert_eq!(rslt_6.as_ref().map(|r| r.get(&test_128)).unwrap().map(|v| v.clone()), Some(test_128));
         }
     }
 }
