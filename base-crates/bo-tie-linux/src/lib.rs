@@ -118,7 +118,7 @@ impl fmt::Display for Error  {
 
             Error::MPSCError(ref msg) => write!(f, "{}", msg ),
 
-            Error::Timeout => write!(f, "Timeout Occured"),
+            Error::Timeout => write!(f, "Timeout Occurred"),
 
             Error::Other( ref msg) => write!(f, "{}", msg),
         }
