@@ -118,14 +118,12 @@ pub enum Error {
 
 impl fmt::Display for Error where {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use alloc::string::ToString;
-
         match *self {
             Error::IncorrectDataType => write!(f, "Incorrect Data Type Field"),
             Error::IncorrectLength => write!(f, "The length of this type is larger than the remaining bytes in the packet"),
             Error::RawTooSmall => write!(f, "Raw data length is too small"),
             Error::UTF8Error(utf8_err) => write!(f, "UTF-8 conversion error, valid up to {}: '{}'",
-                utf8_err.valid_up_to(), utf8_err.to_string()),
+                utf8_err.valid_up_to(), alloc::string::ToString::to_string(&utf8_err)),
             Error::LeBytesConversionError => write!(f, "Error converting bytes from le")
         }
     }
@@ -1007,8 +1005,6 @@ pub mod local_name {
     impl TryFromRaw for LocalName {
 
         fn try_from_raw(raw: &[u8]) -> Result<Self,Error> {
-            use alloc::string::ToString;
-
             log::trace!("Trying to convert '{:X?}' to Local Name", raw);
 
             from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
@@ -1021,7 +1017,7 @@ pub mod local_name {
                 };
 
                 Self {
-                    name: ref_name.to_string(),
+                    name: alloc::string::ToString::to_string(&ref_name),
                     is_short: raw[0] == Self::SHORTENED_TYPE.val(),
                 }
             })
