@@ -624,9 +624,6 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
         if ClientPduName::try_from(op).is_err() && super::server::ServerPduName::try_from(op).is_err()
         {
             let data = TransferFormat::into(&pdu);
-
-            println!("data len: {}, mtu: {}", data.len(), self.mtu );
-
             if self.mtu > data.len() {
                 self.channel.send(l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID));
 
