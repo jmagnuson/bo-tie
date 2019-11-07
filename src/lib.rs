@@ -16,6 +16,7 @@ pub mod gap;
 pub mod gatt;
 pub mod hci;
 pub mod l2cap;
+pub mod sm;
 
 pub type BluetoothDeviceAddress = [u8; 6];
 

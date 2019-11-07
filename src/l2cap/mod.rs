@@ -41,6 +41,12 @@ impl ChannelIdentifier {
     }
 }
 
+impl From<LeUserChannelIdentifier> for ChannelIdentifier {
+    fn from( le: LeUserChannelIdentifier ) -> Self {
+        ChannelIdentifier::LE(le)
+    }
+}
+
 /// Dynamicly created l2cap channel
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct DynChannelId {

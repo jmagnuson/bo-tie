@@ -81,6 +81,15 @@ pub struct Pdu<P> where P: TransferFormat {
 }
 
 impl<P> Pdu<P> where P: TransferFormat {
+
+    /// Create a new Pdu
+    ///
+    /// # TODO
+    /// The signature has not been implemented yet
+    pub fn new( opcode: PduOpCode, parameters: P, signature: Option<()> ) -> Self {
+        Pdu { opcode, parameters, signature}
+    }
+
     pub fn get_opcode(&self) -> PduOpCode { self.opcode }
     pub fn get_parameters(&self) -> &P { &self.parameters }
     pub fn get_signature(&self) -> Option<()> { self.signature }

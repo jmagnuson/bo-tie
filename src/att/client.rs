@@ -568,7 +568,7 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
 
         let data = TransferFormat::into(&pdu);
 
-        if self.mtu < data.len() {
+        if self.mtu > data.len() {
             self.channel.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
             Ok(())
         } else {
@@ -606,6 +606,36 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
                 exp_resp: super::server::ServerPduName::ExecuteWriteResponse,
                 pd: core::marker::PhantomData,
             }
+        }
+    }
+
+    /// Send a custom command to the server
+    ///
+    /// This can be used by higher layer protocols to send a command to the server that is not
+    /// implemented at the ATT protocol level. However, if the provided pdu contains an opcode
+    /// already used by the ATT protocol, then an error is returned.
+    pub fn custom_command<D>(&self, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
+    where D: TransferFormat
+    {
+        use core::convert::TryFrom;
+
+        let op: u8 = pdu.get_opcode().into_raw();
+
+        if ClientPduName::try_from(op).is_err() && super::server::ServerPduName::try_from(op).is_err()
+        {
+            let data = TransferFormat::into(&pdu);
+
+            println!("data len: {}, mtu: {}", data.len(), self.mtu );
+
+            if self.mtu > data.len() {
+                self.channel.send(l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID));
+
+                Ok(())
+            } else {
+                Err(super::Error::MtuExceeded)
+            }
+        } else {
+            Err(super::Error::AttUsedOpcode(op))
         }
     }
 }

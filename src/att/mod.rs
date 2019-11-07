@@ -175,6 +175,8 @@ pub enum Error {
     /// An `UnknonwOpcode` is for opcodes that are not recognized by the ATT protocol. They may
     /// be valid for a higher layer protocol.
     UnknownOpcode(u8),
+    /// Custom opcode is already used by the Att protocol
+    AttUsedOpcode(u8),
 }
 
 impl core::fmt::Display for Error{
@@ -189,6 +191,8 @@ impl core::fmt::Display for Error{
             Error::Empty => write!( f, "Received an empty PDU" ),
             Error::UnknownOpcode(op) =>
                 write!( f, "Opcode not known to the attribute protocol ({:#x})", op),
+            Error::AttUsedOpcode(op) =>
+                write!(f, "Opcode {:#x} is already used by the Attribute Protocol", op)
         }
     }
 }
@@ -571,7 +575,10 @@ mod test {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b2.take() {
-                Some(vec![crate::l2cap::AclData::new(data, crate::l2cap::ChannelIdentifier::NullIdentifier)])
+                match crate::l2cap::AclData::from_raw_data(&data) {
+                    Ok(al) => Some(vec![al]),
+                    _ => Some(vec![]),
+                }
             } else {
                 gaurd.w2 = Some(waker.clone());
                 None
@@ -597,7 +604,10 @@ mod test {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b1.take() {
-                Some(vec![crate::l2cap::AclData::new(data, crate::l2cap::ChannelIdentifier::NullIdentifier)])
+                match crate::l2cap::AclData::from_raw_data(&data) {
+                    Ok(al) => Some(vec![al]),
+                    _ => Some(vec![]),
+                }
             } else {
                 gaurd.w1 = Some(waker.clone());
                 None
@@ -617,7 +627,7 @@ mod test {
         let test_val_2 = 64u64;
         let test_val_3 = -11i8;
 
-        let test_cnt = 3;
+        let kill_opcode = 0xFFu8;
 
         let (c1,c2) = TwoWayChannel::new();
 
@@ -648,16 +658,23 @@ mod test {
             server.push(attribute_1); // has handle value of 2
             server.push(attribute_3); // has handle value of 3
 
-            for _ in 0..test_cnt {
+            if let Err(e) = 'server_loop: loop {
                 use async_timer::Timed;
 
                 match futures::executor::block_on(
                     Timed::platform_new(server.receiver(), std::time::Duration::from_millis(1500))
                 ) {
-                    Err(e) => panic!("Timed: {:?}", e),
-                    Ok(Err(e)) => panic!("Pdu error: {:?}", e),
-                    _ => ()
+                    Err(e) => break 'server_loop Err(format!("Timed: {:?}", e)),
+                    Ok(Err(e)) => break 'server_loop Err(format!("Pdu error: {:?}", e)),
+                    Ok(Ok(mut r)) =>
+                        if r.get_raw_opcode() == kill_opcode {
+                            break 'server_loop Ok(())
+                        } else {
+                            r.process_request().unwrap()
+                        },
                 }
+            } {
+                panic!("{}", e);
             }
         });
 
@@ -684,6 +701,9 @@ mod test {
 
         let read_val_3 = futures::executor::block_on(client.read_request(3))
             .expect("Failed to read at handle 2 from the server");
+
+        client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) )
+            .expect("Failed to send kill opcode");
 
         assert_eq!(test_val_1, read_val_1);
         assert_eq!(test_val_2, read_val_2);

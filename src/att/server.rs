@@ -265,6 +265,9 @@ where C: l2cap::ConnectionChannel
 
     /// Get the received payload
     pub fn get_request_raw_data(&self) -> &[u8] { &self.pdu_raw_data }
+
+    /// Get the opcode raw value
+    pub fn get_raw_opcode(&self) -> u8 { self.pdu_raw_data[0] }
 }
 
 impl<'a, C> AsRef<Server<C>> for RequestProcessor<'a, C> where C: l2cap::ConnectionChannel
@@ -345,12 +348,7 @@ where C: l2cap::ConnectionChannel
     /// The set mtu between the client and server. If this value is ever None, then the default
     /// value as defined in the connection channel will be used.
     set_mtu: Option<u16>,
-    /// The set maximum mtu
-    /// TODO: It is temporary that only one connection can be made to this server, capability needs
-    /// to be added
-    ///
-    /// `connection` is compromised of the connection channel and the maximum transfer unit
-    connection: (C),
+    connection: C,
     attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>,
     /// The permissions the client currently has
     given_permissions: Vec<super::AttributePermissions>,
