@@ -6,6 +6,15 @@
 //!
 //! It is generally not needed to use these functions directly as they tailor made for the Security
 //! Manager protocol.
+//!
+//! # The Algorithms
+//! The names of each algorithm match the names as stated in the Security Manager section of the
+//! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2). Unfortunately
+//! these names are shortened, making them obtuse to understand going by their name.
+//!
+//! The security function *e* is built using the functions [`ah`], [`c1`], and [`s1`].
+//!
+//! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
 
 /// 24-bit hash function
 ///
@@ -445,6 +454,70 @@ pub fn aes_cmac_generate( key: u128, msg: &[u8] ) -> u128 {
 
 pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
     auth_code == aes_cmac_generate(key, msg)
+}
+
+/// Generate the (private, public) key pair for the elliptic curve
+///
+/// This will return an error if the random number generation failed.
+///
+/// # Note
+/// Both the public key and private key are in little endian
+pub fn ec() -> Result<([u8;32], [u8;64]), impl core::fmt::Debug> {
+
+    use rand_core::{RngCore, OsRng};
+    use secp256k1::{SecretKey, PublicKey};
+
+    let csprng = &mut [0u8; 32];
+
+    if let Err(e) = OsRng.try_fill_bytes(csprng) {
+        return Err(e)
+    }
+
+    let private_key = SecretKey::parse(csprng).unwrap();
+
+    let public_key  = PublicKey::from_secret_key(&private_key).serialize();
+
+    let mut raw_public_key = [0u8; 64];
+
+    raw_public_key.copy_from_slice(&public_key);
+
+    Ok( (private_key.serialize(), raw_public_key) )
+}
+
+/// Calculate the Diffie-Hellman key from the provided public key
+pub fn ecdh(this_secret_key: &[u8;32], remote_public_key: &[u8;64])
+-> Result<[u8;32], impl core::fmt::Debug>
+{
+    use secp256k1::{SecretKey, PublicKey, SharedSecret};
+
+    let secret_key = SecretKey::parse(this_secret_key).unwrap();
+
+    let public_key = match PublicKey::parse_slice(remote_public_key, None) {
+        Ok(pk) => pk,
+        Err(e) => return Err(e),
+    };
+
+    let mut shared_secret_key = [0u8;32];
+
+    shared_secret_key.copy_from_slice(SharedSecret::new(&public_key, &secret_key)?.as_ref());
+
+    Ok(shared_secret_key)
+}
+
+/// Generate a random u128 value
+pub fn rand_u128() -> u128 {
+    use rand_core::{OsRng, RngCore};
+
+    let mut bytes = [0u8;16];
+
+    OsRng.fill_bytes(&mut bytes);
+
+    <u128>::from_ne_bytes(bytes)
+}
+
+/// Generate the nonce u128 values
+pub fn nonce() -> u128 {
+    rand_u128()
 }
 
 /// Tests

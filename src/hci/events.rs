@@ -1642,16 +1642,16 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct EncryptuionKeyRefreshCompleteData {
+pub struct EncryptionKeyRefreshCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
-    EncryptuionKeyRefreshCompleteData,
+    EncryptionKeyRefreshCompleteData,
     packet,
     {
-        Ok(EncryptuionKeyRefreshCompleteData {
+        Ok(EncryptionKeyRefreshCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
         })
@@ -3643,7 +3643,7 @@ events_markup! {
         SynchronousConnectionChanged{SynchronousConnectionChangedData} -> 0x2D,
         SniffSubrating{SniffSubratingData} -> 0x2E,
         ExtendedInquiryResult{ExtendedInquiryResultData} -> 0x2F,
-        EncryptuionKeyRefreshComplete{EncryptuionKeyRefreshCompleteData} -> 0x30,
+        EncryptionKeyRefreshComplete{EncryptionKeyRefreshCompleteData} -> 0x30,
         IOCapabilityRequest{IOCapabilityRequestData} -> 0x31,
         IOCapabilityResponse{IOCapabilityResponseData} -> 0x32,
         UserConfirmationRequest{UserConfirmationRequestData} -> 0x33,

@@ -5,12 +5,16 @@ use core::fmt::{Debug, Display, Formatter, Result};
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub enum Error {
+
     /// NoError is not part of the official error list in the Bluetooth Spec (v5 | Vol 2, Part D
     /// Sect 2). Its just a placeholder for when there is no error generated
     NoError,
     /// When an unknown error code is received.
     Unknown(u8),
-    // Start of Bluetooth Specified error codes
+    /// A bo-tie specific or HCI related error message that is not an error code from the Controller
+    Message(&'static str),
+
+    // Start of Bluetooth Specified HCI error codes
     UnknownHCICommand,
     UnknownConnectionIdentifier,
     HardwareFailure,
@@ -78,6 +82,12 @@ pub enum Error {
     OperationCancelledByHost,
 }
 
+impl From<&'static str> for Error {
+    fn from(msg: &'static str) -> Error {
+        Error::Message(msg)
+    }
+}
+
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter) -> Result {
         use self::Error::*;
@@ -85,6 +95,7 @@ impl Debug for Error {
         match *self {
             NoError => write!(f, "NoError"),
             Unknown(val) => write!(f, "Unknown Error Code (0x{:X})", val),
+            Message(msg) => write!(f, "{}", msg),
             UnknownHCICommand => write!(f, "UnknownHCICommand (0x{:X})", 0x01),
             UnknownConnectionIdentifier => write!(f, "UnknownConnectionIdentifier (0x{:X})", 0x02),
             HardwareFailure => write!(f, "HardwareFailure (0x{:X})", 0x03),
@@ -237,6 +248,9 @@ impl Display for Error {
                 }
                 Error::Unknown(val) => {
                     return write!(f, "Unknown Error Code (0x{:X})", val)
+                }
+                Error::Message(msg) => {
+                    return write!(f, "{}", msg)
                 }
                 Error::UnknownHCICommand =>
                     "Unknown HCI Command",

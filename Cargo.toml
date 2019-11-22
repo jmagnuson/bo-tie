@@ -8,10 +8,13 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-serde = "1.0.85"
+serde = { version = "~1.0.102", features = ['derive'] }
 log = "0.4.6"
 uuid = "0.8"
 aes = "0.3.2"
+crossbeam-utils = "0.7.0"
+rand_core = "0.5.1"
+libsecp256k1 = "0.3.2"
 
 [dependencies.bincode]
 version = "1.0.1"
