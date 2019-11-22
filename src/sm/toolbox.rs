@@ -361,7 +361,7 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// ["not yet received any formal cryptographic and security reviews"](https://github.com/RustCrypto/block-ciphers/blob/master/README.md#warnings)
 ///
 /// This is the synchronous version of this function and doesn't rely on the HCI to encrypt the
-/// payload. Whether or not this function is faster then the asynchronous version [`e_aysnc`]
+/// payload. Whether or not this function is faster then the asynchronous version
 /// depends on the architecture of your system in relation to the Bluetooth controller. However, it
 /// is recommended to use this function if your target architecture supports the
 /// [AES Instruction Set](https://en.wikipedia.org/wiki/AES_instruction_set).

@@ -4151,7 +4151,7 @@ pub mod le {
         /// Encrypt 16 bytes of plain text with the provided key
         ///
         /// The controller uses AES-128 to encrypt the data. Once the controller is done encrypting
-        /// the plain text, the [`Command Complete`](events::Events::CommandComplete) event will
+        /// the plain text, the [`Command Complete`](crate::hci::events::Events::CommandComplete) event will
         /// return with the cypher text generated.
         pub mod encrypt {
 
@@ -4454,10 +4454,10 @@ pub mod le {
         ///
         /// # Events
         /// When encryption has been started, the event
-        /// [Encryption Change](events::Events::EncryptionChange) will be sent from the controller
+        /// [Encryption Change](crate::hci::events::Events::EncryptionChange) will be sent from the controller
         /// to indicate that data will now be encrypted. If the connection was already encrypted,
         /// sending this command will instead cause the controller to issue the
-        /// [Encryption Key Refresh](events::Events::EncryptionKeyRefreshComplete) event once the
+        /// [Encryption Key Refresh](crate::hci::events::Events::EncryptionKeyRefreshComplete) event once the
         /// encryption is updated.
         pub mod start_encryption {
             use crate::hci::*;
