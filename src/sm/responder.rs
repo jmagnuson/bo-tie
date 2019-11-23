@@ -1,9 +1,8 @@
 
 use super::*;
 
-pub struct SlaveSecurityManagerBuilder<'a, HCI, C> {
+pub struct SlaveSecurityManagerBuilder<'a, C> {
     sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
     connection_channel: &'a C,
     io_capabilities: pairing::IOCapability,
     oob_data: Option<u128>,
@@ -15,13 +14,11 @@ pub struct SlaveSecurityManagerBuilder<'a, HCI, C> {
     this_address_is_random: bool,
 }
 
-impl<'a,HCI,C> SlaveSecurityManagerBuilder<'a,HCI,C>
-    where HCI: HostControllerInterface,
-          C: ConnectionChannel,
+impl<'a,C> SlaveSecurityManagerBuilder<'a,C>
+where C: ConnectionChannel
 {
     pub(super) fn new(
         sm: &'a SecurityManager,
-        hci: &'a HostInterface<HCI>,
         connection_channel: &'a C,
         connected_device_address: &'a crate::BluetoothDeviceAddress,
         this_device_address: &'a crate::BluetoothDeviceAddress,
@@ -30,7 +27,6 @@ impl<'a,HCI,C> SlaveSecurityManagerBuilder<'a,HCI,C>
     ) -> Self {
         Self {
             sm,
-            hci,
             connection_channel,
             io_capabilities: pairing::IOCapability::NoInputNoOutput,
             oob_data: None,
@@ -63,7 +59,7 @@ impl<'a,HCI,C> SlaveSecurityManagerBuilder<'a,HCI,C>
         self
     }
 
-    pub fn create_security_manager(&self) -> SlaveSecurityManager<'a, HCI, C> {
+    pub fn create_security_manager(&self) -> SlaveSecurityManager<'a, C> {
 
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
@@ -76,7 +72,6 @@ impl<'a,HCI,C> SlaveSecurityManagerBuilder<'a,HCI,C>
 
         SlaveSecurityManager {
             sm: self.sm,
-            hci: &self.hci,
             connection_channel: self.connection_channel,
             io_capability: self.io_capabilities,
             oob_data: self.oob_data,
@@ -142,9 +137,8 @@ fn convert_io_cap(
     ]
 }
 
-pub struct SlaveSecurityManager<'a, HCI, C> {
+pub struct SlaveSecurityManager<'a,  C> {
     sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
     oob_data: Option<u128>,
@@ -161,11 +155,9 @@ pub struct SlaveSecurityManager<'a, HCI, C> {
     pairing_data: Option<PairingData>
 }
 
-impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
-    where HCI: HostControllerInterface,
-          C: ConnectionChannel,
+impl<'a, C> SlaveSecurityManager<'a, C>
+where C: ConnectionChannel,
 {
-
     pub fn set_oob_data(&mut self, val: u128) { self.oob_data = Some(val) }
 
     /// Process a request from a MasterSecurityManager
@@ -488,39 +480,28 @@ impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
             }
         }
     }
-
-//    fn encrypt_link(&mut self) ->  {
-//        match self.pairing_data {
-//            Some( PairingData {
-//                ltk: Some(ltk)
-//            }) {
-//
-//            }
-//            _ =>
-//        }
-//    }
 }
 
-pub struct AsyncMasterSecurityManager<'a, HCI, C> {
-    sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
-    connection_channel: &'a C,
-}
-
-impl<'a, HCI, C> AsyncMasterSecurityManager<'a, HCI, C> {
-    fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
-        Self { sm, hci, connection_channel }
-    }
-}
-
-pub struct AsyncSlaveSecurityManager<'a, HCI, C> {
-    sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
-    connection_channel: &'a C,
-}
-
-impl<'a, HCI, C> AsyncSlaveSecurityManager<'a, HCI, C> {
-    fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
-        Self { sm, hci, connection_channel }
-    }
-}
+// pub struct AsyncMasterSecurityManager<'a, HCI, C> {
+//     sm: &'a SecurityManager,
+//     hci: &'a HostInterface<HCI>,
+//     connection_channel: &'a C,
+// }
+// 
+// impl<'a, HCI, C> AsyncMasterSecurityManager<'a, HCI, C> {
+//     fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
+//         Self { sm, hci, connection_channel }
+//     }
+// }
+// 
+// pub struct AsyncSlaveSecurityManager<'a, HCI, C> {
+//     sm: &'a SecurityManager,
+//     hci: &'a HostInterface<HCI>,
+//     connection_channel: &'a C,
+// }
+// 
+// impl<'a, HCI, C> AsyncSlaveSecurityManager<'a, HCI, C> {
+//     fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
+//         Self { sm, hci, connection_channel }
+//     }
+// }

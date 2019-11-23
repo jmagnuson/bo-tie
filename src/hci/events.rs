@@ -2295,7 +2295,7 @@ impl LERole {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub enum LEConnectionAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,

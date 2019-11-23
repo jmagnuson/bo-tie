@@ -496,20 +496,18 @@ impl SecurityManager {
 
     pub fn new_slave_security_manager_builder<'a, HCI,C>(
         &'a self,
-        hci: &'a HostInterface<HCI>,
         channel: &'a C,
         master_address: &'a crate::BluetoothDeviceAddress,
         is_master_address_random: bool,
         this_address: &'a crate::BluetoothDeviceAddress,
         is_this_address_random: bool,
     )
-    -> responder::SlaveSecurityManagerBuilder<'a, HCI, C>
+    -> responder::SlaveSecurityManagerBuilder<'a, C>
     where HCI: HostControllerInterface,
             C: ConnectionChannel
     {
         responder::SlaveSecurityManagerBuilder::new(
             self,
-            hci,
             channel,
             master_address,
             this_address,

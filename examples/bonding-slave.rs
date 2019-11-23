@@ -137,7 +137,7 @@ where C: bo_tie::l2cap::ConnectionChannel
     server
 }
 
-fn att_server_loop<C>(mut server: gatt::Server<C> ) where C: bo_tie::l2cap::ConnectionChannel {
+fn att_server_loop<C>(mut server: gatt::Server<C>, slave_security_manager: SlaveSecurityManager<'_,C>) where C: bo_tie::l2cap::ConnectionChannel {
 
     loop {
         futures::executor::block_on(server.receiver())
@@ -196,6 +196,7 @@ fn main() {
     // on a different thread.
     match executor::block_on(wait_for_connection(&interface)) {
         Ok(event_data) => {
+            
             raw_connection_handle.store(event_data.connection_handle.get_raw_handle(), Ordering::SeqCst);
 
             let interface_clone = interface.clone();
@@ -212,16 +213,16 @@ fn main() {
 
                 let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
 
-                let server = gatt_server_init(connection_channel.clone(), local_name);
+                let server = gatt_server_init(connection_channel, local_name);
 
                 let sm = bo_tie::sm::SecurityManager::new(Vec::new());
 
                 let slave_sm = sm.new_slave_security_manager_builder(
                     &interface_clone,
-                    connection_channel,
-                    master_address,
+                    server.as_ref().as_ref(),
+                    &master_address,
                     master_address_type == bo_tie::hci::events::LEConnectionAddressType::RandomDeviceAddress,
-                    this_address,
+                    &this_address,
                     false
                 )
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
