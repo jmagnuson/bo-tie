@@ -717,6 +717,21 @@ where I: HciAclDataInterface
     }
 }
 
+impl<'a,I> Future for LeAclHciChannel<'a,I>
+where I: HciAclDataInterface
+{
+    type Output = alloc::vec::Vec< crate::l2cap::AclData >;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
+        use crate::l2cap::ConnectionChannel;
+
+        match self.receive(cx.waker()) {
+            None => Poll::Pending,
+            Some(d) => Poll::Ready(d),
+        }
+    }
+}
+
 impl<'a,I> core::ops::Drop for LeAclHciChannel<'a,I> where I: HciAclDataInterface {
     fn drop(&mut self) {
         self.hi.interface.stop_receiver(&self.handle)
@@ -4156,7 +4171,6 @@ pub mod le {
         pub mod encrypt {
 
             use crate::hci::*;
-            use crate::hci::common::ConnectionHandle;
 
             const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::Encrypt);
 

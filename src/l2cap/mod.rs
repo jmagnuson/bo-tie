@@ -160,7 +160,7 @@ pub struct AclData {
 impl AclData {
     pub fn new( payload: Vec<u8>, channel_id: ChannelIdentifier ) -> Self {
         AclData {
-            channel_id: channel_id,
+            channel_id,
             data: payload,
         }
     }
@@ -223,7 +223,14 @@ pub const MIN_ATT_MTU_LE: u16 = 23;
 /// The minimum number of data bytes in an attribute protocol based packet for bluetooth BR/EDR
 pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
 
-pub trait ConnectionChannel {
+/// A Connection channel
+///
+/// A connection channel is used for sending and receiving Asynchronous Connection-oriented (ACL)
+/// data packets between the Host and Bluetooth Controller.
+///
+/// Every implementor of [`ConnectionChannel`] also implements `Future` for awaiting AclData packets
+/// from a connected device (via the BluetoothController).
+pub trait ConnectionChannel: core::future::Future<Output=Vec<AclData>> {
     const DEFAULT_ATT_MTU: u16;
 
     fn send(&self, data: AclData);
