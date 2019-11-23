@@ -173,8 +173,7 @@ impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
     /// This will return a response to a valid request that can be sent to the Master device.
     /// Errors will be returned if the request is not something that can be processed by the slave
     /// or there was something wrong with the request message.
-    pub fn process_command<'z>(&'z mut self, received_data: &'z [u8] )
-                               -> impl Future<Output = Result<(), Error>> + 'z
+    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<(), Error>
     {
         if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
 
@@ -218,139 +217,129 @@ impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
         self.send(pairing::PairingFailed::new(pairing::PairingFailedReason::EncryptionKeySize));
     }
 
-    fn p_bad_data_len(&mut self) -> CommandProcessFuture<'_> {
-        cmd_process_future!{
+    fn p_bad_data_len(&mut self) -> Result<(), Error> {
+        self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+        Err( Error::Size )
+    }
+
+    fn p_unknown_command(&mut self, err: Error) -> Result<(), Error> {
+        self.send_err(pairing::PairingFailedReason::CommandNotSupported);
+
+        Err(err)
+    }
+
+    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<(), Error> {
+        self.send_err(pairing::PairingFailedReason::CommandNotSupported);
+
+        Err(Error::IncorrectCommand(cmd))
+    }
+
+    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<(), Error> {
+
+        let request = pairing::PairingRequest::try_from_icd(data)?;
+
+        if request.get_max_encryption_size() < self.encryption_key_size_min {
+            self.send_err(pairing::PairingFailedReason::EncryptionKeySize);
+
+            Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
+        } else {
+
+            let response = pairing::PairingResponse::new(
+                self.io_capability,
+                if self.oob_data.is_some() {
+                    pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
+                } else {
+                    pairing::OOBDataFlag::AuthenticationDataNotPresent
+                },
+                self.auth_req.clone(),
+                self.encryption_key_size_max,
+                self.initiator_key_distribution.clone(),
+                self.responder_key_distribution.clone(),
+            );
+
+            let pairing_method = KeyGenerationMethod::determine_method(
+                request.get_oob_data_flag(),
+                response.get_oob_data_flag(),
+                request.get_io_capability(),
+                response.get_io_capability(),
+                false
+            );
+
+            let remote_io_cap = convert_io_cap(
+                request.get_auth_req(),
+                request.get_oob_data_flag(),
+                request.get_io_capability(),
+            );
+
+            self.send(response);
+
+            let (private_key, public_key) = toolbox::ec()
+                .expect("Failed to fill bytes for generated random");
+
+            self.pairing_data = Some(PairingData {
+                key_gen_method: pairing_method,
+                temp_public_key: public_key,
+                temp_private_key: private_key,
+                remote_io_cap,
+                nonce: toolbox::nonce(),
+                dh_key: None,
+                remote_pub_temp_key: None,
+                remote_nonce: None,
+                ltk: None,
+                mac_key: None,
+            });
+
+            Ok(())
+        }
+    }
+
+    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<(), Error> {
+
+        let initiator_pub_key = pairing::PairingPubKey::try_from_icd(data)?;
+
+        if let Some(mut pairing_data) = self.pairing_data.take() {
+
+            // Send the public key of this device
+            self.send(pairing::PairingPubKey::new(pairing_data.temp_public_key.clone()));
+
+            let remote_public_key = initiator_pub_key.get_key();
+
+            // Calculate the shared secret key
+            let secret_key = toolbox::ecdh(&pairing_data.temp_private_key, &remote_public_key);
+
+            pairing_data.remote_pub_temp_key = Some(remote_public_key);
+
+            match secret_key.ok() {
+                sk @ Some(_) => {
+
+                    pairing_data.dh_key = sk.map(|sk| {
+                        let mut k = [0u8; 32];
+
+                        k.copy_from_slice(sk.as_ref());
+
+                        k
+                    });
+
+                    self.pairing_data = pairing_data.into();
+
+                    Ok(())
+                },
+                None => {
+                    // Generating the dh key failed
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+                   Err(Error::IncorrectValue)
+                }
+            }
+
+        } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-            Poll::Ready(Err( Error::Size ) )
+            Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
         }
     }
 
-    fn p_unknown_command(&mut self, err: Error) -> CommandProcessFuture<'_> {
-        cmd_process_future!{
-            self.send_err(pairing::PairingFailedReason::CommandNotSupported);
-
-            Poll::Ready(Err(err))
-        }
-    }
-
-    fn p_command_not_supported(&mut self, cmd: CommandType) -> CommandProcessFuture<'_> {
-        cmd_process_future!{
-            self.send_err(pairing::PairingFailedReason::CommandNotSupported);
-
-            Poll::Ready(Err(Error::IncorrectCommand(cmd)))
-        }
-    }
-
-    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> CommandProcessFuture<'z> {
-        cmd_process_future! {
-
-            let request = pairing::PairingRequest::try_from_icd(data)?;
-
-            if request.get_max_encryption_size() < self.encryption_key_size_min {
-                self.send_err(pairing::PairingFailedReason::EncryptionKeySize)
-            } else {
-
-                let response = pairing::PairingResponse::new(
-                    self.io_capability,
-                    if self.oob_data.is_some() {
-                        pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
-                    } else {
-                        pairing::OOBDataFlag::AuthenticationDataNotPresent
-                    },
-                    self.auth_req.clone(),
-                    self.encryption_key_size_max,
-                    self.initiator_key_distribution.clone(),
-                    self.responder_key_distribution.clone(),
-                );
-
-                let pairing_method = KeyGenerationMethod::determine_method(
-                    request.get_oob_data_flag(),
-                    response.get_oob_data_flag(),
-                    request.get_io_capability(),
-                    response.get_io_capability(),
-                    false
-                );
-
-                let remote_io_cap = convert_io_cap(
-                    request.get_auth_req(),
-                    request.get_oob_data_flag(),
-                    request.get_io_capability(),
-                );
-
-                self.send(response);
-
-                let (private_key, public_key) = toolbox::ec()
-                    .expect("Failed to fill bytes for generated random");
-
-                self.pairing_data = Some(PairingData {
-                    key_gen_method: pairing_method,
-                    temp_public_key: public_key,
-                    temp_private_key: private_key,
-                    remote_io_cap,
-                    nonce: toolbox::nonce(),
-                    dh_key: None,
-                    remote_pub_temp_key: None,
-                    remote_nonce: None,
-                    ltk: None,
-                    mac_key: None,
-                });
-            };
-
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    fn p_pairing_public_key<'z>(&'z mut self, data: &'z [u8]) -> CommandProcessFuture<'z> {
-
-        cmd_process_future! {
-            let initiator_pub_key = pairing::PairingPubKey::try_from_icd(data)?;
-
-            if let Some(mut pairing_data) = self.pairing_data.take() {
-
-                // Send the public key of this device
-                self.send(pairing::PairingPubKey::new(pairing_data.temp_public_key.clone()));
-
-                let remote_public_key = initiator_pub_key.get_key();
-
-                // Calculate the shared secret key
-                let secret_key = toolbox::ecdh(&pairing_data.temp_private_key, &remote_public_key);
-
-                pairing_data.remote_pub_temp_key = Some(remote_public_key);
-
-                match secret_key.ok() {
-                    sk @ Some(_) => {
-
-                        pairing_data.dh_key = sk.map(|sk| {
-                            let mut k = [0u8; 32];
-
-                            k.copy_from_slice(sk.as_ref());
-
-                            k
-                        });
-
-                        self.pairing_data = pairing_data.into();
-
-                        Poll::Ready( Ok(()) )
-                    },
-                    None => {
-                        // Generating the dh key failed
-                        self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-                        Poll::Ready( Err(Error::IncorrectValue) )
-                    }
-                }
-
-            } else {
-                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-
-                Poll::Ready( Err(Error::IncorrectCommand(CommandType::PairingPublicKey)) )
-            }
-        }
-    }
-
-    fn p_pairing_confirm<'z>(&'z mut self, payload: &'z [u8]) -> CommandProcessFuture<'z> {
-
-        cmd_process_future! {
+    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<(), Error> {
 
             let initiator_confirm = pairing::PairingConfirm::try_from_icd(payload)?;
 
@@ -374,7 +363,7 @@ impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
 
                     self.send(pairing::PairingConfirm::new(confirm_value));
 
-                    Poll::Ready( Ok(()) )
+                    Ok(())
                 },
                 // The pairing methods OOB and Passkey are not supported yet
                 //
@@ -383,126 +372,119 @@ impl<'a, HCI, C> SlaveSecurityManager<'a, HCI, C>
                 _ => {
                     self.send_err(pairing::PairingFailedReason::PairingNotSupported);
 
-                    Poll::Ready( Err(Error::UnsupportedFeature))
+                    Err(Error::UnsupportedFeature)
                 },
             }
+    }
 
+    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<(), Error> {
+
+        let initiator_random = pairing::PairingRandom::try_from_icd(payload)?;
+
+        if self.pairing_data.is_some() {
+
+            self.pairing_data.as_mut().unwrap().remote_nonce = Some(initiator_random.get_value());
+
+            self.send( pairing::PairingRandom::new(self.pairing_data.as_ref().unwrap().nonce) );
+
+            Ok(())
+
+        } else {
+            self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+            Err(Error::UnsupportedFeature)
         }
     }
 
-    fn p_pairing_random<'z>(&'z mut self, payload: &'z [u8]) -> CommandProcessFuture<'z> {
+    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<(), Error> {
+        let initiator_fail = pairing::PairingFailed::try_from_icd(payload)?;
 
-        cmd_process_future! {
-            let initiator_random = pairing::PairingRandom::try_from_icd(payload)?;
+        self.pairing_data = None;
 
-            if self.pairing_data.is_some() {
+        Err(Error::PairingFailed(initiator_fail.get_reason()))
+    }
 
-                self.pairing_data.as_mut().unwrap().remote_nonce = Some(initiator_random.get_value());
+    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<(), Error> {
 
-                self.send( pairing::PairingRandom::new(self.pairing_data.as_ref().unwrap().nonce) );
+        let initiator_dh_key_check = pairing::PairingDHKeyCheck::try_from_icd(payload)?;
 
-                Poll::Ready( Ok(()) )
+        match self.pairing_data {
+            Some( PairingData {
+                dh_key: Some( dh_key ),
+                nonce: nonce,
+                remote_nonce: Some( remote_nonce ),
+                remote_io_cap: remote_io_cap,
+                ..
+            }) => {
 
-            } else {
+                let init_msb_addr_byte: u8 = if self.initiator_address_is_random {1} else {0};
+                let this_msb_addr_byte: u8 = if self.responder_address_is_random {1} else {0};
+
+                let mut a_addr = [init_msb_addr_byte, 0, 0, 0, 0, 0, 0];
+                let mut b_addr= [this_msb_addr_byte, 0, 0, 0, 0, 0, 0];
+
+                a_addr[1..].copy_from_slice(self.initiator_address);
+                b_addr[1..].copy_from_slice(self.responder_address);
+
+                let (mac_key, ltk) = toolbox::f5(
+                    dh_key,
+                    remote_nonce,
+                    nonce,
+                    a_addr.clone(),
+                    b_addr.clone(),
+                );
+
+                let ea = toolbox::f6(
+                    mac_key,
+                    remote_nonce,
+                    nonce,
+                    0,
+                    remote_io_cap,
+                    a_addr,
+                    b_addr,
+                );
+
+                let received_ea = initiator_dh_key_check.get_key_check();
+
+                if received_ea == ea {
+
+                    self.pairing_data.as_mut().unwrap().ltk = Some(ltk);
+
+                    let eb = toolbox::f6(
+                        mac_key,
+                        nonce,
+                        remote_nonce,
+                        0,
+                        convert_io_cap(
+                            &self.auth_req,
+                            if self.oob_data.is_some() {
+                                pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
+                            } else {
+                                pairing::OOBDataFlag::AuthenticationDataNotPresent
+                            },
+                            self.io_capability,
+                        ),
+                        b_addr.clone(),
+                        a_addr.clone(),
+                    );
+
+                    self.send(pairing::PairingDHKeyCheck::new(eb));
+
+                    // TODO send these to the initiator (along with the device address)
+                    let irk = toolbox::rand_u128();
+                    let csrk = toolbox::rand_u128();
+
+                    Ok(())
+                } else {
+                    self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
+
+                    Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed))
+                }
+            }
+            _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                Poll::Ready( Err(Error::UnsupportedFeature))
-            }
-        }
-
-    }
-
-    fn p_pairing_failed<'z>(&'z mut self, payload: &'z [u8]) -> CommandProcessFuture<'z> {
-
-        cmd_process_future! {
-            let initiator_fail = pairing::PairingFailed::try_from_icd(payload)?;
-
-            self.pairing_data = None;
-
-            Poll::Ready( Err(Error::PairingFailed(initiator_fail.get_reason())) )
-        }
-    }
-
-    fn p_pairing_dh_key_check<'z>(&'z mut self, payload: &'z [u8]) -> CommandProcessFuture<'z> {
-
-        cmd_process_future! {
-            let initiator_dh_key_check = pairing::PairingDHKeyCheck::try_from_icd(payload)?;
-
-            match self.pairing_data {
-                Some( PairingData {
-                    dh_key: Some( dh_key ),
-                    nonce: nonce,
-                    remote_nonce: Some( remote_nonce ),
-                    remote_io_cap: remote_io_cap,
-                    ..
-                }) => {
-
-                    let init_msb_addr_byte: u8 = if self.initiator_address_is_random {1} else {0};
-                    let this_msb_addr_byte: u8 = if self.responder_address_is_random {1} else {0};
-
-                    let mut a_addr = [init_msb_addr_byte, 0, 0, 0, 0, 0, 0];
-                    let mut b_addr= [this_msb_addr_byte, 0, 0, 0, 0, 0, 0];
-
-                    a_addr[1..].copy_from_slice(self.initiator_address);
-                    b_addr[1..].copy_from_slice(self.responder_address);
-
-                    let (mac_key, ltk) = toolbox::f5(
-                        dh_key,
-                        remote_nonce,
-                        nonce,
-                        a_addr.clone(),
-                        b_addr.clone(),
-                    );
-
-                    let ea = toolbox::f6(
-                        mac_key,
-                        remote_nonce,
-                        nonce,
-                        0,
-                        remote_io_cap,
-                        a_addr,
-                        b_addr,
-                    );
-
-                    let received_ea = initiator_dh_key_check.get_key_check();
-
-                    if received_ea == ea {
-
-                        self.pairing_data.as_mut().unwrap().ltk = Some(ltk);
-
-                        let eb = toolbox::f6(
-                            mac_key,
-                            nonce,
-                            remote_nonce,
-                            0,
-                            convert_io_cap(
-                                &self.auth_req,
-                                if self.oob_data.is_some() {
-                                    pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
-                                } else {
-                                    pairing::OOBDataFlag::AuthenticationDataNotPresent
-                                },
-                                self.io_capability,
-                            ),
-                            b_addr.clone(),
-                            a_addr.clone(),
-                        );
-
-                        self.send(pairing::PairingDHKeyCheck::new(eb));
-
-                        // TODO start encryption and start key exchanging
-                        Poll::Ready( Ok(()) )
-                    } else {
-                        self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
-
-                        Poll::Ready( Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed)) )
-                    }
-                }
-                _ => {
-                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-
-                    Poll::Ready( Err(Error::UnsupportedFeature))
-                }
+                Err(Error::UnsupportedFeature)
             }
         }
     }

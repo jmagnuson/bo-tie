@@ -542,14 +542,6 @@ impl<'a> core::future::Future for CommandProcessFuture<'a>
     }
 }
 
-macro_rules! cmd_process_future {
-    ( $($to_do: tt)* ) => {
-        CommandProcessFuture {
-            to_do: alloc::boxed::Box::from(move || { $( $to_do )* })
-        }
-    }
-}
-
 trait GetXOfP256Key {
     fn x(&self) -> [u8;32];
 }
