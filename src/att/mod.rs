@@ -177,6 +177,10 @@ pub enum Error {
     UnknownOpcode(u8),
     /// Custom opcode is already used by the Att protocol
     AttUsedOpcode(u8),
+    /// Incorrect Channel Identifier
+    IncorrectChannelId,
+    /// Pdu Error
+    PduError(pdu::Error)
 }
 
 impl core::fmt::Display for Error{
@@ -192,7 +196,12 @@ impl core::fmt::Display for Error{
             Error::UnknownOpcode(op) =>
                 write!( f, "Opcode not known to the attribute protocol ({:#x})", op),
             Error::AttUsedOpcode(op) =>
-                write!(f, "Opcode {:#x} is already used by the Attribute Protocol", op)
+                write!(f, "Opcode {:#x} is already used by the Attribute Protocol", op),
+            Error::IncorrectChannelId =>
+                write!(f, "The channel identifier of the ACL Data does not match the assigned \
+                    number for the Attribute Protocol"),
+            Error::PduError(err) =>
+                write!(f, "Attribute PDU error '{}'", err),
         }
     }
 }

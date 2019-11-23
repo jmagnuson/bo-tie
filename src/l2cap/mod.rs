@@ -93,7 +93,7 @@ pub enum LeUserChannelIdentifier {
     /// See the Bluetooth Specification V5 | Vol 3, Part A Section 4
     LowEnergyL2CAPSignalingChannel,
     /// Security Manager Protocol
-    SecurityManagerProtocl,
+    SecurityManagerProtocol,
     /// Dynamically allocated channel identifiers
     ///
     /// These are channels that are dynamically allocated through the "Credit Based Connection
@@ -111,7 +111,7 @@ impl LeUserChannelIdentifier {
         match self {
             LeUserChannelIdentifier::AttributeProtocol => 0x4,
             LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
-            LeUserChannelIdentifier::SecurityManagerProtocl => 0x6,
+            LeUserChannelIdentifier::SecurityManagerProtocol => 0x6,
             LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
     }
@@ -120,7 +120,7 @@ impl LeUserChannelIdentifier {
         match val {
             0x4 => Ok( LeUserChannelIdentifier::AttributeProtocol ),
             0x5 => Ok( LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel ),
-            0x6 => Ok( LeUserChannelIdentifier::SecurityManagerProtocl ),
+            0x6 => Ok( LeUserChannelIdentifier::SecurityManagerProtocol),
             _ if DynChannelId::LE_BOUNDS.contains(&val) =>
                 Ok( LeUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(val) ) ),
             _ => Err(()),

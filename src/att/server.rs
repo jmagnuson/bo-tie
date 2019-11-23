@@ -176,164 +176,6 @@ impl ServerPduName {
     }
 }
 
-pub struct RequestProcessor<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    pdu_name: Option<client::ClientPduName>,
-    pdu_raw_data: Vec<u8>,
-    server: &'a mut Server<C>,
-}
-
-impl<'a, C> RequestProcessor<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    fn new<P>( pdu_name: P, pdu_raw_data: Vec<u8>, server: &'a mut Server<C>) -> Self
-    where P: Into<Option<client::ClientPduName>>
-    {
-        RequestProcessor {
-            pdu_name: pdu_name.into(),
-            pdu_raw_data: pdu_raw_data,
-            server: server
-        }
-    }
-
-    /// Attribute Protocol Process
-    ///
-    /// This is the processor of client requests **at the Attribute protocol level**. This employs
-    /// algorithms that take each attribute weighted equally, meaning there is no relationships
-    /// between attributes that are definied in this protocol. Consequently this function is the
-    /// usually the slowest way to process an attribute request of the *find* or *by type* kind and
-    /// higher layer protocls may have a faster way to process those requests.
-    ///
-    /// If an opcode that isn't part of the opcodes assigned to the attribute protocol is received,
-    /// then this function will return a
-    /// [`UnknownOpcode`](../enum.Error.html#variant.UnknownOpcode)
-    /// with the opcode.
-    ///
-    /// # Note
-    /// The
-    /// ['ReadByGroupTypeRequest'](../../client/enum.ClientPduName.html#variant.ReadByGroupTypeRequest)
-    /// cannot be processed by the attribute protocol. If this request is used by a higher layer
-    /// protocol, it must be both checked for an processed at that layer. If the
-    /// `ReadByGroupTypeRequest` is processed by this function, then an error PDU will be sent to
-    /// client with the error code
-    /// [`RequestNotSupported`](../../pdu/enum.Error.html#variant.RequestNotSupported).
-    pub fn process_request( &mut self )-> Result<(), super::Error>
-    {
-        log::info!("(ATT) processing '{:?}'", self.pdu_name);
-
-        match self.pdu_name {
-            Some( super::client::ClientPduName::ExchangeMtuRequest ) =>
-                self.server.process_exchange_mtu_request( TransferFormat::from( &self.pdu_raw_data)? ),
-
-            Some( super::client::ClientPduName::WriteRequest ) =>
-                self.server.process_write_request( &self.pdu_raw_data ),
-
-            Some( super::client::ClientPduName::ReadRequest ) =>
-                self.server.process_read_request( TransferFormat::from(&self.pdu_raw_data)? ),
-
-            Some( super::client::ClientPduName::FindInformationRequest ) =>
-                self.server.process_find_information_request( TransferFormat::from(&self.pdu_raw_data)? ),
-
-            Some( super::client::ClientPduName::FindByTypeValueRequest ) =>
-                self.server.process_find_by_type_value_request( &self.pdu_raw_data ),
-
-            Some( super::client::ClientPduName::ReadByTypeRequest ) =>
-                self.server.process_read_by_type_request( TransferFormat::from(&self.pdu_raw_data)? ),
-
-            Some( pdu @ super::client::ClientPduName::ReadBlobRequest ) |
-            Some( pdu @ super::client::ClientPduName::ReadMultipleRequest ) |
-            Some( pdu @ super::client::ClientPduName::WriteCommand ) |
-            Some( pdu @ super::client::ClientPduName::PrepareWriteRequest ) |
-            Some( pdu @ super::client::ClientPduName::ExecuteWriteRequest ) |
-            Some( pdu @ super::client::ClientPduName::HandleValueConfirmation ) |
-            Some( pdu @ super::client::ClientPduName::SignedWriteCommand ) |
-            Some( pdu @ super::client::ClientPduName::ReadByGroupTypeRequest ) =>
-                self.server.send_error(0, pdu.into(), pdu::Error::RequestNotSupported),
-
-            None =>
-                self.pdu_raw_data.get(0)
-                    .ok_or( super::Error::Empty )
-                    .and_then( |op| Err( super::Error::UnknownOpcode(*op) ) )?
-        };
-
-        Ok(())
-    }
-
-    /// Get the request type
-    pub fn get_request_type(&self) -> Option<client::ClientPduName> { self.pdu_name }
-
-    /// Get the received payload
-    pub fn get_request_raw_data(&self) -> &[u8] { &self.pdu_raw_data }
-
-    /// Get the opcode raw value
-    pub fn get_raw_opcode(&self) -> u8 { self.pdu_raw_data[0] }
-}
-
-impl<'a, C> AsRef<Server<C>> for RequestProcessor<'a, C> where C: l2cap::ConnectionChannel
-{
-    fn as_ref(&self) -> &Server<C> {
-        &self.server
-    }
-}
-
-struct ServerReceiver<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    /// Reference to the attribute server that created this `ServerReceiver`
-    server: Option<&'a mut Server<C>>,
-
-}
-
-impl<'a,C> ServerReceiver<'a,C>
-where C: l2cap::ConnectionChannel
-{
-    fn new( server: &'a mut Server<C> ) -> Self {
-        ServerReceiver {
-            server: Some( server ),
-        }
-    }
-}
-
-impl<'a,C> Future for ServerReceiver<'a,C>
-where C: l2cap::ConnectionChannel
-{
-    type Output = Result<RequestProcessor<'a, C>, super::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-
-        let acl_packets_opt = self.server.as_ref().and_then(
-            |server| server.connection.receive(cx.waker())
-        );
-
-        if let Some(acl_packets) = acl_packets_opt {
-
-            let data = acl_packets.iter()
-                .map( |packet| packet.get_payload() )
-                .fold( Vec::new(), |mut vec, data| { vec.extend_from_slice(data); vec } );
-
-            if data.len() > 1 {
-                use core::convert::TryFrom;
-
-                if let Some(server) = self.get_mut().server.take() {
-                    let pdu = super::client::ClientPduName::try_from(data[0]).ok();
-
-                    Poll::Ready( Ok( RequestProcessor::new(pdu, data, server) ) )
-                }
-                else {
-                   Poll::Ready( Err( TransferFormatError::from("Already processes a \
-                       request with this future. A new future must be created for each \
-                       incoming packet").into() ))
-               }
-            } else {
-                Poll::Ready(Err( super::Error::Empty ))
-            }
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
 /// An Attribute server
 ///
 /// For now a server can only handle one client. It will be updated to handle multiple clients
@@ -387,8 +229,8 @@ where C: l2cap::ConnectionChannel
         Self {
             max_mtu: actual_max_mtu,
             set_mtu: None,
-            connection: connection,
-            attributes: attributes,
+            connection,
+            attributes,
             given_permissions: Vec::new(),
         }
     }
@@ -572,16 +414,94 @@ where C: l2cap::ConnectionChannel
         .nth(0) // return the first offending permission, if any.
     }
 
-    /// Get a future to receive ACL packets
+    /// Process a received Acl Data packet form the Bluetooth Controller
     ///
-    /// This will return a future that will return
-    /// [`Poll::Ready`](https://doc.rust-lang.org/nightly/std/task/enum.Poll.html#variant.Ready)
-    /// when there is an ACL packet to process. This assumes that the packet received is part of
-    /// the Attribute (ATT) protocol.
-    pub fn receiver<'a>(&'a mut self)
-    -> impl Future<Output=Result<RequestProcessor<'a,C>, super::Error>> + 'a
+    /// The packet is assumed to be in the form of an Attribute protocol request packet. This
+    /// function will then process the request and send to the client the appropriate response
+    /// packet.
+    ///
+    /// An error will be returned based on the following:
+    /// * The input acl_packet did not contain
+    pub fn process_acl_data(&mut self, acl_packet: &crate::l2cap::AclData ) -> Result<(), super::Error>
     {
-        ServerReceiver::new(self)
+        let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
+
+        self.process_parsed_acl_data(pdu_type, payload)
+    }
+
+    /// Parse an ACL Packet
+    ///
+    /// This checks the following things
+    /// * The ACL packet has the correct channel identifier for the Attribute Protocol
+    /// * The payload of the packet is not empty
+    /// * The pdu type is a [`ClientPduName`](super::client::ClientPduName) enum
+    pub fn parse_acl_packet<'a>(&self, acl_packet: &'a crate::l2cap::AclData)
+    -> Result<(super::client::ClientPduName, &'a [u8]), super::Error>
+    {
+        use crate::l2cap::{AclData, ChannelIdentifier, LeUserChannelIdentifier};
+        use core::convert::TryFrom;
+
+        match acl_packet.get_channel_id() {
+            ChannelIdentifier::LE( LeUserChannelIdentifier::AttributeProtocol ) => {
+
+                let (att_type, payload) = acl_packet.get_payload().split_at(1);
+
+                if payload.len() > 1 {
+                    let pdu_type = super::client::ClientPduName::try_from(att_type[0])
+                        .or( Err(super::Error::UnknownOpcode(att_type[0])) )?;
+
+                    Ok( (pdu_type, payload) )
+                } else {
+                    Err( super::Error::Empty )
+                }
+            }
+            _ => Err( super::Error::IncorrectChannelId )
+        }
+    }
+
+    /// Process a parsed ACL Packet
+    ///
+    /// This will take the data from the Ok result of [`parse_acl_packet`]. This is otherwise
+    /// equivalent to the function [`process_acl_data`] (really `process_acl_data` is just
+    /// `parse_acl_packet` followed by this function) and is useful for higher layer protocols that
+    /// need to parse an ACL packet before performing their own calculations on the data and *then*
+    /// have the Attribute server processing the data.
+    pub fn process_parsed_acl_data(&mut self, pdu_type: super::client::ClientPduName, payload: &[u8])
+    -> Result<(), super::Error>
+    {
+        log::info!("(ATT) processing '{:?}'", pdu_type);
+
+        match pdu_type {
+            super::client::ClientPduName::ExchangeMtuRequest =>
+                self.process_exchange_mtu_request( TransferFormat::from( &payload)? ),
+
+            super::client::ClientPduName::WriteRequest =>
+                self.process_write_request( &payload ),
+
+            super::client::ClientPduName::ReadRequest =>
+                self.process_read_request( TransferFormat::from(&payload)? ),
+
+            super::client::ClientPduName::FindInformationRequest =>
+                self.process_find_information_request( TransferFormat::from(&payload)? ),
+
+            super::client::ClientPduName::FindByTypeValueRequest =>
+                self.process_find_by_type_value_request( &payload ),
+
+            super::client::ClientPduName::ReadByTypeRequest =>
+                self.process_read_by_type_request( TransferFormat::from(&payload)? ),
+
+            pdu @ super::client::ClientPduName::ReadBlobRequest |
+            pdu @ super::client::ClientPduName::ReadMultipleRequest |
+            pdu @ super::client::ClientPduName::WriteCommand |
+            pdu @ super::client::ClientPduName::PrepareWriteRequest |
+            pdu @ super::client::ClientPduName::ExecuteWriteRequest |
+            pdu @ super::client::ClientPduName::HandleValueConfirmation |
+            pdu @ super::client::ClientPduName::SignedWriteCommand |
+            pdu @ super::client::ClientPduName::ReadByGroupTypeRequest =>
+                self.send_error(0, pdu.into(), pdu::Error::RequestNotSupported),
+        };
+
+        Ok(())
     }
 
     /// Send out notification
@@ -1109,11 +1029,11 @@ impl super::AnyAttribute for ReservedHandle {
 
     fn get_handle(&self) -> u16 { 0 }
 
-    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
-
     fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), TransferFormatError> {
         Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
     }
+
+    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
 }
 
 /// The constructor of attributes on an Attribute Server

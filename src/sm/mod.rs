@@ -56,7 +56,7 @@ const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 const SECURITY_MANAGER_L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
-    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocl);
+    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug,Clone,Copy)]
 pub enum Error {

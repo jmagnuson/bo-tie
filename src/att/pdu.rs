@@ -332,6 +332,12 @@ impl core::fmt::Display for Error {
     }
 }
 
+impl From<Error> for super::Error {
+    fn from(err: Error) -> Self {
+        super::Error::PduError(err)
+    }
+}
+
 /// Attribute Parameters included with the Error PDU
 #[derive(Debug)]
 pub struct ErrorAttributeParameter {

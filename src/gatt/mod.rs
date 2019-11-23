@@ -387,8 +387,8 @@ impl ServerBuilder
     }
 
     /// Create a service constructor
-    pub fn new_service_constructor<'a>(&'a mut self, service_type: UUID, is_primary: bool)
-    -> ServiceBuilder<'a>
+    pub fn new_service_constructor(&mut self, service_type: UUID, is_primary: bool)
+    -> ServiceBuilder<'_>
     {
         ServiceBuilder::new(self, service_type, is_primary)
     }
@@ -421,12 +421,137 @@ where C: l2cap::ConnectionChannel
 
 impl<C> Server<C> where C: l2cap::ConnectionChannel
 {
-    pub fn receiver<'a>(&'a mut self)
-    -> impl Future<Output = Result<GattRequestProcessor<'a, C>, att::Error>> + 'a
+    pub fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData) -> Result<(), crate::att::Error>
     {
-        GattReceiver {
-            primary_services: &self.primary_services,
-            att_receiver: self.server.receiver()
+        let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
+
+        match pdu_type {
+            att::client::ClientPduName::ReadByGroupTypeRequest => {
+                log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
+
+                self.process_read_by_group_type_request(att::TransferFormat::from(payload)?)
+            }
+            _ => self.server.process_parsed_acl_data(pdu_type, payload)
+        }
+    }
+
+    fn process_read_by_group_type_request(&self, pdu: att::pdu::Pdu<att::pdu::TypeRequest>)
+    -> Result<(), crate::att::Error>
+    {
+        use crate::att::Error;
+
+        let handle_range = &pdu.get_parameters().handle_range;
+
+        let err_rsp = | pdu_err | {
+
+            let handle = handle_range.starting_handle;
+            let opcode = pdu.get_opcode().into_raw();
+
+            self.server.send_error(handle, opcode, pdu_err);
+
+            Err(pdu_err.into())
+        };
+
+        if ! handle_range.is_valid() {
+
+            err_rsp( att::pdu::Error::InvalidHandle )
+
+        } else if pdu.get_parameters().attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
+
+            use core::convert::TryInto;
+
+            const REQUIRED_PERMS: &[att::AttributePermissions] = &[
+                att::AttributePermissions::Read
+            ];
+
+            const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
+                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
+                att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
+                att::AttributePermissions::Authorization(att::AttributeRestriction::Write),
+            ];
+
+            let permissions_error = | service: &Service | -> Option<att::pdu::Error> {
+                self.server.check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
+                    .err()
+            };
+
+            // Process the first attribute to determine whether or not the UUIDs returned will be
+            // 16 bits or 128 bits.
+            match self.primary_services.iter()
+                .filter(|s| s.service_handle >= handle_range.starting_handle)
+                .next() {
+                None => err_rsp( att::pdu::Error::AttributeNotFound),
+                Some(first_service) => {
+
+                    let predicate_short_uuid = |service: &&Service| {
+                        service.service_handle <= handle_range.ending_handle &&
+                            TryInto::<u16>::try_into(service.service_type).is_ok() &&
+                            permissions_error(service).is_none()
+                    };
+
+                    let predicate_normal_uuid = |service: &&Service| {
+                        service.service_handle <= handle_range.ending_handle &&
+                            permissions_error(service).is_none()
+                    };
+
+                    // Determine if the size of the first packet UUID is convertible to a 16 bit
+                    // shortened form.
+                    let ( size, predicate ): (usize, &dyn Fn(&&Service) -> bool) =
+                        if TryInto::<u16>::try_into(first_service.service_type).is_ok() {
+                            (2, &predicate_short_uuid)
+                        } else {
+                            (16, &predicate_normal_uuid)
+                        };
+
+                    // Check the permissions of the first service and determine if the client can
+                    // access the service UUID. If no error is returned by `permissions_error` then
+                    // the next UUIDs of the same type (16 bits or 128 bits) and permissible to the
+                    // client are added to the response packet until the max size of the packet is
+                    // reached. The first packet processed that is not of the same type or is not
+                    // permissible to the client stops the addition of UUIDs and the response packet
+                    // is then sent to the client.
+                    match permissions_error(first_service) {
+                        None => {
+                            let max_data = core::cmp::min(
+                                core::u8::MAX as u16,
+                                self.server.get_mtu()
+                            ) as usize;
+
+                            let data_response = self.primary_services
+                                .iter()
+                                .take_while(predicate)
+                                .map( |service|
+                                    att::pdu::ReadGroupTypeData::new(
+                                        service.service_handle,
+                                        service.end_group_handle,
+                                        service.service_type,
+                                    )
+                                )
+                                .enumerate()
+                                .take_while( |(cnt,_)| (cnt * (4 + size)) <= max_data )
+                                .fold( Vec::new(), |mut v, (_,rgtd)| { v.push(rgtd); v } );
+
+                            let response_data = att::pdu::ReadByGroupTypeResponse::new(data_response)
+                                .expect("data_response is empty"); // this cannot never panic
+
+                            let pdu = att::pdu::read_by_group_type_response(response_data);
+
+                            let tx_data = att::TransferFormat::into( &pdu );
+
+                            let acl_data = l2cap::AclData::new(tx_data.to_vec(), att::L2CAP_CHANNEL_ID );
+
+                            self.server.as_ref().send(acl_data);
+
+                            Ok(())
+                        },
+                        Some(e) => { err_rsp(e) },
+                    }
+                }
+            }
+        } else {
+            err_rsp( att::pdu::Error::UnsupportedGroupType )
         }
     }
 }
@@ -454,219 +579,6 @@ where C:l2cap::ConnectionChannel
 }
 
 impl<C> core::ops::DerefMut for Server<C>
-where C:l2cap::ConnectionChannel
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut()
-    }
-}
-
-struct GattReceiver<'a, C, R>
-where C: l2cap::ConnectionChannel + 'a,
-      R: Future<Output = Result<att::server::RequestProcessor<'a, C>, att::Error>> + Unpin + 'a
-{
-    primary_services: &'a [Service],
-    att_receiver: R
-}
-
-impl<'a,C,R> Future for GattReceiver<'a, C, R>
-where C: l2cap::ConnectionChannel,
-      R: Future<Output = Result<att::server::RequestProcessor<'a, C>, att::Error>> + Unpin + 'a
-{
-    type Output = Result<GattRequestProcessor<'a, C>, att::Error>;
-
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-        use core::pin::Pin;
-        use core::task;
-
-        let this = self.get_mut();
-
-        match Pin::new(&mut this.att_receiver).poll(cx) {
-            task::Poll::Pending => task::Poll::Pending,
-
-            task::Poll::Ready(Ok(rp)) =>
-                task::Poll::Ready( Ok(
-                    GattRequestProcessor {
-                        primary_services: this.primary_services,
-                        att_recq_proc: rp
-                    }
-                )),
-
-            task::Poll::Ready(Err(e)) => task::Poll::Ready(Err(e)),
-        }
-    }
-}
-
-/// Gatt client requests processor
-///
-/// This structure is created by polling to completion the future returned by
-/// [`Server::receiver`](Server::receiver).
-/// This is used to process client requests and send the coresponding response to the client.
-/// To process the request, the function
-/// [`process_request`](GattRequestProcessor::process_request)
-/// must be called.
-pub struct GattRequestProcessor<'a,C>
-where C: l2cap::ConnectionChannel
-{
-    primary_services: &'a [Service],
-    att_recq_proc: att::server::RequestProcessor<'a, C>
-}
-
-impl<'a, C> GattRequestProcessor<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    pub fn process_request(&mut self) -> Result<(), att::Error> {
-
-        match self.att_recq_proc.get_request_type() {
-            Some( att::client::ClientPduName::ReadByGroupTypeRequest ) => {
-                log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
-
-                self.process_read_by_group_type_request(
-                    att::TransferFormat::from(self.att_recq_proc.get_request_raw_data())?
-                )
-            },
-            _ => self.att_recq_proc.process_request()?
-        }
-
-        Ok(())
-    }
-
-    fn process_read_by_group_type_request(&self, pdu: att::pdu::Pdu<att::pdu::TypeRequest>)
-    {
-        let handle_range = &pdu.get_parameters().handle_range;
-
-        let err_rsp = | pdu_err | {
-
-            let handle = handle_range.starting_handle;
-            let opcode = pdu.get_opcode().into_raw();
-
-            self.att_recq_proc.as_ref().send_error(handle, opcode, pdu_err);
-
-            None
-        };
-
-        if ! handle_range.is_valid() {
-
-            err_rsp( att::pdu::Error::InvalidHandle );
-
-        } else if pdu.get_parameters().attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
-
-            use core::convert::TryInto;
-
-            const REQUIRED_PERMS: &[att::AttributePermissions] = &[
-                att::AttributePermissions::Read
-            ];
-
-            const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
-                att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
-                att::AttributePermissions::Authorization(att::AttributeRestriction::Write),
-            ];
-
-            let permissions_error = | service: &Service | -> Option<att::pdu::Error> {
-                self.att_recq_proc
-                .as_ref()
-                .check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
-                .err()
-            };
-
-            self.primary_services.iter()
-            .filter(|s| s.service_handle >= handle_range.starting_handle)
-            .next()
-            .or_else( || err_rsp( att::pdu::Error::AttributeNotFound) )
-            .and_then( |first_service| -> Option<()> {
-
-                let predicate_short_uuid = |service: &&Service| {
-                    service.service_handle <= handle_range.ending_handle &&
-                    TryInto::<u16>::try_into(service.service_type).is_ok() &&
-                    permissions_error(service).is_none()
-                };
-
-                let predicate_normal_uuid = |service: &&Service| {
-                    service.service_handle <= handle_range.ending_handle &&
-                    permissions_error(service).is_none()
-                };
-
-                let ( size, predicate ): (usize, &dyn Fn(&&Service) -> bool) =
-                    if TryInto::<u16>::try_into(first_service.service_type).is_ok() {
-                        (2, &predicate_short_uuid)
-                    } else {
-                        (16, &predicate_normal_uuid)
-                    };
-
-                match permissions_error(first_service) {
-                    None => {
-                        let max_data = core::cmp::min(
-                            core::u8::MAX as u16,
-                            self.att_recq_proc.as_ref().get_mtu()
-                        ) as usize;
-
-                        let data_response = self.primary_services
-                            .iter()
-                            .take_while(predicate)
-                            .map( |service|
-                                att::pdu::ReadGroupTypeData::new(
-                                    service.service_handle,
-                                    service.end_group_handle,
-                                    service.service_type,
-                                )
-                            )
-                            .enumerate()
-                            .take_while( |(cnt,_)| (cnt * (4 + size)) <= max_data )
-                            .fold( Vec::new(), |mut v, (_,rgtd)| { v.push(rgtd); v } );
-
-                        let response_data = att::pdu::ReadByGroupTypeResponse::new(data_response)
-                            .expect("data_response is empty");
-
-                        let pdu = att::pdu::read_by_group_type_response(response_data);
-
-                        let tx_data = att::TransferFormat::into( &pdu );
-
-                        let acl_data = l2cap::AclData::new(tx_data.to_vec(), att::L2CAP_CHANNEL_ID );
-
-                        self.att_recq_proc.as_ref().as_ref().send(acl_data);
-                    },
-                    Some(e) => { err_rsp(e); },
-                }
-
-                None
-            });
-
-        } else {
-            err_rsp( att::pdu::Error::UnsupportedGroupType );
-        }
-    }
-}
-
-impl<'a,C> AsRef<att::server::RequestProcessor<'a, C>> for GattRequestProcessor<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    fn as_ref(&self) -> &att::server::RequestProcessor<'a,C> {
-        &self.att_recq_proc
-    }
-}
-
-impl<'a,C> AsMut<att::server::RequestProcessor<'a, C>> for GattRequestProcessor<'a, C>
-where C: l2cap::ConnectionChannel
-{
-    fn as_mut(&mut self) -> &mut att::server::RequestProcessor<'a,C> {
-        &mut self.att_recq_proc
-    }
-}
-
-impl<'a,C> core::ops::Deref for GattRequestProcessor<'a,C>
-where C:l2cap::ConnectionChannel
-{
-    type Target = att::server::RequestProcessor<'a,C>;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_ref()
-    }
-}
-
-impl<'a,C> core::ops::DerefMut for GattRequestProcessor<'a,C>
 where C:l2cap::ConnectionChannel
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
