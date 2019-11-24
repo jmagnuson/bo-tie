@@ -103,7 +103,7 @@ impl<P> TransferFormat for Pdu<P> where P: TransferFormat {
 
             Ok(
                 Pdu {
-                    opcode: opcode,
+                    opcode,
                     parameters: if opcode.sig {
                             TransferFormat::from(&raw[1..(raw.len() - 12)])
                                 .or_else(|e|

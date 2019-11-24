@@ -429,23 +429,24 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
             att::client::ClientPduName::ReadByGroupTypeRequest => {
                 log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
 
-                self.process_read_by_group_type_request(att::TransferFormat::from(payload)?)
+                self.process_read_by_group_type_request(payload)
             }
             _ => self.server.process_parsed_acl_data(pdu_type, payload)
         }
     }
 
-    fn process_read_by_group_type_request(&self, pdu: att::pdu::Pdu<att::pdu::TypeRequest>)
-    -> Result<(), crate::att::Error>
-    {
+    fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
+
         use crate::att::Error;
 
-        let handle_range = &pdu.get_parameters().handle_range;
+        let type_request: att::pdu::TypeRequest = att::TransferFormat::from(payload)?;
+
+        let handle_range = type_request.handle_range;
 
         let err_rsp = | pdu_err | {
 
             let handle = handle_range.starting_handle;
-            let opcode = pdu.get_opcode().into_raw();
+            let opcode = att::client::ClientPduName::ReadByGroupTypeRequest.into();
 
             self.server.send_error(handle, opcode, pdu_err);
 
@@ -456,7 +457,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
             err_rsp( att::pdu::Error::InvalidHandle )
 
-        } else if pdu.get_parameters().attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
+        } else if type_request.attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
 
             use core::convert::TryInto;
 
