@@ -553,8 +553,7 @@ where C: l2cap::ConnectionChannel
         self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
     }
 
-    fn process_exchange_mtu_request(&mut self, pdu: pdu::Pdu<u16>) {
-        let client_mtu = pdu.into_parameters();
+    fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
 
         if (C::DEFAULT_ATT_MTU..=self.max_mtu).contains(&client_mtu)  {
             self.set_mtu = Some(client_mtu.into());
@@ -569,8 +568,7 @@ where C: l2cap::ConnectionChannel
         self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID) );
     }
 
-    fn process_read_request(&mut self, pdu: pdu::Pdu<u16>) {
-        let handle = *pdu.get_parameters();
+    fn process_read_request(&mut self, handle: u16) {
 
         if let Some(attribute) = self.attributes.get( handle as usize) {
 
@@ -591,12 +589,12 @@ where C: l2cap::ConnectionChannel
     /// # Note
     /// This cannot accept a PDU because the data size isn't know at compile time, thus the method
     /// determines the data type based on the handle.
-    fn process_write_request(&mut self, raw_pdu: &[u8]) {
+    fn process_write_request(&mut self, payload: &[u8]) {
         let received_opcode = super::client::ClientPduName::WriteRequest.into();
 
-        if raw_pdu.len() >= 3 {
-            let raw_handle = &raw_pdu[1..3];
-            let raw_data = &raw_pdu[3..];
+        if payload.len() >= 2 {
+            let raw_handle = &payload[..2];
+            let raw_data = &payload[2..];
 
             let handle = TransferFormat::from( &raw_handle ).unwrap();
 
@@ -620,13 +618,13 @@ where C: l2cap::ConnectionChannel
         }
     }
 
-    fn process_find_information_request(&mut self, pdu: pdu::Pdu<pdu::HandleRange>) {
+    fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) {
         use pdu::HandleRange;
 
         log::debug!("HandleRange: starting_handle: {}, ending_handle: {}",
-            pdu.get_parameters().starting_handle, pdu.get_parameters().ending_handle );
+            handle_range.starting_handle, handle_range.ending_handle );
 
-        match pdu.get_parameters() {
+        match handle_range{
             HandleRange { starting_handle: 0, .. } => {
                 let oc = super::client::ClientPduName::FindInformationRequest.into();
 
@@ -645,8 +643,8 @@ where C: l2cap::ConnectionChannel
                     Uuid128Bit,
                 }
 
-                let start = min( *sh as usize, self.attributes.len() );
-                let stop  = min( *eh as usize, self.attributes.len() );
+                let start = min( sh as usize, self.attributes.len() );
+                let stop  = min( eh as usize, self.attributes.len() );
 
                 let attributes = &self.attributes[start..stop];
 
@@ -761,7 +759,7 @@ where C: l2cap::ConnectionChannel
                     // When there is no first attribute, that means there is no attributes
                     // within the specified range
 
-                    let starting_handle = *sh;
+                    let starting_handle = sh;
 
                     let oc = super::client::ClientPduName::FindInformationRequest.into();
 
@@ -776,24 +774,24 @@ where C: l2cap::ConnectionChannel
 
                 log::error!("Received invalid handle range in 'find information request'");
 
-                self.send_invalid_handle_error(*h, oc);
+                self.send_invalid_handle_error(h, oc);
             }
         }
 
 
     }
 
-    fn process_find_by_type_value_request(&mut self, data: &[u8] ) {
+    fn process_find_by_type_value_request(&mut self, payload: &[u8] ) {
 
-        if data.len() >= 7 {
+        if payload.len() >= 6 {
 
-            let starting_handle: u16 = TransferFormat::from( &data[1..2] ).unwrap();
+            let starting_handle: u16 = TransferFormat::from( &payload[..2] ).unwrap();
 
-            let ending_handle: u16 = TransferFormat::from( &data[3..4] ).unwrap();
+            let ending_handle: u16 = TransferFormat::from( &payload[2..4] ).unwrap();
 
-            let att_type: crate::UUID = TransferFormat::from( &data[5..6] ).unwrap();
+            let att_type: crate::UUID = TransferFormat::from( &payload[4..6] ).unwrap();
 
-            let raw_value = &data[7..];
+            let raw_value = &payload[6..];
 
             if starting_handle == 0u16 {
                 let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
@@ -872,13 +870,13 @@ where C: l2cap::ConnectionChannel
         }
     }
 
-    fn process_read_by_type_request(&self, pdu: pdu::Pdu<pdu::TypeRequest> ) {
+    fn process_read_by_type_request(&self, type_request: pdu::TypeRequest ) {
 
         use pdu::HandleRange;
 
-        let handle_range = &pdu.get_parameters().handle_range;
+        let handle_range = type_request.handle_range;
 
-        let desired_att_type = pdu.get_parameters().attr_type;
+        let desired_att_type = type_request.attr_type;
 
         // required permissions
         let required = &[
@@ -904,8 +902,8 @@ where C: l2cap::ConnectionChannel
             HandleRange{ starting_handle: sh @ _, ending_handle: eh @ _ } if eh >= sh => {
                 use core::cmp::min;
 
-                let start = min( *sh as usize, self.attributes.len() );
-                let end   = min( *eh as usize, self.attributes.len() );
+                let start = min( sh as usize, self.attributes.len() );
+                let end   = min( eh as usize, self.attributes.len() );
 
                 let vec_cap = min(self.get_mtu() as usize, 256);
 
@@ -926,7 +924,7 @@ where C: l2cap::ConnectionChannel
 
                         let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
-                        self.send_error(*sh, oc, permission.into());
+                        self.send_error(sh, oc, permission.into());
 
                         None
 
@@ -996,13 +994,13 @@ where C: l2cap::ConnectionChannel
                 } else {
                     let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
-                    self.send_error(*sh, oc, super::pdu::Error::AttributeNotFound);
+                    self.send_error(sh, oc, super::pdu::Error::AttributeNotFound);
                 }
             },
             HandleRange{ starting_handle: sh @ _, .. } => {
                 let oc = super::client::ClientPduName::ReadByTypeRequest.into();
 
-                self.send_invalid_handle_error(*sh, oc);
+                self.send_invalid_handle_error(sh, oc);
             }
         }
     }

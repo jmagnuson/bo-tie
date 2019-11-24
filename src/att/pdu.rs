@@ -302,7 +302,7 @@ impl core::fmt::Display for Error {
                 write!(f, "Too many prepare writes have been queued")
             },
             Error::AttributeNotFound => {
-                write!(f, "No attribute found within the given attri-bute handle range")
+                write!(f, "No attribute found within the given attribute handle range")
             },
             Error::AttributeNotLong => {
                 write!(f, "The attribute cannot be read using the Read Blob Request")
