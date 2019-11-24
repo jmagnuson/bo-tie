@@ -396,7 +396,7 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C,Mtu>(self, connection_channel: C, server_mtu: Mtu)
+    pub fn make_server<C,Mtu>(self, connection_channel: &'_ C, server_mtu: Mtu)
     -> Server<C>
     where C: l2cap::ConnectionChannel,
           Mtu: Into<Option<u16>>
@@ -412,14 +412,14 @@ impl ServerBuilder
     }
 }
 
-pub struct Server<C>
+pub struct Server<'c, C>
 where C: l2cap::ConnectionChannel
 {
     primary_services: Vec<Service>,
-    server: att::server::Server<C>
+    server: att::server::Server<'c, C>
 }
 
-impl<C> Server<C> where C: l2cap::ConnectionChannel
+impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 {
     pub fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData) -> Result<(), crate::att::Error>
     {
@@ -556,29 +556,29 @@ impl<C> Server<C> where C: l2cap::ConnectionChannel
     }
 }
 
-impl<C> AsRef<att::server::Server<C>> for Server<C> where C: l2cap::ConnectionChannel {
-    fn as_ref(&self) -> &att::server::Server<C> {
+impl<'c, C> AsRef<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
+    fn as_ref(&self) -> &att::server::Server<'c, C> {
         &self.server
     }
 }
 
-impl <C> AsMut<att::server::Server<C>> for Server<C> where C: l2cap::ConnectionChannel {
-    fn as_mut(&mut self) -> &mut att::server::Server<C> {
+impl<'c, C> AsMut<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
+    fn as_mut(&mut self) -> &mut att::server::Server<'c, C> {
         &mut self.server
     }
 }
 
-impl<C> core::ops::Deref for Server<C>
+impl<'c, C> core::ops::Deref for Server<'c, C>
 where C:l2cap::ConnectionChannel
 {
-    type Target = att::server::Server<C>;
+    type Target = att::server::Server<'c, C>;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<C> core::ops::DerefMut for Server<C>
+impl<'c, C> core::ops::DerefMut for Server<'c, C>
 where C:l2cap::ConnectionChannel
 {
     fn deref_mut(&mut self) -> &mut Self::Target {

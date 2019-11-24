@@ -137,13 +137,18 @@ where C: bo_tie::l2cap::ConnectionChannel
     server
 }
 
-fn att_server_loop<C>(mut server: gatt::Server<C> ) where C: bo_tie::l2cap::ConnectionChannel {
+fn att_server_loop<C>(mut connection_channel: C) -> !
+where C: bo_tie::l2cap::ConnectionChannel
+{
+    let server = gatt_server_init(&connection_channel, local_name);
 
     loop {
-        futures::executor::block_on(server.receiver())
-            .expect("Couldn't get ACL data")
-            .process_request()
-            .expect("Couldn't process ACL data");
+        futures::executor::block_on(&mut connection_channel)
+            .iter()
+            .for_each(|acl_data| match server.process_acl_data(acl_data) {
+                Ok(_) => (),
+                Err(e) => println!("Cannot process acl data, '{}'", e),
+            } )
     }
 }
 
@@ -204,9 +209,7 @@ fn main() {
 
                 let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
 
-                let server = gatt_server_init(connection_channel, local_name);
-
-                att_server_loop(server);
+                att_server_loop(connection_channel);
             });
 
             executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();

@@ -180,7 +180,7 @@ impl ServerPduName {
 ///
 /// For now a server can only handle one client. It will be updated to handle multiple clients
 /// as soon as possible.
-pub struct Server<C>
+pub struct Server<'c, C>
 where C: l2cap::ConnectionChannel
 {
     /// The maximum mtu that this server can handle. This is also the mtu sent in a MTU response
@@ -190,13 +190,13 @@ where C: l2cap::ConnectionChannel
     /// The set mtu between the client and server. If this value is ever None, then the default
     /// value as defined in the connection channel will be used.
     set_mtu: Option<u16>,
-    connection: C,
+    connection: &'c C,
     attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>,
     /// The permissions the client currently has
     given_permissions: Vec<super::AttributePermissions>,
 }
 
-impl<C> Server<C>
+impl<'c, C> Server<'c, C>
 where C: l2cap::ConnectionChannel
 {
 
@@ -206,7 +206,7 @@ where C: l2cap::ConnectionChannel
     /// specified by the DEFAULT_ATT_MTU constant in trait `l2cap::ConnectionChannel`. If the provided MTU
     /// value is smaller than DEFAULT_ATT_MTU or none is passed, then the MTU will be set to
     /// DEFAULT_ATT_MTU.
-    pub fn new<Mtu, A>( connection: C, max_mtu: Mtu, server_attributes: A) -> Self
+    pub fn new<Mtu, A>( connection: &'c C, max_mtu: Mtu, server_attributes: A) -> Self
     where Mtu: Into<Option<u16>>,
           A: Into<Option<ServerAttributes>>
     {
@@ -1008,7 +1008,7 @@ where C: l2cap::ConnectionChannel
     }
 }
 
-impl<C> AsRef<C> for Server<C> where C: l2cap::ConnectionChannel {
+impl<'c, C> AsRef<C> for Server<'c, C> where C: l2cap::ConnectionChannel {
     fn as_ref(&self) -> &C {
         &self.connection
     }
