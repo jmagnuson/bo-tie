@@ -123,7 +123,7 @@ async fn disconnect(
 /// The attribute server is organized via the gatt protocol. This example is about connecting
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
-fn gatt_server_init<C>(channel: C, local_name: &str) -> gatt::Server<C>
+fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> gatt::Server<'c, C>
 where C: bo_tie::l2cap::ConnectionChannel
 {
     let att_mtu = 256;
@@ -132,18 +132,18 @@ where C: bo_tie::l2cap::ConnectionChannel
 
     let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu);
 
-    server.as_mut().give_permission_to_client(att::AttributePermissions::Read);
+    server.give_permission_to_client(att::AttributePermissions::Read);
 
     server
 }
 
-fn att_server_loop<C>(mut connection_channel: C) -> !
-where C: bo_tie::l2cap::ConnectionChannel
+fn att_server_loop<C>(connection_channel: C, local_name: &str) -> !
+where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
 {
-    let server = gatt_server_init(&connection_channel, local_name);
+    let mut server = gatt_server_init(&connection_channel, local_name);
 
     loop {
-        futures::executor::block_on(&mut connection_channel)
+        futures::executor::block_on(connection_channel.future_receiver())
             .iter()
             .for_each(|acl_data| match server.process_acl_data(acl_data) {
                 Ok(_) => (),
@@ -209,7 +209,7 @@ fn main() {
 
                 let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
 
-                att_server_loop(connection_channel);
+                att_server_loop(connection_channel, local_name);
             });
 
             executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();

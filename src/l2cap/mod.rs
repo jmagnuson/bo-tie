@@ -230,11 +230,37 @@ pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
 ///
 /// Every implementor of [`ConnectionChannel`] also implements `Future` for awaiting AclData packets
 /// from a connected device (via the BluetoothController).
-pub trait ConnectionChannel: core::future::Future<Output=Vec<AclData>> {
+pub trait ConnectionChannel {
     const DEFAULT_ATT_MTU: u16;
 
     fn send(&self, data: AclData);
     fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>>;
+
+    fn future_receiver(&self) -> ConChanFutureRx<'_, Self> {
+        ConChanFutureRx {
+            cc: self
+        }
+    }
+}
+
+/// A future for asynchronously waiting for received packets from the connected device
+///
+/// This struct is created via the function [`future_receiver`] in the trait [`ConnectionChannel`]
+pub struct ConChanFutureRx<'a, C> where C: ?Sized {
+    cc: &'a C
+}
+
+impl<'a,C> core::future::Future for ConChanFutureRx<'a,C>
+where C: ConnectionChannel
+{
+    type Output = alloc::vec::Vec< crate::l2cap::AclData >;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
+        match self.as_ref().cc.receive(cx.waker()) {
+            None => core::task::Poll::Pending,
+            Some(d) => core::task::Poll::Ready(d),
+        }
+    }
 }
 
 /// Protocol and Service Multiplexers
