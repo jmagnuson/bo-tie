@@ -103,6 +103,7 @@ impl LinkControl {
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum ControllerAndBaseband {
+    SetEventMask,
     Reset,
     ReadTransmitPowerLevel,
 }
@@ -117,6 +118,7 @@ impl ControllerAndBaseband {
         OpCodePair {
             ogf: ControllerAndBaseband::OGF,
             ocf: match *self {
+                SetEventMask => 0x1,
                 Reset => 0x3,
                 ReadTransmitPowerLevel => 0x2d,
             }
@@ -125,6 +127,7 @@ impl ControllerAndBaseband {
 
     fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
         match ocf {
+            0x1  => Ok(ControllerAndBaseband::SetEventMask),
             0x3  => Ok(ControllerAndBaseband::Reset),
             0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
             _ => Err(alloc::format!(ocf_error!(), "Controller and Baseband", ocf)),

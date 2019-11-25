@@ -123,7 +123,7 @@ async fn disconnect(
 /// The attribute server is organized via the gatt protocol. This example is about connecting
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
-fn gatt_server_init<C>(channel: C, local_name: &str) -> gatt::Server<C>
+fn gatt_server_init<C>(channel: &C, local_name: &str) -> gatt::Server<C>
 where C: bo_tie::l2cap::ConnectionChannel
 {
     let att_mtu = 256;
@@ -137,13 +137,67 @@ where C: bo_tie::l2cap::ConnectionChannel
     server
 }
 
-fn att_server_loop<C>(mut server: gatt::Server<C>, slave_security_manager: SlaveSecurityManager<'_,C>) where C: bo_tie::l2cap::ConnectionChannel {
+fn server_loop<C>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>
+    connection_channel: C,
+    mut att_server: gatt::Server<C>,
+    mut slave_security_manager: SlaveSecurityManager<'_,C>
+)
+where C: bo_tie::l2cap::ConnectionChannel
+{
+    use bo_tie::l2cap::ChannelIdentifier;
+    use bo_tie::l2cap::LeUserChannelIdentifier;
+    use bo_tie::hci::le::encryption::start_encryption;
+    use bo_tie::hci::cb::set_event_mask;
+    use bo_tie::hci::events::Events;
+    use core::time::Duration;
 
     loop {
-        futures::executor::block_on(server.receiver())
-            .expect("Couldn't get ACL data")
-            .process_request()
-            .expect("Couldn't process ACL data");
+        futures::executor::block_on(async {
+            connection_channel.future_receiver()
+            .await
+            .iter()
+            .for_each(|acl_data| {
+                match acl_data.get_cahnnel_id() {
+                    ChannelIdentifier::Le(LeUserChannelIdentifier::AttributeProtocol) =>
+                        match att_server.process_acl_data(acl_data) {
+                            Ok(_) => (),
+                            Err(e) => println!("Cannot process acl data for ATT, '{}'", e),
+                        }
+                    ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) =>
+                        match slave_security_manager.process_command(acl_data) {
+                            Ok(false) => (),
+                            Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
+                            Ok(true) => {
+
+                                let enabled_events = &[
+                                    set_event_mask::EventMask::EncryptionChange,
+                                    set_event_mask::EventMask::EncryptionKeyRefreshComplete,
+                                ];
+
+                                set_event_mask::send(hi, enabled_events).await.unwrap();
+
+                                let e_change_fut = hi.wait_for_event(
+                                    Events::EncryptionChange,
+                                    Duration::from_secs(1)
+                                );
+
+                                let e_key_refresh_fut = hi.wait_for_event(
+                                    Events::EncryptionKeyRefreshComplete,
+                                    Duration::from_secs(1)
+                                );
+
+                                match futures::future::select(e_change_fut, e_key_refresh_fut).await {
+                                    futures::future::Either::Left(r) => r.unwrap(),
+                                    futures::future::Either::Right(r) => r.unwrap(),
+                                }
+
+                                // keys can now be exchanged
+                            }
+                        }
+                }
+            })
+        })
     }
 }
 
@@ -213,7 +267,7 @@ fn main() {
 
                 let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
 
-                let server = gatt_server_init(connection_channel, local_name);
+                let server = gatt_server_init(&connection_channel, local_name);
 
                 let sm = bo_tie::sm::SecurityManager::new(Vec::new());
 
@@ -228,7 +282,7 @@ fn main() {
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
                 .create_security_manager();
 
-                att_server_loop(server);
+                server_loop(connection_channel, server, slave_sm);
             });
 
             executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();

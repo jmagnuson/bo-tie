@@ -1,6 +1,12 @@
 
 use super::*;
 
+use alloc::boxed::Box;
+use core::future::Future;
+use core::fmt::Debug;
+use core::pin::Pin;
+use core::task::{Poll, Context};
+
 pub struct SlaveSecurityManagerBuilder<'a, C> {
     sm: &'a SecurityManager,
     connection_channel: &'a C,
@@ -165,7 +171,17 @@ where C: ConnectionChannel,
     /// This will return a response to a valid request that can be sent to the Master device.
     /// Errors will be returned if the request is not something that can be processed by the slave
     /// or there was something wrong with the request message.
-    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<(), Error>
+    ///
+    /// When this function returns `true`, it indicates that the keys have been verified *on this
+    /// end* and the host can indicate to the controller to
+    /// [`start_encryption`](crate::hci::le::encryption::start_encryption), however the initiator
+    /// still needs to perform one more verify before it is ready to start encryption. If the verify
+    /// fails, then the initiator will return a `PairingFailed` to this.
+    ///
+    /// It is recommended to always keep processing Bluetooth Security Manager packets as the
+    /// responder. The host can at any point decide to restart encryption using different keys or
+    /// send a `PairingFailed` to indicate that the prior pairing process failed.
+    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<bool, Error>
     {
         if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
 
@@ -177,12 +193,12 @@ where C: ConnectionChannel,
                 Ok( CommandType::PairingPublicKey ) => self.p_pairing_public_key(payload),
                 Ok( CommandType::PairingRandom ) => self.p_pairing_random(payload),
                 Ok( CommandType::PairingFailed ) => self.p_pairing_failed(payload),
-                Ok( CommandType::PairingDHKeyCheck ) => unimplemented!(),
-                Ok( CommandType::EncryptionInformation ) => unimplemented!(),
-                Ok( CommandType::MasterIdentification ) => unimplemented!(),
-                Ok( CommandType::IdentityInformation ) => unimplemented!(),
-                Ok( CommandType::IdentityAddressInformation ) => unimplemented!(),
-                Ok( CommandType::SigningInformation ) => unimplemented!(),
+                Ok( CommandType::PairingDHKeyCheck ) => Ok(false),
+                Ok( CommandType::EncryptionInformation ) => Ok(false),
+                Ok( CommandType::MasterIdentification ) => Ok(false),
+                Ok( CommandType::IdentityInformation ) => Ok(false),
+                Ok( CommandType::IdentityAddressInformation ) => Ok(false),
+                Ok( CommandType::SigningInformation ) => Ok(false),
                 Ok( cmd ) => self.p_command_not_supported(cmd),
                 Err( cmd ) => self.p_unknown_command(cmd),
             }
@@ -209,25 +225,25 @@ where C: ConnectionChannel,
         self.send(pairing::PairingFailed::new(pairing::PairingFailedReason::EncryptionKeySize));
     }
 
-    fn p_bad_data_len(&mut self) -> Result<(), Error> {
+    fn p_bad_data_len(&mut self) -> Result<bool, Error> {
         self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
         Err( Error::Size )
     }
 
-    fn p_unknown_command(&mut self, err: Error) -> Result<(), Error> {
+    fn p_unknown_command(&mut self, err: Error) -> Result<bool, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(err)
     }
 
-    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<(), Error> {
+    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<bool, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(Error::IncorrectCommand(cmd))
     }
 
-    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<(), Error> {
+    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<bool, Error> {
 
         let request = pairing::PairingRequest::try_from_icd(data)?;
 
@@ -282,11 +298,11 @@ where C: ConnectionChannel,
                 mac_key: None,
             });
 
-            Ok(())
+            Ok(false)
         }
     }
 
-    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<(), Error> {
+    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<bool, Error> {
 
         let initiator_pub_key = pairing::PairingPubKey::try_from_icd(data)?;
 
@@ -315,7 +331,7 @@ where C: ConnectionChannel,
 
                     self.pairing_data = pairing_data.into();
 
-                    Ok(())
+                    Ok(false)
                 },
                 None => {
                     // Generating the dh key failed
@@ -331,7 +347,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<(), Error> {
+    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
             let initiator_confirm = pairing::PairingConfirm::try_from_icd(payload)?;
 
@@ -355,7 +371,7 @@ where C: ConnectionChannel,
 
                     self.send(pairing::PairingConfirm::new(confirm_value));
 
-                    Ok(())
+                    Ok(false)
                 },
                 // The pairing methods OOB and Passkey are not supported yet
                 //
@@ -369,7 +385,7 @@ where C: ConnectionChannel,
             }
     }
 
-    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<(), Error> {
+    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
         let initiator_random = pairing::PairingRandom::try_from_icd(payload)?;
 
@@ -379,7 +395,7 @@ where C: ConnectionChannel,
 
             self.send( pairing::PairingRandom::new(self.pairing_data.as_ref().unwrap().nonce) );
 
-            Ok(())
+            Ok(false)
 
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
@@ -388,7 +404,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<(), Error> {
+    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<bool, Error> {
         let initiator_fail = pairing::PairingFailed::try_from_icd(payload)?;
 
         self.pairing_data = None;
@@ -396,7 +412,7 @@ where C: ConnectionChannel,
         Err(Error::PairingFailed(initiator_fail.get_reason()))
     }
 
-    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<(), Error> {
+    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
         let initiator_dh_key_check = pairing::PairingDHKeyCheck::try_from_icd(payload)?;
 
@@ -466,7 +482,7 @@ where C: ConnectionChannel,
                     let irk = toolbox::rand_u128();
                     let csrk = toolbox::rand_u128();
 
-                    Ok(())
+                    Ok(true)
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
 

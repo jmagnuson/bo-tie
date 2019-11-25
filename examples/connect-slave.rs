@@ -148,7 +148,7 @@ where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
             .for_each(|acl_data| match server.process_acl_data(acl_data) {
                 Ok(_) => (),
                 Err(e) => println!("Cannot process acl data, '{}'", e),
-            } )
+            });
     }
 }
 

@@ -1,3 +1,5 @@
+//! Host Controller Interface Events
+
 use crate::hci::common::{
     ConnectionHandle,
     ConnectionInterval,
