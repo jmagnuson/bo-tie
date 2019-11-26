@@ -167,7 +167,7 @@ impl<D> CommandData for Command<D> where D: CommandData {
 
         let mut rec = Vec::with_capacity(1 + data_v.len());
 
-        rec[0] = self.command_type.into_val();
+        rec.push(self.command_type.into_val());
 
         rec.append(&mut data_v);
 
@@ -494,7 +494,7 @@ impl SecurityManager {
         }
     }
 
-    pub fn new_slave_security_manager_builder<'a, HCI,C>(
+    pub fn new_slave_builder<'a, C>(
         &'a self,
         channel: &'a C,
         master_address: &'a crate::BluetoothDeviceAddress,
@@ -503,8 +503,7 @@ impl SecurityManager {
         is_this_address_random: bool,
     )
     -> responder::SlaveSecurityManagerBuilder<'a, C>
-    where HCI: HostControllerInterface,
-            C: ConnectionChannel
+    where C: ConnectionChannel
     {
         responder::SlaveSecurityManagerBuilder::new(
             self,

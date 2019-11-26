@@ -1,28 +1,4 @@
-//! Connection state in the slave role example
-//!
-//! This example shows the basic way to form a connection with this device in the slave role. The
-//! only real important part to look at are the async functions.
-//!
-//! To fully execute this example you'll need another bluetooth enabled device that can run in the
-//! master role. If you have an android phone, you can use the 'nRF Connect' app to connect with
-//! this example
-//!
-//! # WARNING
-//! There is no security implemented in this example, but no data is exposed either. Be careful
-//! when extending/using this example for your purposes.
-//!
-//! # Important Notes
-//! Super User privileges may be required to interact with your bluetooth peripheral. To do will
-//! probably require the full path to cargo. The cargo binary is usually locacted in your home
-//! directory at `.cargo/bin/cargo`.
-//!
-//! This example assumes there isn't any bonding/caching between the device that is to be connected
-//! with this example. This will cause the the example to get stuck and eventually time out waiting
-//! to connect to the device. If this occurs, using a different random address should work (or
-//! power cycle the bluetooth controller to get a newly generated default random address). If
-//! there are still problems, delete the cache, whitelist, and any other memory associted with the
-//! bluetooth on the device to connect with, but please note this will git rid of all information
-//! associated with the bluetooth and other devices will need to be reconnected.
+#![feature(async_closure)]
 
 use bo_tie:: {
     att,
@@ -35,6 +11,7 @@ use bo_tie:: {
         set_advertising_parameters,
         set_advertising_enable,
     },
+    sm::responder::SlaveSecurityManager,
 };
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Duration;
@@ -123,7 +100,7 @@ async fn disconnect(
 /// The attribute server is organized via the gatt protocol. This example is about connecting
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
-fn gatt_server_init<C>(channel: &C, local_name: &str) -> gatt::Server<C>
+fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> gatt::Server<'c, C>
 where C: bo_tie::l2cap::ConnectionChannel
 {
     let att_mtu = 256;
@@ -138,8 +115,8 @@ where C: bo_tie::l2cap::ConnectionChannel
 }
 
 fn server_loop<C>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>
-    connection_channel: C,
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    connection_channel: &C,
     mut att_server: gatt::Server<C>,
     mut slave_security_manager: SlaveSecurityManager<'_,C>
 )
@@ -152,52 +129,57 @@ where C: bo_tie::l2cap::ConnectionChannel
     use bo_tie::hci::events::Events;
     use core::time::Duration;
 
+
     loop {
-        futures::executor::block_on(async {
-            connection_channel.future_receiver()
-            .await
-            .iter()
-            .for_each(|acl_data| {
-                match acl_data.get_cahnnel_id() {
-                    ChannelIdentifier::Le(LeUserChannelIdentifier::AttributeProtocol) =>
-                        match att_server.process_acl_data(acl_data) {
-                            Ok(_) => (),
-                            Err(e) => println!("Cannot process acl data for ATT, '{}'", e),
-                        }
-                    ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) =>
-                        match slave_security_manager.process_command(acl_data) {
-                            Ok(false) => (),
-                            Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
-                            Ok(true) => {
-
-                                let enabled_events = &[
-                                    set_event_mask::EventMask::EncryptionChange,
-                                    set_event_mask::EventMask::EncryptionKeyRefreshComplete,
-                                ];
-
-                                set_event_mask::send(hi, enabled_events).await.unwrap();
-
-                                let e_change_fut = hi.wait_for_event(
-                                    Events::EncryptionChange,
-                                    Duration::from_secs(1)
-                                );
-
-                                let e_key_refresh_fut = hi.wait_for_event(
-                                    Events::EncryptionKeyRefreshComplete,
-                                    Duration::from_secs(1)
-                                );
-
-                                match futures::future::select(e_change_fut, e_key_refresh_fut).await {
-                                    futures::future::Either::Left(r) => r.unwrap(),
-                                    futures::future::Either::Right(r) => r.unwrap(),
-                                }
-
-                                // keys can now be exchanged
+        futures::executor::block_on(
+            async {
+                let acl_data_vec = connection_channel.future_receiver().await;
+    
+                for acl_data in acl_data_vec {
+                    match acl_data.get_channel_id() {
+                        ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
+                            match att_server.process_acl_data(&acl_data) {
+                                Ok(_) => (),
+                                Err(e) => println!("Cannot process acl data for ATT, '{}'", e),
                             }
-                        }
+                        ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
+                            match slave_security_manager.process_command(acl_data.get_payload()) {
+                                Ok(false) => (),
+                                Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
+                                Ok(true) => {
+                                    // when true is retuend, the keys have been verified and
+                                    // encryption over the Link Layer can begin
+
+                                    let enabled_events = &[
+                                        set_event_mask::EventMask::EncryptionChange,
+                                        set_event_mask::EventMask::EncryptionKeyRefreshComplete,
+                                    ];
+
+                                    set_event_mask::send(hi, enabled_events).await.unwrap();
+
+                                    let e_change_fut = hi.wait_for_event(
+                                        Events::EncryptionChange,
+                                        Duration::from_secs(1)
+                                    );
+
+                                    let e_key_refresh_fut = hi.wait_for_event(
+                                        Events::EncryptionKeyRefreshComplete,
+                                        Duration::from_secs(1)
+                                    );
+
+                                    match futures::future::select(e_change_fut, e_key_refresh_fut).await {
+                                        futures::future::Either::Left((r,_)) => r.unwrap(),
+                                        futures::future::Either::Right((r,_)) => r.unwrap(),
+                                    };
+
+                                    // keys can now be exchanged
+                                }
+                            }
+                        _ => (),
+                    }
                 }
-            })
-        })
+            }
+        );
     }
 }
 
@@ -260,7 +242,7 @@ fn main() {
             let master_address_type = event_data.peer_address_type.clone();
 
             let this_address = executor::block_on(
-                bo_tie::hci::le::mandatory::ip_read_bd_addr::send(&interface)
+                bo_tie::hci::le::mandatory::read_bd_addr::send(&interface)
             ).unwrap();
 
             std::thread::spawn( move || {
@@ -271,9 +253,8 @@ fn main() {
 
                 let sm = bo_tie::sm::SecurityManager::new(Vec::new());
 
-                let slave_sm = sm.new_slave_security_manager_builder(
-                    &interface_clone,
-                    server.as_ref().as_ref(),
+                let slave_sm = sm.new_slave_builder(
+                    &connection_channel,
                     &master_address,
                     master_address_type == bo_tie::hci::events::LEConnectionAddressType::RandomDeviceAddress,
                     &this_address,
@@ -282,7 +263,7 @@ fn main() {
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
                 .create_security_manager();
 
-                server_loop(connection_channel, server, slave_sm);
+                server_loop(&interface_clone, &connection_channel, server, slave_sm);
             });
 
             executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();

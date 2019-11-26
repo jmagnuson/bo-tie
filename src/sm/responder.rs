@@ -70,6 +70,7 @@ where C: ConnectionChannel
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
+            encrypt_info::AuthRequirements::Sc,
         ];
 
         let key_dist = alloc::vec![
@@ -222,7 +223,7 @@ where C: ConnectionChannel,
     fn send_err(&mut self, fail_reason: pairing::PairingFailedReason) {
         self.pairing_data = None;
 
-        self.send(pairing::PairingFailed::new(pairing::PairingFailedReason::EncryptionKeySize));
+        self.send(pairing::PairingFailed::new(fail_reason));
     }
 
     fn p_bad_data_len(&mut self) -> Result<bool, Error> {

@@ -479,7 +479,8 @@ pub fn ec() -> Result<([u8;32], [u8;64]), impl core::fmt::Debug> {
 
     let mut raw_public_key = [0u8; 64];
 
-    raw_public_key.copy_from_slice(&public_key);
+    // The flag byte doesn't matter
+    raw_public_key.copy_from_slice(&public_key[1..]);
 
     Ok( (private_key.serialize(), raw_public_key) )
 }
