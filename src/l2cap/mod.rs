@@ -145,7 +145,7 @@ impl core::fmt::Display for AclDataError {
             AclDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
             AclDataError::PayloadLengthIncorrect =>
                 write!(f, "Specified payload length didn't match the actual payload length"),
-            AclDataError::InvalidChannelId => write!(f, "Invalid Channel Id")
+            AclDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
         }
     }
 }
@@ -185,27 +185,27 @@ impl AclData {
         v
     }
 
-    /// Create an AclData struct from raw l2cap acl data
+    /// Create an AclData struct from a non-fragmented raw l2cap acl data
     ///
     /// # Errors
     /// * The length of the raw data must be >= 4
-    /// * The length value of the raw data must be equal to the length of the payload portion of
-    ///   the raw data
+    /// * The length value in the raw data must be less than or equal to the length of the payload
+    ///   portion of the raw data
     /// * The channel id must be valid
     pub fn from_raw_data(data: &[u8]) -> Result<Self, AclDataError> {
         use core::convert::TryInto;
 
         if data.len() >= 4 {
-            let len = <u16>::from_le_bytes( [data[0], data[1]] );
+            let len = <u16>::from_le_bytes( [data[0], data[1]] ) as usize;
             let raw_channel_id = <u16>::from_le_bytes( [data[2], data[3]] );
             let payload = &data[4..];
 
-            if payload.len() == len.try_into().expect("Cannot convert len to usize") {
+            if len <= payload.len() {
                 Ok( Self {
                     channel_id: ChannelIdentifier::LE(
                         LeUserChannelIdentifier::try_from_raw(raw_channel_id).or(Err(AclDataError::InvalidChannelId))?
                     ),
-                    data: Vec::from(payload),
+                    data: payload[..len].to_vec(),
                 })
             } else {
                 Err( AclDataError::PayloadLengthIncorrect )
@@ -215,6 +215,39 @@ impl AclData {
             Err( AclDataError::RawDataTooSmall )
         }
     }
+}
+
+/// A Complete or Fragmented Acl Data
+///
+/// Packets sent between the Master and Slave may be fragmented and need to be combined into a
+/// complete [`AclData`]. Multiple AclDataFragments, when in order and complete, can be combined
+/// into a single 'AclData' through the use of 'FromIterator' for AclData.
+pub struct AclDataFragment {
+    start_fragment: bool,
+    data: Vec<u8>
+}
+
+impl AclDataFragment {
+
+    /// Crate a 'AclDataFragment'
+    pub(crate) fn new(start_fragment: bool, data: Vec<u8>) -> Self {
+        Self {start_fragment, data}
+    }
+
+    /// Get the length of the payload as specified in the ACL data
+    ///
+    /// This returns None if this packet doesn't contain the length parameter
+    pub fn get_acl_len(&self) -> Option<usize> {
+        if self.start_fragment && self.data.len() > 2 {
+            Some( <u16>::from_le_bytes([ self.data[0], self.data[1] ]) as usize )
+        } else {
+            None
+        }
+    }
+
+    pub fn is_start_fragment(&self) -> bool { self.start_fragment }
+
+    pub fn fragment_data(&self) -> &[u8] { &self.data }
 }
 
 /// The minimum number of data bytes in an attribute protocol based packet for bluetooth le
@@ -227,38 +260,147 @@ pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
 ///
 /// A connection channel is used for sending and receiving Asynchronous Connection-oriented (ACL)
 /// data packets between the Host and Bluetooth Controller.
-///
-/// Every implementor of [`ConnectionChannel`] also implements `Future` for awaiting AclData packets
-/// from a connected device (via the BluetoothController).
 pub trait ConnectionChannel {
     const DEFAULT_ATT_MTU: u16;
 
     fn send(&self, data: AclData);
-    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclData>>;
+    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclDataFragment>>;
 
     fn future_receiver(&self) -> ConChanFutureRx<'_, Self> {
         ConChanFutureRx {
-            cc: self
+            cc: self,
+            full_acl_data: Vec::new(),
+            carryover_fragments: Vec::new(),
+            length: None,
         }
     }
 }
 
 /// A future for asynchronously waiting for received packets from the connected device
 ///
-/// This struct is created via the function [`future_receiver`] in the trait [`ConnectionChannel`]
+/// This struct is created via the function [`future_receiver`] in the trait [`ConnectionChannel`].
+///
+/// This implements [`Future`](https://doc.rust-lang.org/core/future/trait.Future.html) for polling
+/// the Bluetooth Controller to obtain complete [`AclData`] (L2CAP data packets). `ConChanFutureRx`
+/// is effectively a packet defragmenter for packets received by the controller.
+///
+/// # How It Works
+/// When poll is called, the function will receive all the available ACL data fragments from the
+/// backend driver and try to assemble the packets into complete ACL data.
+///
+/// If all fragments received can be converted into complete L2CAP packets, then `Poll::Ready` is
+/// returned will all the packets.
+///
+/// When the all fragments cannot be converted into complete ACL Packets, then `Poll::Pending` is
+/// returned, and the completed packets along with the incomplete fragments are saved for the next
+/// poll. Upon polling again, if the newly received fragments can be assembled with the saved
+/// fragments to make complete L2CAP packets then `Poll::Ready` is returned with all the L2CAP
+/// packets (saved and newly assembled).  Otherwise `Poll::Pending` is returned and the process
+/// repeats itself.
 pub struct ConChanFutureRx<'a, C> where C: ?Sized {
-    cc: &'a C
+    cc: &'a C,
+    full_acl_data: Vec<AclData>,
+    carryover_fragments: Vec<u8>,
+    length: Option<usize>,
+}
+
+impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
+
+    /// Get the complete, de-fragmented, received ACL Data
+    ///
+    /// This is useful when resulting `poll` may contain many complete packets, but still returns
+    /// `Poll::Pending` because there were also incomplete fragments received.
+    pub fn get_received_packets(&mut self) -> Vec<AclData> {
+        core::mem::replace(&mut self.full_acl_data, Vec::new() )
+    }
 }
 
 impl<'a,C> core::future::Future for ConChanFutureRx<'a,C>
 where C: ConnectionChannel
 {
-    type Output = alloc::vec::Vec< crate::l2cap::AclData >;
+    type Output = Result<Vec<AclData>, AclDataError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-        match self.as_ref().cc.receive(cx.waker()) {
-            None => core::task::Poll::Pending,
-            Some(d) => core::task::Poll::Ready(d),
+
+        const HEADER_SIZE:usize = 4;
+
+        use core::task::Poll;
+
+        let this = self.get_mut();
+
+        match this.cc.receive(cx.waker()).and_then( |fragments| {
+
+            match fragments.into_iter().try_for_each( |mut f| {
+
+                // Continue if f is just an empty fragment, there is nothing to do
+                if f.data.len() == 0 { return Ok(()) }
+
+                if this.carryover_fragments.is_empty()
+                {
+                    match f.get_acl_len() {
+                        Some(l) if l <= (f.data.len() - HEADER_SIZE) => {
+                            match AclData::from_raw_data(&this.carryover_fragments) {
+                                Ok(data) => this.full_acl_data.push(data),
+                                Err(e) => return Err(e)
+                            }
+                        },
+                        len @ Some(_) => {
+                            this.carryover_fragments.append(&mut f.data);
+                            this.length = len;
+                        },
+                        None => {
+                            this.carryover_fragments.append(&mut f.data);
+                        },
+                    }
+                } else {
+                    this.carryover_fragments.append(&mut f.data);
+
+                    let acl_len = match this.length {
+                        None => {
+                            // There will always be at least 2 items to take because a starting
+                            // fragment and a proceeding fragment have been received and empty
+                            // fragments are not added to `self.carryover_fragments`.
+                            let len_bytes = this.carryover_fragments.iter()
+                                .take(2)
+                                .enumerate()
+                                .fold([0u8; 2], |mut a, (i, &v)| { a[i] = v; a });
+
+                            let len = <u16>::from_le_bytes(len_bytes) as usize;
+
+                            this.length = Some(len);
+
+                            len
+                        },
+                        Some(len) => len,
+                    };
+
+                    if (acl_len + HEADER_SIZE) <= this.carryover_fragments.len() {
+                        match AclData::from_raw_data(&this.carryover_fragments) {
+                            Ok(data) => {
+                                this.full_acl_data.push(data);
+                                this.carryover_fragments.clear();
+                            },
+                            Err(e) => return Err(e)
+                        }
+                    }
+                }
+
+                Ok(())
+            }) {
+                Ok(_) => {
+                    if this.carryover_fragments.is_empty() &&
+                        !this.full_acl_data.is_empty()
+                    {
+                        Some( Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())) )
+                    } else {
+                        None
+                    }
+                },
+                Err(e) => Some( Err(e) )
+            }
+        }) {
+            Some(ret) => Poll::Ready(ret),
+            None => Poll::Pending,
         }
     }
 }

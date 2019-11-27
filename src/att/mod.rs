@@ -154,6 +154,7 @@ impl<V> Attribute<V> {
 }
 
 pub enum Error {
+    Other(&'static str),
     /// Returned when there is no connection to the bluetooth controller
     NotConnected,
     /// A PDU exceeds the MTU set between the client and server
@@ -186,6 +187,7 @@ pub enum Error {
 impl core::fmt::Display for Error{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
+            Error::Other(r) => write!(f, "{}", r),
             Error::NotConnected => write!( f, "Not Connected" ),
             Error::MtuExceeded => write!( f, "Maximum Transmission Unit exceeded" ),
             Error::TooSmallMtu => write!( f, "Minimum Transmission Unit larger then specified" ),

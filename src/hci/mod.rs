@@ -8,6 +8,7 @@ pub mod error;
 #[macro_use] pub mod events;
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
@@ -81,23 +82,23 @@ impl<F> EventMatcher for F where F: Fn( &events::EventsData ) -> bool + Sized + 
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum AcePacketBoundary {
+pub enum AclPacketBoundary {
     FirstNonFlushable,
     ContinuingFragment,
     FirstAutoFlushable,
     CompleteL2capPdu,
 }
 
-impl AcePacketBoundary {
+impl AclPacketBoundary {
 
     /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
     /// data packet. The returned value is in host byte order.
     fn get_shifted_val(&self) -> u16 {
         ( match self {
-            AcePacketBoundary::FirstNonFlushable => 0x0,
-            AcePacketBoundary::ContinuingFragment => 0x1,
-            AcePacketBoundary::FirstAutoFlushable => 0x2,
-            AcePacketBoundary::CompleteL2capPdu => 0x3,
+            AclPacketBoundary::FirstNonFlushable => 0x0,
+            AclPacketBoundary::ContinuingFragment => 0x1,
+            AclPacketBoundary::FirstAutoFlushable => 0x2,
+            AclPacketBoundary::CompleteL2capPdu => 0x3,
         } ) >> 12
     }
 
@@ -106,10 +107,10 @@ impl AcePacketBoundary {
     /// need to be in host byte order.
     fn from_shifted_val(val: u16) -> Self {
         match (val << 12) & 3  {
-            0x0 => AcePacketBoundary::FirstNonFlushable,
-            0x1 => AcePacketBoundary::ContinuingFragment,
-            0x2 => AcePacketBoundary::FirstAutoFlushable,
-            0x3 => AcePacketBoundary::CompleteL2capPdu,
+            0x0 => AclPacketBoundary::FirstNonFlushable,
+            0x1 => AclPacketBoundary::ContinuingFragment,
+            0x2 => AclPacketBoundary::FirstAutoFlushable,
+            0x3 => AclPacketBoundary::CompleteL2capPdu,
             _ => panic!("This cannot happen"),
         }
     }
@@ -170,22 +171,22 @@ impl Display for HciAclPacketConvertError {
 #[derive(Debug)]
 pub struct HciAclData {
     connection_handle: common::ConnectionHandle,
-    packet_boundry_flag: AcePacketBoundary,
+    packet_boundary_flag: AclPacketBoundary,
     broadcast_flag: AclBroadcastFlag,
     /// This is always a L2CAP ACL packet
-    payload: alloc::boxed::Box<[u8]>,
+    payload: Vec<u8>,
 }
 
 impl HciAclData {
 
     pub fn new(
         connection_handle: common::ConnectionHandle,
-        packet_boundry_flag: AcePacketBoundary,
+        packet_boundary_flag: AclPacketBoundary,
         broadcast_flag: AclBroadcastFlag,
-        payload: alloc::boxed::Box<[u8]>
+        payload: Vec<u8>
     ) -> Self
     {
-        HciAclData { connection_handle, packet_boundry_flag, broadcast_flag, payload }
+        HciAclData { connection_handle, packet_boundary_flag, broadcast_flag, payload }
     }
 
     pub fn get_handle(&self) -> &common::ConnectionHandle {
@@ -194,7 +195,7 @@ impl HciAclData {
 
     pub fn get_payload(&self) -> &[u8] { &self.payload }
 
-    pub fn get_packet_boundry_flag(&self) -> AcePacketBoundary { self.packet_boundry_flag }
+    pub fn get_packet_boundary_flag(&self) -> AclPacketBoundary { self.packet_boundary_flag }
 
     pub fn get_broadcast_flag(&self) -> AclBroadcastFlag { self.broadcast_flag }
 
@@ -209,7 +210,7 @@ impl HciAclData {
         let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
-            | self.packet_boundry_flag.get_shifted_val()
+            | self.packet_boundary_flag.get_shifted_val()
             | self.broadcast_flag.get_shifted_val();
 
         v.extend_from_slice( &first_2_bytes.to_le_bytes() );
@@ -219,13 +220,6 @@ impl HciAclData {
         v.extend_from_slice(&self.payload);
 
         v
-    }
-
-    /// Get the inner L2CAP ACL Packet
-    ///
-    /// This will create an `AclData` packet from the payload of the `HciAclData` packet
-    pub fn get_acl_packet(&self) -> Result<crate::l2cap::AclData, crate::l2cap::AclDataError> {
-        crate::l2cap::AclData::from_raw_data(&self.payload)
     }
 
     /// Attempt to create a `HciAclData`
@@ -243,7 +237,7 @@ impl HciAclData {
                 Err(e) => return Err( HciAclPacketConvertError::InvalidConnectionHandle(e) ),
             };
 
-            let packet_boundry_flag = AcePacketBoundary::from_shifted_val( first_2_bytes );
+            let packet_boundary_flag = AclPacketBoundary::from_shifted_val( first_2_bytes );
 
             let broadcast_flag = match AclBroadcastFlag::try_from_shifted_val( first_2_bytes ) {
                 Ok(flag) => flag,
@@ -254,10 +248,10 @@ impl HciAclData {
 
             Ok(
                 HciAclData {
-                    connection_handle: connection_handle,
-                    packet_boundry_flag: packet_boundry_flag,
-                    broadcast_flag: broadcast_flag,
-                    payload: alloc::boxed::Box::from( &packet[HEADER_SIZE..(HEADER_SIZE + data_length)] ),
+                    connection_handle,
+                    packet_boundary_flag,
+                    broadcast_flag,
+                    payload: packet[HEADER_SIZE..(HEADER_SIZE + data_length)].to_vec(),
                 }
             )
 
@@ -265,7 +259,17 @@ impl HciAclData {
             Err( HciAclPacketConvertError::PacketTooSmall )
         }
     }
+
+    fn into_acl_fragment(self) -> crate::l2cap::AclDataFragment {
+        use crate::l2cap::AclDataFragment;
+
+        match self.packet_boundary_flag {
+            AclPacketBoundary::ContinuingFragment => AclDataFragment::new(false, self.payload),
+            _                                     => AclDataFragment::new(true, self.payload),
+        }
+    }
 }
+
 
 /// Trait for interfacing with the controller
 ///
@@ -648,7 +652,7 @@ where I: HostControllerInterface
     {
         EventReturnFuture {
             interface: &self.interface,
-            event: event,
+            event,
             matcher: Arc::pin(matcher),
             timeout: timeout.into(),
         }
@@ -669,8 +673,6 @@ impl<'a, I> LeAclHciChannel<'a, I> where I: HciAclDataInterface {
 
         LeAclHciChannel { handle, hi }
     }
-
-
 }
 
 impl<'a,I> crate::l2cap::ConnectionChannel for LeAclHciChannel<'a, I>
@@ -682,7 +684,7 @@ where I: HciAclDataInterface
 
         let hci_acl_data = HciAclData::new(
             self.handle,
-            AcePacketBoundary::FirstNonFlushable,
+            AclPacketBoundary::FirstNonFlushable,
             AclBroadcastFlag::NoBroadcast,
             data.into_raw_data().into()
         );
@@ -690,26 +692,20 @@ where I: HciAclDataInterface
         self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
     }
 
-    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclData>> {
+    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {
+        use alloc::vec::Vec;
+        use crate::l2cap::AclDataFragment;
 
-        self.hi.interface.receive(&self.handle, waker).and_then( |received| match received {
-            Ok( packets ) => packets.into_iter().filter_map(
-                    |packet| {
-                        match packet.get_acl_packet() {
-                            Ok( acl_packet) => Some(acl_packet),
-                            Err( e ) => {
-                                log::error!("Couldn't create ACL Packet from HCI ACL Packet, \
-                                    {}, hci acl packet: {:#x?} ", e, packet);
-                                None
-                            }
-                        }
-                    }
-                )
-                .collect::<alloc::vec::Vec<crate::l2cap::AclData>>()
+        self.hi.interface
+        .receive(&self.handle, waker)
+        .and_then( |received| match received {
+            Ok( packets ) => packets.into_iter()
+                .map( |packet| packet.into_acl_fragment() )
+                .collect::<Vec<AclDataFragment>>()
                 .into(),
             Err( e ) => {
                 log::error!("Failed to receive data: {}", e);
-                Some(alloc::vec::Vec::new())
+                Vec::new().into()
             },
         })
     }

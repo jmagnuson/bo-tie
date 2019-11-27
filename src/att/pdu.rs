@@ -948,7 +948,7 @@ where D: TransferFormat
 ///
 /// This is sent by the client to requests 2 or more values to read. If the length of the input is
 /// less then 2 then the return will be an error.
-pub fn read_multiple_request( handles: Box<[u16]> ) -> Result<Pdu<Box<[u16]>>, ()> {
+pub fn read_multiple_request( handles: Box<[u16]> ) -> Result<Pdu<Box<[u16]>>, super::Error> {
     if handles.len() >= 2 {
         Ok(Pdu {
             opcode: From::from(ClientPduName::ReadMultipleRequest),
@@ -956,7 +956,7 @@ pub fn read_multiple_request( handles: Box<[u16]> ) -> Result<Pdu<Box<[u16]>>, (
             signature: None,
         })
     } else {
-        Err(())
+        Err(super::Error::Other("Two or more handles required for read multiple"))
     }
 }
 

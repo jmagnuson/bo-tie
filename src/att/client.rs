@@ -9,10 +9,8 @@ use alloc::{
     vec::Vec,
     format,
 };
-use core::future::Future;
-use core::pin::Pin;
-use core::task::{Poll, Context};
 use crate::l2cap;
+use super::server::ServerPduName;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ClientPduName {
@@ -106,51 +104,56 @@ impl core::fmt::Display for ClientPduName {
     }
 }
 
-struct MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin {
-    mtu_size: u16,
-    mtu_pdu: Option<pdu::Pdu<u16>>,
-    channel: Option<Ch>,
+pub struct ResponseProcessor<F,R>(F)
+where F: FnOnce(&[u8]) -> Result<R, super::Error>;
+
+impl<F,R> ResponseProcessor<F,R>
+where F: FnOnce(&[u8]) -> Result<R, super::Error>
+{
+    pub fn process(self, acl_data: l2cap::AclData) -> Result<R, super::Error> {
+        if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
+            self.0(acl_data.get_payload())
+        } else {
+            Err( super::Error::IncorrectChannelId )
+        }
+    }
 }
 
-impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
+pub struct Client<'c, C>
+where C: l2cap::ConnectionChannel,
 {
-    type Output = Result< Client<Ch>, super::Error >;
+    mtu: usize,
+    channel: &'c C,
+}
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        use super::server::ServerPduName;
+impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel 
+{
 
-        let this = self.get_mut();
+    /// Connect a client to a attribute server
+    ///
+    /// This performs the initial setup between the client and the server required for establishing
+    /// the attribute protocol. An optional input is used to determine the maximum size of each
+    /// attribute packet. If maximum_transfer_unit is `None` the the minimum MTU is used.
+    ///
+    /// The bluetooth connection must already be established
+    pub fn connect<Mtu>( channel: &'c C, maximum_transfer_unit: Mtu )
+    -> ResponseProcessor<impl FnOnce(&[u8]) -> Result<Client<'c, C>, super::Error> + 'c, Self>
+    where Mtu: Into<Option<u16>>
+    {
+        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {C::DEFAULT_ATT_MTU};
 
-        if let Some(pdu) = this.mtu_pdu.take() {
-
-            // Return an error if the mtu is too small
-            if Ch::DEFAULT_ATT_MTU > this.mtu_size {
-                return Poll::Ready(Err(super::Error::TooSmallMtu));
-            }
-
-            let acl_data = l2cap::AclData::new(TransferFormat::into(&pdu).into(), super::L2CAP_CHANNEL_ID);
-
-            // The channel must exist at this point
-            this.channel.as_ref().expect("Channel doesn't exist").send( acl_data );
-        }
-
-        if let Some(att_packet) = this.channel.as_ref()
-            .and_then( |c| c.receive( cx.waker() )
-            .and_then( |packets| packets.first().cloned() ) )
-        {
-            let bytes = att_packet.get_payload();
+        ResponseProcessor( move | bytes | {
+            use super::server::ServerPduName;
 
             // Check for a ExchangeMTUResponse PDU
-            if ServerPduName::ExchangeMTUResponse.is_convertable_from(bytes)
+            if ServerPduName::ExchangeMTUResponse.is_convertible_from(bytes)
             {
                 match TransferFormat::from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
 
                         let client = Client {
-                            mtu: core::cmp::min( this.mtu_size,  received_mtu) as usize,
-
-                            // The channel must always be `Some` here
-                            channel: this.channel.take().expect("No channel to take"),
+                            mtu: core::cmp::min( mtu,  received_mtu) as usize,
+                            channel,
                         };
 
                         Ok(client)
@@ -161,7 +164,7 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
                     }
                 }
 
-            } else if ServerPduName::ErrorResponse.is_convertable_from(bytes) {
+            } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
 
                 match pdu::Error::from_raw(bytes[4]) {
 
@@ -169,15 +172,15 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
                     // error type received
                     pdu::Error::RequestNotSupported => {
 
-                        // Log that exhange MTU is not supported by the server, and return a client
-                        // with the default MTU as its sizing
+                        // Log that exchange MTU is not supported by the server, and return a
+                        // client with the default MTU
 
                         log::info!("Server doesn't support 'MTU exchange'; default MTU of {} \
-                            bytes is used", Ch::DEFAULT_ATT_MTU);
+                            bytes is used", C::DEFAULT_ATT_MTU);
 
                         let client = Client {
-                            mtu: Ch::DEFAULT_ATT_MTU as usize,
-                            channel: this.channel.take().expect("No channel to take"),
+                            mtu: C::DEFAULT_ATT_MTU as usize,
+                            channel,
                         };
 
                         Ok(client)
@@ -191,160 +194,70 @@ impl<Ch> Future for MtuFuture<Ch> where Ch: l2cap::ConnectionChannel + Unpin
             } else {
                 use core::convert::TryFrom;
 
-                match bytes.get(0).and_then(|b| Some(ServerPduName::try_from(*b)) ) {
-
+                match bytes.get(0).and_then(|b| Some(ServerPduName::try_from(*b)) )
+                {
                     Some(Ok(pdu)) => Err( TransferFormatError::from(format!("Client received \
                         invalid pdu in response to 'exchange MTU request'. Received '{}'", pdu ))),
 
                     Some(Err(_)) => Err( TransferFormatError::from(format!("Received unknown \
                         invalid PDU for response to 'exchange MTU request'; raw value is {:#x}",
-                        bytes[0]))),
+                                                                           bytes[0]))),
 
                     None => Err( TransferFormatError::from("Received empty packet for
-                        response to 'exchange MTU rerquest'") ),
-
+                        response to 'exchange MTU request'") ),
                 }
-                .or_else( |tfe| Err( super::Error::from(tfe) ) )
-
-            }.into()
-
-        } else {
-
-            Poll::Pending
-
-        }
-    }
-}
-
-struct ResponseFuture<'a, Ch, Rd>
-where Ch: l2cap::ConnectionChannel,
-      Rd: TransferFormat,
-{
-    channel: &'a Ch,
-    send_data: Option<Box<[u8]>>,
-    pd: core::marker::PhantomData<Rd>,
-    exp_resp: super::server::ServerPduName,
-}
-
-impl<Ch, Rd> Future for ResponseFuture<'_, Ch, Rd>
-where Ch: l2cap::ConnectionChannel,
-      Rd: TransferFormat + Unpin,
-{
-    type Output = Result< pdu::Pdu<Rd>, super::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if let Some(data) = this.send_data.take() {
-            this.channel.send(l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
-        }
-
-        if let Some(l2cap_packets) = this.channel.receive(cx.waker()) {
-
-            let bytes = l2cap_packets.iter()
-                .map( |packet| packet.get_payload() )
-                .fold( Vec::new(), | mut vec, payload| { vec.extend_from_slice(payload); vec } )
-                .into_boxed_slice();
-
-            if bytes.len() >= 1 {
-                use core::convert::TryFrom;
-
-                match super::server::ServerPduName::try_from(bytes[0]) {
-
-                    Ok(super::server::ServerPduName::ErrorResponse) => {
-
-                        let err_pdu_rslt: Result<pdu::Pdu<pdu::ErrorAttributeParameter>, _> =
-                            TransferFormat::from(&bytes);
-
-                        match err_pdu_rslt {
-                            Ok(err_pdu) => Poll::Ready(Err(err_pdu.into())),
-                            Err(e) => Poll::Ready(Err(e.into())),
-                        }
-
-                    },
-                    Ok(name) if name == this.exp_resp => {
-
-                        let pdu_rslt = TransferFormat::from(&bytes);
-
-                        match pdu_rslt {
-                            Ok(pdu) => Poll::Ready(Ok(pdu)),
-                            Err(e)  => Poll::Ready(Err(e.into())),
-                        }
-                    },
-                    Ok(_) => Poll::Ready(Err( super::Error::UnexpectedPdu(bytes[0]) )),
-                    Err(_) => Poll::Ready(Err( TransferFormatError::from(format!("Received Unknown \"
-                        PDU '{:#x}', expected '{} ({:#x})'", bytes[0], this.exp_resp,
-                        Into::<u8>::into(this.exp_resp))).into() )),
-                }
-            } else {
-                Poll::Ready(Err( TransferFormatError::from(format!("Received Empty PDU, expected \
-                    {}", this.exp_resp)).into() ))
+                .map_err(|e| e.into() )
             }
-        } else {
-            Poll::Pending
-        }
+        })
     }
-}
 
-struct ReturnedResponse<'a, Ch, Rd>
-where Ch: l2cap::ConnectionChannel,
-      Rd: TransferFormat,
-{
-    mtu: usize,
-    rf: ResponseFuture<'a, Ch, Rd>,
-}
-
-impl<Ch, Rd> Future for ReturnedResponse<'_, Ch, Rd>
-where Ch: l2cap::ConnectionChannel,
-      Rd: TransferFormat + Unpin,
-{
-    type Output = Result<Rd, super::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-
-        // mtu check
-        if let Some(ref data) = self.rf.send_data {
-            if data.len() > self.mtu {
-                return Poll::Ready(Err( super::Error::MtuExceeded ))
-            }
-        }
-
-        match Pin::new(&mut self.get_mut().rf).poll(cx) {
-            Poll::Ready(Ok(pdu)) => {
-                Poll::Ready( Ok( pdu.into_parameters() ) )
-            },
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-pub struct Client<C>
-where C: l2cap::ConnectionChannel,
-{
-    mtu: usize,
-    channel: C,
-}
-
-impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
-
-    /// Connect a client to a attribute server
-    ///
-    /// This performs the initial setup between the client and the server required for establishing
-    /// the attribute protocol. An optional input is used to determine the maximum size of each
-    /// attribute packet. If maximum_transfer_unit is `None` the the minimum MTU is used.
-    ///
-    /// The bluetooth connection must already be established
-    pub fn connect<Mtu>( channel: C, maximum_transfer_unit: Mtu )
-    -> impl Future<Output=Result<Self, super::Error>>
-    where Mtu: Into<Option<u16>>
+    fn process_raw_data<P>(
+        expected_response: super::server::ServerPduName,
+        bytes: &[u8]
+    ) -> Result<P, super::Error>
+    where P: TransferFormat
     {
-        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {C::DEFAULT_ATT_MTU};
+        use core::convert::TryFrom;
+        use super::server::ServerPduName;
+        
+        if expected_response.is_convertible_from(bytes) {
+            match TransferFormat::from(&bytes) {
+                Ok(pdu) => Ok(pdu),
+                Err(e) => Err(e.into()),
+            }
+        } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
+            type ErrPdu = pdu::Pdu<pdu::ErrorAttributeParameter>;
 
-        MtuFuture {
-            mtu_size: mtu,
-            mtu_pdu: Some(pdu::exchange_mtu_request(mtu)),
-            channel: Some(channel),
+            let err_pdu: Result<ErrPdu, _> = TransferFormat::from(&bytes);
+
+            match err_pdu {
+                Ok(err_pdu) => Err(err_pdu.into()),
+                Err(e) => Err(e.into()),
+            }
+        } else {
+            match ServerPduName::try_from(bytes[0]) {
+                Ok(_) => Err(super::Error::UnexpectedPdu(bytes[0])),
+                Err(_) => Err(
+                    TransferFormatError::from(
+                        format!("Received Unknown PDU '{:#x}', \
+                            expected '{} ({:#x})'",
+                            bytes[0],
+                            expected_response,
+                            Into::<u8>::into(expected_response))
+                    ).into()
+                ),
+            }
+        }
+    }
+
+    fn send<P>(&self, pdu: &pdu::Pdu<P>) -> Result<(), super::Error> where P: TransferFormat {
+        let payload = TransferFormat::into(pdu);
+
+        if payload.len() > self.mtu {
+            Err( super::Error::MtuExceeded )
+        } else {
+            self.channel.send(l2cap::AclData::new(payload.to_vec(), super::L2CAP_CHANNEL_ID));
+            Ok(())
         }
     }
 
@@ -354,77 +267,37 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
     /// to try to change the mtu, then this will resend the exchange mtu request PDU to the server.
     ///
     /// The new MTU is returned by the future
-    pub fn exchange_mtu_request<'a>(&'a mut self, mtu: u16 )
-    -> impl Future<Output=Result< u16, super::Error>> + 'a
+    pub fn exchange_mtu_request(&'c mut self, mtu: u16 )
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error> + 'c, ()>, super::Error>
     {
-        let data = TransferFormat::into( &pdu::exchange_mtu_request(mtu) );
+        if C::DEFAULT_ATT_MTU > mtu {
+            Err(super::Error::TooSmallMtu)
+        } else {
+            self.send(&pdu::exchange_mtu_request(mtu))?;
 
-        struct MtuResponse<'a, Channel> where Channel: l2cap::ConnectionChannel {
-            wanted_mtu: u16,
-            current_mtu: &'a mut usize,
-            rf: ResponseFuture<'a, Channel, u16>,
-        }
+            Ok( ResponseProcessor(move |data| {
+                let pdu: pdu::Pdu<u16> = Self::process_raw_data(super::server::ServerPduName::ExchangeMTUResponse, data)?;
 
-        impl<Channel> Future for MtuResponse<'_, Channel>
-        where Channel: l2cap::ConnectionChannel
-        {
-            type Output = Result<u16, super::Error>;
+                self.mtu = core::cmp::min(mtu, pdu.into_parameters()).into();
 
-            fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-
-                // Return an error if the mtu is too small
-                if Channel::DEFAULT_ATT_MTU > self.wanted_mtu {
-                    return Poll::Ready( Err(super::Error::TooSmallMtu) )
-                }
-
-                let this = self.get_mut();
-
-                match Pin::new(&mut this.rf).poll(cx) {
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(pdu_rslt) => {
-                        match pdu_rslt {
-                            Ok(pdu) => {
-                                *this.current_mtu = core::cmp::min(
-                                    this.wanted_mtu,
-                                    *pdu.get_parameters()
-                                ).into();
-
-                                Poll::Ready( Ok(*pdu.get_parameters()) )
-                            }
-                            Err(err) => Poll::Ready (Err(err) )
-                        }
-                    }
-                }
-            }
-        }
-
-        MtuResponse {
-            wanted_mtu: mtu,
-            current_mtu: &mut self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(data),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ExchangeMTUResponse,
-                pd: core::marker::PhantomData,
-            },
+                Ok(())
+            }) )
         }
     }
 
-    pub fn find_information_request<'a, R>(&'a self, handle_range: R)
-    -> impl Future<Output=Result<pdu::FormattedHandlesWithType, super::Error>> + 'a
+    pub fn find_information_request<R>(&self, handle_range: R)
+    -> Result<
+        ResponseProcessor<
+            impl FnOnce(&[u8]) -> Result<pdu::FormattedHandlesWithType, super::Error>,
+            pdu::FormattedHandlesWithType
+        >,
+        super::Error
+    >
     where R: Into<pdu::HandleRange>
     {
-        let pdu = pdu::find_information_request(handle_range);
+        self.send(&pdu::find_information_request(handle_range))?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::FindInformationResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok( ResponseProcessor( |data| Self::process_raw_data(ServerPduName::FindInformationResponse, data)) )
     }
 
     /// Find by type and value request
@@ -432,181 +305,126 @@ impl<C> Client<C> where C: l2cap::ConnectionChannel + Unpin {
     /// The attribute type, labeled as the input `uuid`, is a 16 bit assigned number type. If the
     /// type cannot be converted into a 16 bit UUID, then this function will return an error
     /// containing the incorrect type.
-    pub fn find_by_type_value_request<'a, R, D>(&'a self, handle_range: R, uuid: crate::UUID, value: D)
-    -> Result<impl Future<Output=Result<pdu::TypeValueRequest<D>, super::Error>> + 'a , crate::UUID>
+    pub fn find_by_type_value_request<R, D>(&self, handle_range: R, uuid: crate::UUID, value: D)
+    -> Result< ResponseProcessor<
+            impl FnOnce(&[u8]) -> Result<pdu::TypeValueRequest<D>, super::Error>,
+            pdu::TypeValueRequest<D>
+        >,
+        super::Error>
     where R: Into<pdu::HandleRange>,
-          D: TransferFormat + Unpin + 'a,
+          D: TransferFormat ,
     {
         let pdu_rslt = pdu::find_by_type_value_request(handle_range, uuid, value);
 
         match pdu_rslt {
-            Ok(pdu) => Ok (
-                ReturnedResponse  {
-                    mtu: self.mtu,
-                    rf: ResponseFuture {
-                        send_data: Some(TransferFormat::into(&pdu)),
-                        channel: &self.channel,
-                        exp_resp: super::server::ServerPduName::FindByTypeValueResponse,
-                        pd: core::marker::PhantomData,
-                    }
-                }
-            ),
-            Err(_) => Err( uuid )
+            Ok(pdu) => {
+                self.send(&pdu)?;
+
+                Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::FindByTypeValueResponse, d)))
+            },
+            Err(_) => Err( super::Error::Other("Cannot convert UUID to a 16 bit short version") )
         }
     }
 
-    pub fn read_by_type_request<'a, R>(&'a self, handle_range: R, attr_type: crate::UUID)
-    -> impl Future<Output=Result<pdu::TypeRequest, super::Error>> + 'a
+    pub fn read_by_type_request<R>(&self, handle_range: R, attr_type: crate::UUID)
+    -> Result< ResponseProcessor<
+            impl FnOnce(&[u8]) -> Result<pdu::TypeRequest, super::Error>,
+            pdu::TypeRequest
+        >,
+        super::Error
+    >
     where R: Into<pdu::HandleRange>
     {
-        let pdu = pdu::read_by_type_request(handle_range, attr_type);
+        self.send(&pdu::read_by_type_request(handle_range, attr_type))?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ReadByTypeResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByTypeResponse, d)))
     }
 
-    pub fn read_request<'a,D>(&'a self, handle: u16 )
-    -> impl Future<Output=Result<D, super::Error>> + 'a
-    where D: TransferFormat + Unpin + 'a
+    pub fn read_request<D>(&self, handle: u16 )
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
+    where D: TransferFormat 
     {
-        let pdu = pdu::read_request(handle);
+        self.send(&pdu::read_request(handle))?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ReadResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
-
+        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadResponse, d)))
     }
 
-    pub fn read_blob_request<'a,D>(&'a self, handle: u16, offset: u16)
-    -> impl Future<Output=Result<D, super::Error>> + 'a
-    where D: TransferFormat + Unpin + 'a
+    pub fn read_blob_request<D>(&self, handle: u16, offset: u16)
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
+    where D: TransferFormat 
     {
-        let pdu = pdu::read_blob_request(handle, offset);
+        self.send( &pdu::read_blob_request(handle, offset) )?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ReadBlobResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadBlobResponse, d)))
     }
 
     /// Read multiple handles
     ///
     /// If handles has length of 0 an error is returned
-    pub fn read_multiple_request<'a>(&'a self, handles: Box<[u16]> )
-    -> Result< impl Future<Output=Result<Box<[Box<dyn TransferFormat>]>, super::Error>> + 'a, ()>
+    pub fn read_multiple_request(&self, handles: Box<[u16]> )
+    -> Result<
+        ResponseProcessor<
+            impl FnOnce(&[u8]) -> Result<Box<[Box<dyn TransferFormat>]>, super::Error>,
+            Box<[Box<dyn TransferFormat>]>
+        >,
+        super::Error
+    >
     {
-        let pdu = pdu::read_multiple_request( handles )?;
+        self.send( &pdu::read_multiple_request( handles )? )?;
 
-        Ok( ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ReadMultipleResponse,
-                pd: core::marker::PhantomData,
-            }
-        } )
+        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)))
     }
 
-    pub fn read_by_group_type_request<'a,R,D>(&'a self, handle_range: R, group_type: crate::UUID)
-    -> impl Future<Output = Result<pdu::ReadByGroupTypeResponse<D>, super::Error>> + 'a
+    pub fn read_by_group_type_request<R,D>(&self, handle_range: R, group_type: crate::UUID)
+    -> Result< ResponseProcessor<
+            impl FnOnce(&[u8]) -> Result<pdu::ReadByGroupTypeResponse<D>, super::Error>,
+            pdu::ReadByGroupTypeResponse<D>
+        >,
+        super::Error
+    >
     where R: Into<pdu::HandleRange>,
-          D: TransferFormat + TransferFormatSize + Unpin + 'a
+          D: TransferFormat + TransferFormatSize
     {
-        let pdu = pdu::read_by_group_type_request(handle_range, group_type);
+        self.send( &pdu::read_by_group_type_request(handle_range, group_type) )?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ReadByGroupTypeResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)) )
     }
 
-    pub fn write_request<'a,D>(&'a self, handle: u16, data: D)
-    -> impl Future<Output = Result<(), super::Error>> + 'a
+    pub fn write_request<D>(&self, handle: u16, data: D)
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error>, ()>, super::Error>
     where D: TransferFormat
     {
-        let pdu = pdu::write_request(handle, data);
+        self.send( &pdu::write_request(handle, data) )?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::WriteResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::WriteResponse, d)) )
     }
 
     pub fn write_command<D>(&self, handle: u16, data: D) -> Result<(), super::Error>
     where D: TransferFormat
     {
-        let pdu = pdu::write_command(handle, data);
-
-        let data = TransferFormat::into(&pdu);
-
-        if self.mtu > data.len() {
-            self.channel.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
-            Ok(())
-        } else {
-            Err(super::Error::MtuExceeded)
-        }
+        self.send( &pdu::write_command(handle, data) )
     }
 
-    pub fn prepare_write_request<'a, D>(&'a self, handle: u16, offset: u16, data: D)
-    -> impl Future<Output=Result<pdu::PrepareWriteRequest<D>, super::Error>> + 'a
-    where D: TransferFormat + Unpin + 'a
+    pub fn prepare_write_request<D>(&self, handle: u16, offset: u16, data: D)
+    -> Result< ResponseProcessor<impl FnOnce(&[u8]) -> Result<
+            pdu::PrepareWriteRequest<D>, super::Error>,
+            pdu::PrepareWriteRequest<D>
+        >,
+        super::Error
+    >
+    where D: TransferFormat
     {
-        let pdu = pdu::prepare_write_request(handle, offset, data);
+        self.send(&pdu::prepare_write_request(handle, offset, data))?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::PrepareWriteResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)) )
     }
 
-    pub fn execute_write_request<'a>(&'a self, execute: bool )
-    -> impl Future<Output=Result<u8, super::Error>> + 'a
+    pub fn execute_write_request(&self, execute: bool )
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<u8, super::Error>, u8>, super::Error>
     {
-        let pdu = pdu::execute_write_request(execute);
+        self.send(&pdu::execute_write_request(execute))?;
 
-        ReturnedResponse {
-            mtu: self.mtu,
-            rf: ResponseFuture {
-                send_data: Some(TransferFormat::into(&pdu)),
-                channel: &self.channel,
-                exp_resp: super::server::ServerPduName::ExecuteWriteResponse,
-                pd: core::marker::PhantomData,
-            }
-        }
+        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ExecuteWriteResponse, d)) )
     }
 
     /// Send a custom command to the server

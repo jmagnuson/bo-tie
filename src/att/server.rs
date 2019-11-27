@@ -126,7 +126,7 @@ impl ServerPduName {
     /// This will loosly check that the size of the pdu is correct and that the opcode value
     /// matches this response. The size of the packet will only be checked for the minimum possible
     /// size and not the maximum allowable size by the connection's ATT_MTU.
-    pub(super) fn is_convertable_from( &self, raw_pdu: &[u8] ) -> bool {
+    pub(super) fn is_convertible_from(&self, raw_pdu: &[u8] ) -> bool {
 
         // Each of these check that the size of the packet is correct and the opcode matches
         match self {
