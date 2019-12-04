@@ -322,85 +322,94 @@ where C: ConnectionChannel
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
 
+        // The size of the L2CAP data header
         const HEADER_SIZE:usize = 4;
 
         use core::task::Poll;
 
         let this = self.get_mut();
 
-        match this.cc.receive(cx.waker()).and_then( |fragments| {
+        loop {
+            if let Some(ret) = match this.cc.receive(cx.waker()) {
+                None => return Poll::Pending,
+                Some(fragments) => {
+                    match fragments.into_iter().try_for_each( |mut f| {
+        
+                        // Continue if f is just an empty fragment, there is nothing to do
+                        if f.data.len() == 0 { return Ok(()) }
+        
+                        if this.carryover_fragments.is_empty()
+                        {
+                            match f.get_acl_len() {
+                                Some(l) if (l + HEADER_SIZE) <= f.data.len()  => {
+                                    match AclData::from_raw_data(&f.data) {
+                                        Ok(data) => this.full_acl_data.push(data),
+                                        Err(e) => return Err(e)
+                                    }
+                                },
+                                len @ Some(_) => {
+                                    this.carryover_fragments.append(&mut f.data);
+                                    this.length = len;
+                                },
+                                None => {
+                                    this.carryover_fragments.append(&mut f.data);
+                                },
+                            }
+                        } else {
+                            this.carryover_fragments.append(&mut f.data);
+        
+                            let acl_len = match this.length {
+                                None => {
+                                    // There will always be at least 2 items to take because a starting
+                                    // fragment and a proceeding fragment have been received and empty
+                                    // fragments are not added to `self.carryover_fragments`.
+                                    let len_bytes = this.carryover_fragments.iter()
+                                        .take(2)
+                                        .enumerate()
+                                        .fold([0u8;2], |mut a, (i, &v)| { a[i] = v; a });
+        
+                                    let len = <u16>::from_le_bytes(len_bytes) as usize;
+        
+                                    this.length = Some(len);
+        
+                                    len
+                                },
+                                Some(len) => len,
+                            };
+        
+                            if (acl_len + HEADER_SIZE) <= this.carryover_fragments.len() {
+                                match AclData::from_raw_data(&this.carryover_fragments) {
+                                    Ok(data) => {
+                                        this.full_acl_data.push(data);
+                                        this.carryover_fragments.clear();
+                                    },
+                                    Err(e) => return Err(e)
+                                }
+                            }
+                        }
+        
+                        Ok(())
+                    }) {
+                        // Body of match statement
 
-            match fragments.into_iter().try_for_each( |mut f| {
-
-                // Continue if f is just an empty fragment, there is nothing to do
-                if f.data.len() == 0 { return Ok(()) }
-
-                if this.carryover_fragments.is_empty()
-                {
-                    match f.get_acl_len() {
-                        Some(l) if l <= (f.data.len() - HEADER_SIZE) => {
-                            match AclData::from_raw_data(&this.carryover_fragments) {
-                                Ok(data) => this.full_acl_data.push(data),
-                                Err(e) => return Err(e)
+                        Ok(_) => {
+                            if this.carryover_fragments.is_empty() &&
+                                !this.full_acl_data.is_empty()
+                            {
+                                Some( Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())) )
+                            } else {
+                                None
                             }
                         },
-                        len @ Some(_) => {
-                            this.carryover_fragments.append(&mut f.data);
-                            this.length = len;
-                        },
-                        None => {
-                            this.carryover_fragments.append(&mut f.data);
-                        },
-                    }
-                } else {
-                    this.carryover_fragments.append(&mut f.data);
-
-                    let acl_len = match this.length {
-                        None => {
-                            // There will always be at least 2 items to take because a starting
-                            // fragment and a proceeding fragment have been received and empty
-                            // fragments are not added to `self.carryover_fragments`.
-                            let len_bytes = this.carryover_fragments.iter()
-                                .take(2)
-                                .enumerate()
-                                .fold([0u8; 2], |mut a, (i, &v)| { a[i] = v; a });
-
-                            let len = <u16>::from_le_bytes(len_bytes) as usize;
-
-                            this.length = Some(len);
-
-                            len
-                        },
-                        Some(len) => len,
-                    };
-
-                    if (acl_len + HEADER_SIZE) <= this.carryover_fragments.len() {
-                        match AclData::from_raw_data(&this.carryover_fragments) {
-                            Ok(data) => {
-                                this.full_acl_data.push(data);
-                                this.carryover_fragments.clear();
-                            },
-                            Err(e) => return Err(e)
-                        }
+                        Err(e) => Some( Err(e) )
                     }
                 }
+            } { 
+                // Body of "if Some(ret) = ... "
+                return Poll::Ready(ret);
 
-                Ok(())
-            }) {
-                Ok(_) => {
-                    if this.carryover_fragments.is_empty() &&
-                        !this.full_acl_data.is_empty()
-                    {
-                        Some( Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())) )
-                    } else {
-                        None
-                    }
-                },
-                Err(e) => Some( Err(e) )
+                // Loop continues if None is returned by match statement
             }
-        }) {
-            Some(ret) => Poll::Ready(ret),
-            None => Poll::Pending,
         }
     }
 }

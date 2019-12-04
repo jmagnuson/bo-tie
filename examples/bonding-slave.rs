@@ -68,7 +68,6 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
             use bo_tie::hci::events::{EventsData,LEMetaData};
 
             if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
-
                 Ok(event_data)
             }
             else {
@@ -133,7 +132,7 @@ where C: bo_tie::l2cap::ConnectionChannel
     loop {
         futures::executor::block_on(
             async {
-                let acl_data_vec = connection_channel.future_receiver().await;
+                let acl_data_vec = connection_channel.future_receiver().await.unwrap();
     
                 for acl_data in acl_data_vec {
                     match acl_data.get_channel_id() {
@@ -216,7 +215,7 @@ fn main() {
     use futures::executor;
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 
-    let local_name = "Connection Test";
+    let local_name = "Bonding Test";
 
     TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
@@ -225,6 +224,10 @@ fn main() {
     let interface = Arc::new(hci::HostInterface::default());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
+    
+    let this_address = executor::block_on(
+        bo_tie::hci::le::mandatory::read_bd_addr::send(&interface)
+    ).unwrap();
 
     executor::block_on(advertise_setup(&interface, local_name));
 
@@ -241,9 +244,6 @@ fn main() {
 
             let master_address_type = event_data.peer_address_type.clone();
 
-            let this_address = executor::block_on(
-                bo_tie::hci::le::mandatory::read_bd_addr::send(&interface)
-            ).unwrap();
 
             std::thread::spawn( move || {
 

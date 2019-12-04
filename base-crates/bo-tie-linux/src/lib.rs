@@ -284,9 +284,11 @@ impl AdapterThread {
                                         only receive ACL, Syncronous, or Event Data from a controller")
                                 },
                                 CtrlMsgType::Event => {
+                                    log::trace!("Processing received HCI data, type:'Event'");
                                     self.event_processor.process(&buffer[1..len])
                                 },
                                 CtrlMsgType::ACLData => {
+                                    log::trace!("Processing received HCI data, type:'ACL DATA'");
                                     match HciAclData::from_packet(&buffer[1..len]) {
                                         Ok(hci_acl_data) => self.hci_data_recv.add_received(hci_acl_data),
                                         Err(e) => log::error!("Failed to process hci acl packet: {}", e),
@@ -294,6 +296,8 @@ impl AdapterThread {
                                 },
                                 CtrlMsgType::SyncData => { log::error!("SCO data unimplemented")},
                             }
+
+                            std::thread::yield_now();
                         } else {
                             log::warn!("Received unknown packet indicator type '{:#x}", buffer[0])
                         }
