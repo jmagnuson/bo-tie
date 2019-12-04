@@ -246,7 +246,16 @@ where C: ConnectionChannel,
 
     fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<bool, Error> {
 
-        let request = pairing::PairingRequest::try_from_icd(data)?;
+        log::trace!("(SM) Processing pairing request");
+
+        let request = match pairing::PairingRequest::try_from_icd(data) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+            }
+        };
 
         if request.get_max_encryption_size() < self.encryption_key_size_min {
             self.send_err(pairing::PairingFailedReason::EncryptionKeySize);
@@ -305,7 +314,16 @@ where C: ConnectionChannel,
 
     fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<bool, Error> {
 
-        let initiator_pub_key = pairing::PairingPubKey::try_from_icd(data)?;
+        log::trace!("(SM) Processing pairing public Key");
+
+        let initiator_pub_key = match pairing::PairingPubKey::try_from_icd(data) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+            }
+        };
 
         if let Some(mut pairing_data) = self.pairing_data.take() {
 
@@ -337,7 +355,7 @@ where C: ConnectionChannel,
                 None => {
                     // Generating the dh key failed
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-                   Err(Error::IncorrectValue)
+                    Err(Error::IncorrectValue)
                 }
             }
 
@@ -350,45 +368,63 @@ where C: ConnectionChannel,
 
     fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
-            let initiator_confirm = pairing::PairingConfirm::try_from_icd(payload)?;
+        log::trace!("(SM) Processing pairing confirm");
 
-            match self.pairing_data.as_ref() {
-                Some( PairingData{
-                    key_gen_method: KeyGenerationMethod::JustWorks,
-                    temp_public_key: this_pk,
-                    remote_pub_temp_key: Some( initiator_pk ),
-                    nonce,
-                    ..
-                }) |
-                Some( PairingData{
-                    key_gen_method: KeyGenerationMethod::NumbComp,
-                    temp_public_key: this_pk,
-                    remote_pub_temp_key: Some( initiator_pk ),
-                    nonce,
-                    ..
-                }) => /* Legacy Just Works or LE Secure Connection Number Comparison */
-                {
-                    let confirm_value = toolbox::f4(this_pk.x(), initiator_pk.x(), *nonce, 0);
+        let initiator_confirm = match pairing::PairingConfirm::try_from_icd(payload) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                    self.send(pairing::PairingConfirm::new(confirm_value));
-
-                    Ok(false)
-                },
-                // The pairing methods OOB and Passkey are not supported yet
-                //
-                // This is normally here for catching when the protocol is issued this command out
-                // of order
-                _ => {
-                    self.send_err(pairing::PairingFailedReason::PairingNotSupported);
-
-                    Err(Error::UnsupportedFeature)
-                },
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
             }
+        };
+
+        match self.pairing_data.as_ref() {
+            Some( PairingData{
+                key_gen_method: KeyGenerationMethod::JustWorks,
+                temp_public_key: this_pk,
+                remote_pub_temp_key: Some( initiator_pk ),
+                nonce,
+                ..
+            }) |
+            Some( PairingData{
+                key_gen_method: KeyGenerationMethod::NumbComp,
+                temp_public_key: this_pk,
+                remote_pub_temp_key: Some( initiator_pk ),
+                nonce,
+                ..
+            }) => /* Legacy Just Works or LE Secure Connection Number Comparison */
+            {
+                let confirm_value = toolbox::f4(this_pk.x(), initiator_pk.x(), *nonce, 0);
+
+                self.send(pairing::PairingConfirm::new(confirm_value));
+
+                Ok(false)
+            },
+            // The pairing methods OOB and Passkey are not supported yet
+            //
+            // This is normally here for catching when the protocol is issued this command out
+            // of order
+            _ => {
+                self.send_err(pairing::PairingFailedReason::PairingNotSupported);
+
+                Err(Error::UnsupportedFeature)
+            },
+        }
     }
 
     fn p_pairing_random(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
-        let initiator_random = pairing::PairingRandom::try_from_icd(payload)?;
+        log::trace!("(SM) Processing pairing random");
+
+        let initiator_random = match pairing::PairingRandom::try_from_icd(payload) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+            }
+        };
 
         if self.pairing_data.is_some() {
 
@@ -406,7 +442,16 @@ where C: ConnectionChannel,
     }
 
     fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<bool, Error> {
-        let initiator_fail = pairing::PairingFailed::try_from_icd(payload)?;
+        log::trace!("(SM) Processing pairing failed");
+
+        let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+            }
+        };
 
         self.pairing_data = None;
 
@@ -415,7 +460,16 @@ where C: ConnectionChannel,
 
     fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<bool, Error> {
 
-        let initiator_dh_key_check = pairing::PairingDHKeyCheck::try_from_icd(payload)?;
+        log::trace!("(SM) Processing pairing dh key check");
+
+        let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
+            Ok(request) => request,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+            }
+        };
 
         match self.pairing_data {
             Some( PairingData {

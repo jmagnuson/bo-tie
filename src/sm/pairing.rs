@@ -171,6 +171,8 @@ impl CommandData for PairingRequest {
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
             })
         } else {
+            log::error!("(SM) Failed to generate 'pairing request' from raw data");
+            log::trace!("Failed raw data: '{:x?}'", icd);
             Err( Error::Size )
         }
     }
@@ -273,6 +275,8 @@ impl CommandData for PairingResponse {
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
             })
         } else {
+            log::error!("(SM) Failed to generate 'pairing response' from raw data");
+            log::trace!("Failed raw data: '{:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -376,6 +380,8 @@ impl CommandData for PairingConfirm {
                 value: <u128>::from_le_bytes(v)
             })
         } else {
+            log::error!("(SM) Failed to generate 'pairing confirm' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -415,6 +421,8 @@ impl CommandData for PairingRandom {
                 value: <u128>::from_le_bytes(v)
             })
         } else {
+            log::error!("(SM) Failed to generate 'pairing random' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -511,6 +519,8 @@ impl CommandData for PairingFailed {
                 reason: PairingFailedReason::try_from_val(icd[0])?
             })
         } else {
+            log::error!("(SM) Failed to generate 'pairing failed' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -552,6 +562,8 @@ impl CommandData for PairingPubKey {
             Ok( PairingPubKey { x_y })
 
         } else {
+            log::error!("(SM) Failed to generate 'pairing public key' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -591,6 +603,8 @@ impl CommandData for PairingDHKeyCheck {
 
             Ok( PairingDHKeyCheck { check: <u128>::from_le_bytes(arr) } )
         } else {
+            log::error!("(SM) Failed to generate 'pairing Diffie-Hellman Key check' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
@@ -630,6 +644,8 @@ impl CommandData for KeyPressNotification {
         if icd.len() == 1 {
             Ok( Self::try_from_val(icd[0])? )
         } else {
+            log::error!("(SM) Failed to generate 'Key Press Notification' from raw data");
+            log::trace!("(SM) Failed raw data: {:x?}", icd);
             Err( Error::Size )
         }
     }
