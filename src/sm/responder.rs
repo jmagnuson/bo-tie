@@ -321,7 +321,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(e)
             }
         };
 
@@ -375,7 +375,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(e)
             }
         };
 
@@ -422,7 +422,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(e)
             }
         };
 
@@ -449,7 +449,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(e)
             }
         };
 
@@ -467,7 +467,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(e)
             }
         };
 
