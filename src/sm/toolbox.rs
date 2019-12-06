@@ -485,24 +485,40 @@ pub fn ec() -> Result<([u8;32], [u8;64]), impl core::fmt::Debug> {
     Ok( (private_key.serialize(), raw_public_key) )
 }
 
-/// Calculate the Diffie-Hellman key from the provided public key
+/// Calculate the elliptic curve Diffie-Hellman key from the provided public key
+///
+/// Both the secret key and public key are uncompressed. The public key is also just
+/// the x and y coordinate, there is not octet to indicate if it is compressed/uncompressed.
+///
+/// The `remote_public_key` needs to be in the byte order as shown in the Security Manager's 
+/// 'Pairing Public Key' PDU.
 pub fn ecdh(this_secret_key: &[u8;32], remote_public_key: &[u8;64])
 -> Result<[u8;32], impl core::fmt::Debug>
 {
-    use secp256k1::{SecretKey, PublicKey, SharedSecret};
+    use openssl::bn::BigNumContext;
+    use openssl::nid::Nid;
+    use openssl::ec::*;
 
-    let secret_key = SecretKey::parse(this_secret_key).unwrap();
+    let mut octet_string: [u8;65] = [0u8; 65];
+    
+    // the value to specify uncompressed public key
+    octet_string[0] = 0x04; 
 
-    let public_key = match PublicKey::parse_slice(remote_public_key, None) {
-        Ok(pk) => pk,
-        Err(e) => return Err(e),
-    };
+    octet_string[1..].copy_from_slice(&remote_public_key);
 
-    let mut shared_secret_key = [0u8;32];
+    // Reverse x and y so that they're converted from little endian to big endian
+    octet_string[1..33].reverse();
+    octet_string[33.. ].reverse();
 
-    shared_secret_key.copy_from_slice(SharedSecret::new(&public_key, &secret_key)?.as_ref());
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("bad group");
 
-    Ok(shared_secret_key)
+    let mut pub_ctx = BigNumContext::new().unwrap();
+    let pub_point = EcPoint::from_bytes(&group, &public_key, &mut ctx).expect("failed to make ec point");
+    let pub_key = EcKey::from_public_key(&group, &point).expect("failed to create public key");
+
+    let mut pri_ctx = BigNumContext::new().unwrap();
+    let pri_point = EcPoint::from_bytes(&group, &
+    
 }
 
 /// Generate a random u128 value

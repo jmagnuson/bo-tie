@@ -332,28 +332,35 @@ where C: ConnectionChannel,
 
             let remote_public_key = initiator_pub_key.get_key();
 
+            log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
+
             // Calculate the shared secret key
             let secret_key = toolbox::ecdh(&pairing_data.temp_private_key, &remote_public_key);
 
             pairing_data.remote_pub_temp_key = Some(remote_public_key);
 
-            match secret_key.ok() {
-                sk @ Some(_) => {
+            match secret_key.map(|sk| {
+                let mut k = [0u8; 32];
 
-                    pairing_data.dh_key = sk.map(|sk| {
-                        let mut k = [0u8; 32];
+                k.copy_from_slice(sk.as_ref());
 
-                        k.copy_from_slice(sk.as_ref());
+                pairing_data.dh_key = Some(sk);
 
-                        k
-                    });
+                k
+            }) {
+                Ok(key) => {
 
-                    self.pairing_data = pairing_data.into();
+                    pairing_data.dh_key = Some(key);
+
+                    self.pairing_data = Some(pairing_data);
 
                     Ok(false)
                 },
-                None => {
+                Err(e) => {
                     // Generating the dh key failed
+
+                    log::debug!("(SM) Secret Key failed, '{:?}'", e);
+
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
                     Err(Error::IncorrectValue)
                 }
