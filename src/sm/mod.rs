@@ -25,7 +25,7 @@
 //! # Note
 //! This module uses the following crates for parts of the encryption process.
 //! * ['aes'](https://crates.io/crates/aes)
-//! * ['libsecp256k1'](https://crates.io/crates/libsecp256k1)
+//! * ['openssl'](https://crates.io/crates/openssl)
 //!
 //! The assumption was made that these crates are adequate for their required usage within this
 //! module, but no formal process was used to validate them for use with this library.

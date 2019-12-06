@@ -16,14 +16,92 @@
 //!
 //! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
 
+/// The OpenSSL identifier for NIST P-256
+///
+/// This uses the ANSI x9.62 format
+const ECC_NAME: openssl::nid::Nid = openssl::nid::X9_62_PRIME256V1;
+
+/// The identifier for an uncompressed public key
+const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
+
+/// Index of the public key type identifier
+const PUB_KEY_TYPE_INDEX: usize = 1;
+
+const PUB_KEY_BYTE_LEN: usize = 65;
+
+/// The Range of the public key
+const PUB_KEY_RANGE: core::ops::RangeFrom<usize> = 1..;
+
+/// The range in the public key bytes of the x part of the coordinate
+const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
+
+/// The range in the public key bytes of the y part of the coordinate
+const PUB_KEY_Y_RANGE: core::ops::Range<usize> = 33..65;
+
+/// The public key type
+pub(super) type PubKey = openssl::pkey::Pkey<openssl::pkey::Public>;
+
+/// The private key type
+pub(super) type PriKey = openssl::pkey::Pkey<openssl::pkey::Private>;
+
+/// The Diffie-Hellman shared secret
+pub(super) type DHSecret = Vec<u8>;
+
+impl super::CommandData for PubKey {
+    fn into_icd(self) -> alloc::vec::Vec<u8> {
+        use alloc::vec::Vec;
+
+        let ec_key = self.ec_key().expect("Expected elliptic curve public key");
+
+        let mut pub_key = ec_key.public_key().to_bytes(
+            &openssl::ec::EcGroup::from_curve_name(ECC_NAME),
+            openssl::ec::PointConversionForm::UNCOMPRESSED,
+            &mut openssl::bn::BigNumContext::new().unwrap()
+        ).unwrap();
+
+        // Reverse the keys so that they are in little endian order
+        pub_key[PUB_KEY_X_RANGE].reverse();
+        pub_key[PUB_KEY_Y_RANGE].reverse();
+
+        // Return only the uncompressed key without the identifier for the key
+        pub_key[PUB_KEY_RANGE].to_vec()
+    }
+
+    fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
+        use alloc::vec::Vec;
+
+        let group = EcGroup::from_curve_name(ECC_NAME).unwrap();
+        let mut ctx = BigNumContext::new().unwrap();
+
+        let mut pub_key = Vec::with_capacity(PUB_KEY_BYTE_LEN);
+
+        pub_key.push(UNCOMPRESSED_PUB_KEY_ID);
+
+        pub_key.extend_from_slice(icd);
+
+        // Reverse the keys from little endian to big endian
+        pub_key[PUB_KEY_X_RANGE].reverse();
+        pub_key[PUB_KEY_Y_RANGE].reverse();
+
+        pub_key[PUB_KEY_TYPE_INDEX] = UNCOMPRESSED_PUB_KEY_TYPE;
+
+        let point = EcPoint::from_bytes(&group, &public_key, &mut ctx)
+            .or(Err(super::Error::IncorrectValue))?;
+
+        let key = EcKey::from_public_key(&group, &point)
+            .or(Err(super::Error::IncorrectValue))?;
+
+    }
+}
+
 /// 24-bit hash function
 ///
 /// Used in random address creation and resolution.
 pub fn ah(k: u128, r: [u8;3]) -> [u8; 3]{
     let r_padded =
         <u128>::from( r[0] ) |
-            <u128>::from( r[1] ) << (1 * 8) |
-            <u128>::from (r[2] ) << (2 * 8);
+            <u128>::from(r[1]) << (1 * 8) |
+            <u128>::from(r[2]) << (2 * 8);
 
     let cypher_text = e(k,r_padded ) ;
 
@@ -459,10 +537,7 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 /// Generate the (private, public) key pair for the elliptic curve
 ///
 /// This will return an error if the random number generation failed.
-///
-/// # Note
-/// Both the public key and private key are in little endian
-pub fn ec() -> Result<([u8;32], [u8;64]), impl core::fmt::Debug> {
+pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 
     use rand_core::{RngCore, OsRng};
     use secp256k1::{SecretKey, PublicKey};
@@ -485,40 +560,41 @@ pub fn ec() -> Result<([u8;32], [u8;64]), impl core::fmt::Debug> {
     Ok( (private_key.serialize(), raw_public_key) )
 }
 
-/// Calculate the elliptic curve Diffie-Hellman key from the provided public key
+/// Calculate the elliptic curve Diffie-Hellman shared secret from the provided public key
 ///
 /// Both the secret key and public key are uncompressed. The public key is also just
 /// the x and y coordinate, there is not octet to indicate if it is compressed/uncompressed.
 ///
-/// The `remote_public_key` needs to be in the byte order as shown in the Security Manager's 
+/// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_secret_key: &[u8;32], remote_public_key: &[u8;64])
--> Result<[u8;32], impl core::fmt::Debug>
+pub fn ecdh(this_secret_key: &PriKey, raw_remote_public_key: &[u8;64]) -> Result<DHSecret, impl core::fmt::Debug>
 {
-    use openssl::bn::BigNumContext;
-    use openssl::nid::Nid;
-    use openssl::ec::*;
+    use openssl::derive::Deriver;
 
-    let mut octet_string: [u8;65] = [0u8; 65];
-    
+    let octet_string = [0u8;65];
+
     // the value to specify uncompressed public key
-    octet_string[0] = 0x04; 
+    octet_string[PUB_KEY_TYPE_INDEX] = UNCOMPRESSED_PUB_KEY_TYPE;
 
-    octet_string[1..].copy_from_slice(&remote_public_key);
+    octet_string[PUB_KEY_RANGE].copy_from_slice(&raw_remote_public_key);
 
     // Reverse x and y so that they're converted from little endian to big endian
-    octet_string[1..33].reverse();
-    octet_string[33.. ].reverse();
+    octet_string[PUB_KEY_X_RANGE].reverse();
+    octet_string[PUB_KEY_Y_RANGE].reverse();
 
-    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("bad group");
+    let group = EcGroup::from_curve_name(ECC_NAME).expect("bad group");
 
-    let mut pub_ctx = BigNumContext::new().unwrap();
-    let pub_point = EcPoint::from_bytes(&group, &public_key, &mut ctx).expect("failed to make ec point");
+    let pub_point = EcPoint::from_bytes(&group, &octet_string, &mut BigNumContext::new()?)?;
+
     let pub_key = EcKey::from_public_key(&group, &point).expect("failed to create public key");
 
     let mut pri_ctx = BigNumContext::new().unwrap();
-    let pri_point = EcPoint::from_bytes(&group, &
-    
+
+    let mut deriver = Deriver::new(this_secret_key).unwrap();
+
+    deriver.set_peer(remote_public_key);
+
+    deriver.derive_to_vec().unwrap()
 }
 
 /// Generate a random u128 value
@@ -761,5 +837,18 @@ mod tests {
         let y = 0xa6e8e7cc_25a75f6e_216583f7_ff3dc4cf;
 
         assert_eq!( 0x2f9ed5ba, g2(u, v, x, y) );
+    }
+
+    #[test]
+    fn ec_dh_test() {
+        let (pri_key, pub_key) = ecc_gen().expect("Failed to generate pri-pub key");
+
+        let raw_peer_key = [0x20, 0xb0, 0x3, 0xd2, 0xf2, 0x97, 0xbe, 0x2c, 0x5e, 0x2c,
+            0x83, 0xa7, 0xe9, 0xf9, 0xa5, 0xb9, 0xef, 0xf4, 0x91, 0x11, 0xac, 0xf4, 0xfd, 0xdb,
+            0xcc, 0x3, 0x1, 0x48, 0xe, 0x35, 0x9d, 0xe6, 0xdc, 0x80, 0x9c, 0x49, 0x65, 0x2a, 0xeb,
+            0x6d, 0x63, 0x32, 0x9a, 0xbf, 0x5a, 0x52, 0x15, 0x5c, 0x76, 0x63, 0x45, 0xc2, 0x8f,
+            0xed, 0x30, 0x24, 0x74, 0x1c, 0x8e, 0xd0, 0x15, 0x89, 0xd2, 0x8b];
+
+        ecdh(pri_key, &raw_peer_key).expect("Failed to generate secret");
     }
 }
