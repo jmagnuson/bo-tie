@@ -2,7 +2,6 @@ use alloc::{
     boxed::Box,
     vec::Vec,
 };
-use core::future::Future;
 use crate::{ att, l2cap, UUID};
 
 pub mod characteristic;
@@ -437,8 +436,6 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
-        use crate::att::Error;
-
         let type_request: att::pdu::TypeRequest = att::TransferFormat::from(payload)?;
 
         let handle_range = type_request.handle_range;
@@ -601,7 +598,7 @@ mod tests {
         const DEFAULT_ATT_MTU: u16 = core::u16::MAX;
 
         fn send(&self, _: crate::l2cap::AclData) {}
-        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclData>> { None }
+        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
     }
 
     #[test]
@@ -632,6 +629,6 @@ mod tests {
             .include_service(&test_service_1)
             .finish_service();
 
-        server_builder.make_server(DummyConnection, 0xFFu16);
+        server_builder.make_server(&DummyConnection, 0xFFu16);
     }
 }

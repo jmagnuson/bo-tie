@@ -268,7 +268,7 @@ impl From<String> for TransferFormatError {
     ///
     /// The member `pdu_err` will be set to `InvalidPDU`
     fn from(message: String) -> Self {
-        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message: message }
+        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message }
     }
 }
 
@@ -410,20 +410,7 @@ impl TransferFormat for crate::UUID {
 impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize {
 
     fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        let mut chunks = raw.chunks_exact(T::SIZE);
-
-        if chunks.remainder().len() == 0 {
-            Ok( chunks.try_fold( Vec::new(), |mut v,c| {
-                    v.push(TransferFormat::from(&c)?);
-                    Ok(v)
-                })
-                .or_else(|e: TransferFormatError| Err(TransferFormatError::from(
-                    format!("Failed to make boxed slice, {}", e))))?
-                .into_boxed_slice()
-            )
-        } else {
-            Err(TransferFormatError::bad_exact_chunks("{generic}", T::SIZE, raw.len()))
-        }
+        <alloc::vec::Vec<T> as TransferFormat>::from(raw).map(|v| v.into_boxed_slice() )
     }
 
     fn into(&self) -> Box<[u8]> {
@@ -486,6 +473,34 @@ impl TransferFormat for Box<dyn TransferFormat> {
     }
 }
 
+impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
+
+    fn from( raw: &[u8]) -> Result<Self, TransferFormatError> {
+        let mut chunks = raw.chunks_exact(T::SIZE);
+
+        if chunks.remainder().len() == 0 {
+            Ok( chunks.try_fold( Vec::new(), |mut v,c| {
+                v.push(TransferFormat::from(&c)?);
+                Ok(v)
+            })
+                .or_else(|e: TransferFormatError| Err(TransferFormatError::from(
+                    format!("Failed to make boxed slice, {}", e))))?
+            )
+        } else {
+            Err(TransferFormatError::bad_exact_chunks("{generic}", T::SIZE, raw.len()))
+        }
+    }
+
+    fn into(&self) -> Box<[u8]> {
+        self.iter()
+            // todo when return of `into` 
+            .map(|t| TransferFormat::into(t).to_vec() )
+            .flatten()
+            .collect::<Vec<u8>>()
+            .into_boxed_slice()
+    }
+}
+
 impl TransferFormatSize for Box<dyn TransferFormat> {
     /// This is not the actual size, but because the size is unknown this is set to zero
     const SIZE: usize = 0;
@@ -513,15 +528,15 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
     /// This will panic if the handle value hasn't been set yet
     fn get_handle(&self) -> u16 { self.handle.expect("Handle value not set") }
 
-    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat {
-        &self.value
-    }
-
     fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError> {
 
         self.value = TransferFormat::from(raw)?;
 
         Ok(())
+    }
+
+    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat {
+        &self.value
     }
 }
 
@@ -582,14 +597,13 @@ mod test {
             }
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclData>> {
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
+            use crate::l2cap::AclDataFragment;
+
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b2.take() {
-                match crate::l2cap::AclData::from_raw_data(&data) {
-                    Ok(al) => Some(vec![al]),
-                    _ => Some(vec![]),
-                }
+                Some(vec![AclDataFragment::new(true, data)])
             } else {
                 gaurd.w2 = Some(waker.clone());
                 None
@@ -611,14 +625,13 @@ mod test {
             }
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclData>> {
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
+            use crate::l2cap::AclDataFragment;
+
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b1.take() {
-                match crate::l2cap::AclData::from_raw_data(&data) {
-                    Ok(al) => Some(vec![al]),
-                    _ => Some(vec![]),
-                }
+                Some(vec![AclDataFragment::new(true, data)])
             } else {
                 gaurd.w1 = Some(waker.clone());
                 None
@@ -629,6 +642,7 @@ mod test {
     #[test]
     fn test_att_connection() {
         use std::thread;
+        use crate::l2cap::ConnectionChannel;
 
         const UUID_1: u16 = 1;
         const UUID_2: u16 = 2;
@@ -642,10 +656,10 @@ mod test {
 
         let (c1,c2) = TwoWayChannel::new();
 
-        thread::spawn( move || {
+        let t = thread::spawn( move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( c2, 256, None );
+            let mut server = server::Server::new( &c2, 256, None );
 
             let attribute_0 = Attribute::new(
                 From::from(UUID_1),
@@ -672,52 +686,88 @@ mod test {
             if let Err(e) = 'server_loop: loop {
                 use async_timer::Timed;
 
-                match futures::executor::block_on(
-                    Timed::platform_new(server.receiver(), std::time::Duration::from_millis(1500))
-                ) {
-                    Err(e) => break 'server_loop Err(format!("Timed: {:?}", e)),
-                    Ok(Err(e)) => break 'server_loop Err(format!("Pdu error: {:?}", e)),
-                    Ok(Ok(mut r)) =>
-                        if r.get_raw_opcode() == kill_opcode {
-                            break 'server_loop Ok(())
-                        } else {
-                            r.process_request().unwrap()
-                        },
+                match futures::executor::block_on(c2.future_receiver()) {
+                    Ok(l2cap_data_vec) => for l2cap_pdu in l2cap_data_vec {
+
+                        match server.process_acl_data(&l2cap_pdu) {
+                            Err(super::Error::UnknownOpcode(op)) if op == kill_opcode =>
+                                break 'server_loop Ok(()),
+                            Err(e) =>
+                                break 'server_loop Err(format!("Pdu error: {:?}", e)),
+                            _ => (),
+                        }
+                    },
+                    Err(e) => break 'server_loop Err(format!("Future Receiver Error: {:?}", e)),
                 }
             } {
                 panic!("{}", e);
             }
         });
 
-        let client = futures::executor::block_on(client::Client::connect(c1, 512))
-            .expect("Failed to connect attribute client");
+        let client = client::Client::connect(&c1, 512)
+            .process_response(
+                futures::executor::block_on(c1.future_receiver())
+                    .expect("connect receiver").first().unwrap()
+            )
+            .expect("connect response");
 
-        // writing to handle 0
-        futures::executor::block_on(client.write_request(1, test_val_1))
-            .expect("Failed to write to server for handle 0");
+        // writing to *reserved* handle 0
+        assert!( client.write_request(0, 0xFFFF).is_err() );
 
         // writing to handle 1
-        futures::executor::block_on(client.write_request(2, test_val_2))
-            .expect("Failed to write to server for handle 1");
+        client.write_request(1, test_val_1).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("w1 receiver")
+                .first()
+                .unwrap() )
+            .expect("w1 response");
 
         // writing to handle 2
-        futures::executor::block_on(client.write_request(3, test_val_3))
-            .expect("Failed to write to server for handle 2");
+        client.write_request(2, test_val_2).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("w2 receiver")
+                .first()
+                .unwrap() )
+            .expect("w2 response");
 
-        let read_val_1: usize = futures::executor::block_on(client.read_request(1))
-            .expect("Failed to read at handle 0 from the server");
+        // writing to handle 3
+        client.write_request(3, test_val_3).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("w3 receiver")
+                .first()
+                .unwrap() )
+            .expect("w3 response");
 
-        let read_val_2 = futures::executor::block_on(client.read_request(2))
-            .expect("Failed to read at handle 1 from the server");
+        // reading handle 1
+        let read_val_1 = client.read_request(1).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("r1 receiver")
+                .first()
+                .unwrap() )
+            .expect("r1 response");
 
-        let read_val_3 = futures::executor::block_on(client.read_request(3))
-            .expect("Failed to read at handle 2 from the server");
+        let read_val_2 = client.read_request(2).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("r2 receiver")
+                .first()
+                .unwrap() )
+            .expect("r2 response");
+
+        let read_val_3 = client.read_request(3).unwrap()
+            .process_response( futures::executor::block_on(c1.future_receiver())
+                .expect("r3 receiver")
+                .first()
+                .unwrap() )
+            .expect("r3 response");
 
         client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) )
             .expect("Failed to send kill opcode");
 
+        // Check that the send values equal the read values
         assert_eq!(test_val_1, read_val_1);
         assert_eq!(test_val_2, read_val_2);
         assert_eq!(test_val_3, read_val_3);
+
+        t.join().expect("Thread Failed to join")
     }
 }

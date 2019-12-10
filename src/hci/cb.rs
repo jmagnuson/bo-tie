@@ -34,18 +34,6 @@ pub mod set_event_mask {
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
 
-    #[derive(Debug)]
-    enum Error {
-        /// Bit position is reserved for future use
-        RFU
-    }
-
-    impl core::fmt::Display for Error {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "{:?}", self)
-        }
-    }
-
     pub enum EventMask {
         /// Not an event mask, this is a marker for the default set of enabled events.
         ///

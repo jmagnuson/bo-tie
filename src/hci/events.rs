@@ -692,11 +692,10 @@ where T : DataResult
 
     /// Get the return parameter without checking the OpCode
     ///
-    /// This function is only available with tests
-    ///
     /// This is the same as get_return except that it doesn't validate that the command complete
-    /// event was sent from the controller with the correct. Use this only if you're absolutly
-    /// positive that the controller is returning incorrect OpCode values.
+    /// event was sent from the controller with the correct opcode. Use this only if you're absolutely
+    /// positive that the controller is returning incorrect OpCode values only because the
+    /// controller is implemented incorrectly.
     unsafe fn get_return_unchecked(&self) -> Result<Option<T::ReturnData>,CommandDataErr<T::UnpackErrorType>>;
 
     fn no_opcode(&self) -> bool {

@@ -1,20 +1,18 @@
 use super::*;
 
-pub struct MasterSecurityManagerBuilder<'a, HCI, C> {
+pub struct MasterSecurityManagerBuilder<'a, C> {
     sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
     connection_channel: &'a C,
 }
 
-pub struct MasterSecurityManager<'a, HCI, C> {
+pub struct MasterSecurityManager<'a, C> {
     sm: &'a SecurityManager,
-    hci: &'a HostInterface<HCI>,
     connection_channel: &'a C,
 }
 
-impl<'a, HCI, C> MasterSecurityManager<'a, HCI, C> {
-    fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
-        Self { sm, hci, connection_channel }
+impl<'a, C> MasterSecurityManager<'a, C> {
+    fn new( sm: &'a SecurityManager, connection_channel: &'a C ) -> Self {
+        Self { sm, connection_channel }
     }
 
     pub fn process_command(&self, received_data: &[u8]) -> Result<Vec<u8>, Error> {

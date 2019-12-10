@@ -64,36 +64,6 @@ impl OOBDataFlag {
     }
 }
 
-#[derive(Debug,Clone,Copy)]
-pub enum BondingFlag {
-    NoBonding,
-    Bonding
-}
-
-impl BondingFlag {
-
-    /// Convert into an auth_req value
-    ///
-    /// This will return an auth_req with the bonding flag set. All other bits are zero.
-    pub(super) fn into_auth_req(self) -> u8 {
-        match self {
-            BondingFlag::NoBonding => 0b00,
-            BondingFlag::Bonding   => 0b01,
-        }
-    }
-
-    /// Try from the authentication request
-    ///
-    /// This will mask out the bytes in the authentication value and retrieve the bonding flag
-    fn try_from_auth_req_val(val: u8) -> Result<Self, Error> {
-        match (val >> 6) & 0b11 {
-            0b0 => Ok( BondingFlag::NoBonding ),
-            0b1 => Ok( BondingFlag::Bonding ),
-            _   => Err( Error::IncorrectValue )
-        }
-    }
-}
-
 /// Type of Key Distributions
 ///
 /// See the security manager key distribution and generation section of the Bluetooth
@@ -103,8 +73,7 @@ pub enum KeyDistributions {
     EncKey,
     IdKey,
     SignKey,
-    // This is unsupported because BR/EDR is unsupported
-    // LinkKey,
+    // LinkKey, // LinkKey is unsupported because BR/EDR is unsupported
 }
 
 impl KeyDistributions {
@@ -393,6 +362,8 @@ impl PairingConfirm {
     pub fn set_value(&mut self, val: u128) {
         self.value = val
     }
+
+    pub fn get_value(&self) -> u128 {self.value}
 }
 
 impl From<PairingConfirm> for Command<PairingConfirm> {

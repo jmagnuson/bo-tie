@@ -20,6 +20,23 @@ use alloc::{
     format,
 };
 
+#[inline]
+pub fn is_valid_handle(handle: u16) -> bool { handle != 0 }
+
+pub fn is_valid_handle_range<R>(range: &R) -> bool where R: core::ops::RangeBounds<u16> {
+    use core::ops::Bound;
+
+    let start = range.start_bound();
+    let end = range.end_bound();
+
+    (start != Bound::Included(&0)) && match (start, end) {
+        (Bound::Included(s), Bound::Included(e)) => s <= e,
+        (Bound::Included(s), Bound::Excluded(e)) => s <  e,
+        (Bound::Excluded(s), Bound::Included(e)) => s <  e,
+        (Bound::Excluded(s), Bound::Excluded(e)) => s <= e,
+        _ => true,
+    }
+}
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct PduOpCode {
@@ -483,10 +500,6 @@ impl TransferFormat for HandleRange {
 }
 
 impl<R> From<R> for HandleRange where R: core::ops::RangeBounds<u16> {
-
-    /// Create a HandleRange from a generic that implements RangeBounds
-    ///
-
     fn from(range: R) -> Self {
         use core::ops::Bound;
 
@@ -948,7 +961,7 @@ where D: TransferFormat
 ///
 /// This is sent by the client to requests 2 or more values to read. If the length of the input is
 /// less then 2 then the return will be an error.
-pub fn read_multiple_request( handles: Box<[u16]> ) -> Result<Pdu<Box<[u16]>>, super::Error> {
+pub fn read_multiple_request( handles: Vec<u16> ) -> Result<Pdu<Vec<u16>>, super::Error> {
     if handles.len() >= 2 {
         Ok(Pdu {
             opcode: From::from(ClientPduName::ReadMultipleRequest),

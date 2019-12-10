@@ -19,13 +19,10 @@
 /// The OpenSSL identifier for NIST P-256
 ///
 /// This uses the ANSI x9.62 format
-const ECC_NAME: openssl::nid::Nid = openssl::nid::X9_62_PRIME256V1;
+static ECC_NAME: &ring::agreement::Algorithm = &ring::agreement::ECDH_P256;
 
 /// The identifier for an uncompressed public key
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
-
-/// Index of the public key type identifier
-const PUB_KEY_TYPE_INDEX: usize = 1;
 
 const PUB_KEY_BYTE_LEN: usize = 65;
 
@@ -39,59 +36,81 @@ const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
 const PUB_KEY_Y_RANGE: core::ops::Range<usize> = 33..65;
 
 /// The public key type
-pub(super) type PubKey = openssl::pkey::Pkey<openssl::pkey::Public>;
+pub(super) type PubKey = ring::agreement::PublicKey;
 
 /// The private key type
-pub(super) type PriKey = openssl::pkey::Pkey<openssl::pkey::Private>;
+pub(super) type PriKey = ring::agreement::EphemeralPrivateKey;
+
+pub(super) type PeerKey = ring::agreement::UnparsedPublicKey<alloc::vec::Vec<u8>>;
 
 /// The Diffie-Hellman shared secret
-pub(super) type DHSecret = Vec<u8>;
+pub(super) type DHSecret = [u8;32];
+
+impl super::GetXOfP256Key for PubKey {
+    fn x(&self) -> [u8;32] {
+        let mut ret = [0u8;32];
+
+        ret.copy_from_slice(&self.as_ref()[PUB_KEY_X_RANGE]);
+
+        ret
+    }
+}
+
+impl super::GetXOfP256Key for PeerKey {
+    fn x(&self) -> [u8;32] {
+        let mut ret = [0u8;32];
+
+        ret.copy_from_slice(&self.bytes()[PUB_KEY_X_RANGE]);
+
+        ret
+    }
+}
 
 impl super::CommandData for PubKey {
     fn into_icd(self) -> alloc::vec::Vec<u8> {
-        use alloc::vec::Vec;
-
-        let ec_key = self.ec_key().expect("Expected elliptic curve public key");
-
-        let mut pub_key = ec_key.public_key().to_bytes(
-            &openssl::ec::EcGroup::from_curve_name(ECC_NAME),
-            openssl::ec::PointConversionForm::UNCOMPRESSED,
-            &mut openssl::bn::BigNumContext::new().unwrap()
-        ).unwrap();
+        let mut pub_key = self.as_ref()[PUB_KEY_RANGE].to_vec();
 
         // Reverse the keys so that they are in little endian order
         pub_key[PUB_KEY_X_RANGE].reverse();
         pub_key[PUB_KEY_Y_RANGE].reverse();
 
-        // Return only the uncompressed key without the identifier for the key
-        pub_key[PUB_KEY_RANGE].to_vec()
+        pub_key
+    }
+
+    /// Private keys cannot be created from raw bytes
+    ///
+    /// This will always return [`Error::UnsupportedFeature'](super::Error::UnsupportedFeature)
+    fn try_from_icd(_: &[u8]) -> Result<Self, super::Error> {
+        Err( super::Error::UnsupportedFeature )
+    }
+}
+
+impl super::CommandData for PeerKey {
+    fn into_icd(self) -> alloc::vec::Vec<u8> {
+        self.bytes()[PUB_KEY_RANGE].to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
         use alloc::vec::Vec;
 
-        let group = EcGroup::from_curve_name(ECC_NAME).unwrap();
-        let mut ctx = BigNumContext::new().unwrap();
+        // The icd doesn't contain the compression byte indicator
+        if icd.len() == PUB_KEY_BYTE_LEN - 1 {
+            let mut pub_key = Vec::with_capacity(PUB_KEY_BYTE_LEN);
 
-        let mut pub_key = Vec::with_capacity(PUB_KEY_BYTE_LEN);
+            pub_key.push(UNCOMPRESSED_PUB_KEY_TYPE);
 
-        pub_key.push(UNCOMPRESSED_PUB_KEY_ID);
+            pub_key.extend_from_slice(icd);
 
-        pub_key.extend_from_slice(icd);
+            // Reverse the keys from little endian to big endian
+            pub_key[PUB_KEY_X_RANGE].reverse();
+            pub_key[PUB_KEY_Y_RANGE].reverse();
 
-        // Reverse the keys from little endian to big endian
-        pub_key[PUB_KEY_X_RANGE].reverse();
-        pub_key[PUB_KEY_Y_RANGE].reverse();
-
-        pub_key[PUB_KEY_TYPE_INDEX] = UNCOMPRESSED_PUB_KEY_TYPE;
-
-        let point = EcPoint::from_bytes(&group, &public_key, &mut ctx)
-            .or(Err(super::Error::IncorrectValue))?;
-
-        let key = EcKey::from_public_key(&group, &point)
-            .or(Err(super::Error::IncorrectValue))?;
-
+            Ok(ring::agreement::UnparsedPublicKey::new(ECC_NAME, pub_key))
+        } else {
+            Err( super::Error::Size )
+        }
     }
+
 }
 
 /// 24-bit hash function
@@ -539,25 +558,19 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 /// This will return an error if the random number generation failed.
 pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 
-    use rand_core::{RngCore, OsRng};
-    use secp256k1::{SecretKey, PublicKey};
+    use ring::{agreement, rand};
 
-    let csprng = &mut [0u8; 32];
+    let rng = rand::SystemRandom::new();
 
-    if let Err(e) = OsRng.try_fill_bytes(csprng) {
-        return Err(e)
-    }
+    let private_key = match agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng) {
+        Ok(pk) => pk,
+        Err(_) => return Err("Failed to generate keys")
+    };
 
-    let private_key = SecretKey::parse(csprng).unwrap();
+    let public_key = private_key.compute_public_key()
+        .or(Err("Failed to compute public key"))?;
 
-    let public_key  = PublicKey::from_secret_key(&private_key).serialize();
-
-    let mut raw_public_key = [0u8; 64];
-
-    // The flag byte doesn't matter
-    raw_public_key.copy_from_slice(&public_key[1..]);
-
-    Ok( (private_key.serialize(), raw_public_key) )
+    Ok( (private_key, public_key) )
 }
 
 /// Calculate the elliptic curve Diffie-Hellman shared secret from the provided public key
@@ -567,34 +580,25 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 ///
 /// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_secret_key: &PriKey, raw_remote_public_key: &[u8;64]) -> Result<DHSecret, impl core::fmt::Debug>
+pub fn ecdh(this_private_key: PriKey, peer_public_key: &PeerKey) -> Result<DHSecret, impl core::fmt::Debug>
 {
-    use openssl::derive::Deriver;
+    use ring::{agreement, error};
 
-    let octet_string = [0u8;65];
+    let secret = match agreement::agree_ephemeral (
+        this_private_key,
+        peer_public_key,
+        error::Unspecified,
+        |secret| Ok(secret.to_vec()) )
+    {
+        Ok(s) => s,
+        Err(_) => return Err("Failed to create secret key")
+    };
 
-    // the value to specify uncompressed public key
-    octet_string[PUB_KEY_TYPE_INDEX] = UNCOMPRESSED_PUB_KEY_TYPE;
+    let mut secret_key = [0u8;32];
 
-    octet_string[PUB_KEY_RANGE].copy_from_slice(&raw_remote_public_key);
+    secret_key.copy_from_slice(&secret);
 
-    // Reverse x and y so that they're converted from little endian to big endian
-    octet_string[PUB_KEY_X_RANGE].reverse();
-    octet_string[PUB_KEY_Y_RANGE].reverse();
-
-    let group = EcGroup::from_curve_name(ECC_NAME).expect("bad group");
-
-    let pub_point = EcPoint::from_bytes(&group, &octet_string, &mut BigNumContext::new()?)?;
-
-    let pub_key = EcKey::from_public_key(&group, &point).expect("failed to create public key");
-
-    let mut pri_ctx = BigNumContext::new().unwrap();
-
-    let mut deriver = Deriver::new(this_secret_key).unwrap();
-
-    deriver.set_peer(remote_public_key);
-
-    deriver.derive_to_vec().unwrap()
+    Ok(secret_key)
 }
 
 /// Generate a random u128 value
@@ -841,14 +845,25 @@ mod tests {
 
     #[test]
     fn ec_dh_test() {
+        use super::super::CommandData;
+
         let (pri_key, pub_key) = ecc_gen().expect("Failed to generate pri-pub key");
 
-        let raw_peer_key = [0x20, 0xb0, 0x3, 0xd2, 0xf2, 0x97, 0xbe, 0x2c, 0x5e, 0x2c,
-            0x83, 0xa7, 0xe9, 0xf9, 0xa5, 0xb9, 0xef, 0xf4, 0x91, 0x11, 0xac, 0xf4, 0xfd, 0xdb,
-            0xcc, 0x3, 0x1, 0x48, 0xe, 0x35, 0x9d, 0xe6, 0xdc, 0x80, 0x9c, 0x49, 0x65, 0x2a, 0xeb,
-            0x6d, 0x63, 0x32, 0x9a, 0xbf, 0x5a, 0x52, 0x15, 0x5c, 0x76, 0x63, 0x45, 0xc2, 0x8f,
-            0xed, 0x30, 0x24, 0x74, 0x1c, 0x8e, 0xd0, 0x15, 0x89, 0xd2, 0x8b];
+        // This is the x and y of the public key specified in the Bluetooth Specification v5.0 | Vol
+        // 3, Part H, Section 2.3.5.6.1
 
-        ecdh(pri_key, &raw_peer_key).expect("Failed to generate secret");
+        let mut raw_peer_key = [0x20, 0xb0, 0x03, 0xd2, 0xf2, 0x97, 0xbe, 0x2c, 0x5e, 0x2c,
+            0x83, 0xa7, 0xe9, 0xf9, 0xa5, 0xb9, 0xef, 0xf4, 0x91, 0x11, 0xac, 0xf4, 0xfd, 0xdb,
+            0xcc, 0x03, 0x01, 0x48, 0x0e, 0x35, 0x9d, 0xe6, 0xdc, 0x80, 0x9c, 0x49, 0x65, 0x2a,
+            0xeb, 0x6d, 0x63, 0x32, 0x9a, 0xbf, 0x5a, 0x52, 0x15, 0x5c, 0x76, 0x63, 0x45, 0xc2,
+            0x8f, 0xed, 0x30, 0x24, 0x74, 0x1c, 0x8e, 0xd0, 0x15, 0x89, 0xd2, 0x8b];
+
+        // Matching the Peer Key to the little endian format as specified in the key exchange PDU
+        raw_peer_key[..32].reverse();
+        raw_peer_key[32..].reverse();
+
+        let peer_key = PeerKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
+
+        let _secret = ecdh(pri_key, &peer_key).expect("Failed to generate secret");
     }
 }

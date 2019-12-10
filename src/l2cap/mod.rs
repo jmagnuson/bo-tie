@@ -193,8 +193,6 @@ impl AclData {
     ///   portion of the raw data
     /// * The channel id must be valid
     pub fn from_raw_data(data: &[u8]) -> Result<Self, AclDataError> {
-        use core::convert::TryInto;
-
         if data.len() >= 4 {
             let len = <u16>::from_le_bytes( [data[0], data[1]] ) as usize;
             let raw_channel_id = <u16>::from_le_bytes( [data[2], data[3]] );

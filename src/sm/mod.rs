@@ -25,7 +25,7 @@
 //! # Note
 //! This module uses the following crates for parts of the encryption process.
 //! * ['aes'](https://crates.io/crates/aes)
-//! * ['openssl'](https://crates.io/crates/openssl)
+//! * ['ring'](https://crates.io/crates/ring)
 //!
 //! The assumption was made that these crates are adequate for their required usage within this
 //! module, but no formal process was used to validate them for use with this library.
@@ -38,11 +38,8 @@
 
 use alloc::vec::Vec;
 use core::sync::atomic;
-use core::future::Future;
-use core::task::Poll;
 use serde::{Serialize, Deserialize};
 
-use crate::hci::{HostControllerInterface, HostInterface};
 use crate::l2cap::ConnectionChannel;
 
 pub mod toolbox;
@@ -50,7 +47,7 @@ pub mod pairing;
 pub mod encrypt_info;
 
 const LEGACY_MTU: usize = 23;
-const SECURE_CONNECTIONS_MTU: usize = 65;
+//const SECURE_CONNECTIONS_MTU: usize = 65;
 
 const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
@@ -150,13 +147,6 @@ struct Command<D> {
 impl<D> Command<D> {
     fn new( command_type: CommandType, data: D) -> Self {
         Command { command_type, data }
-    }
-
-    fn cmd_type(&self) -> CommandType {
-        self.command_type
-    }
-    fn into_packet(self) -> D {
-        self.data
     }
 }
 
@@ -334,7 +324,7 @@ impl KeyDB {
     /// Performs a backoff using
     /// [crossbeam](https://docs.rs/crossbeam-utils/0.7.0/crossbeam_utils/struct.Backoff.html)
     /// if the vector cannot be acquired.
-    fn use_keys<F,R>(&mut self, mut to_do: F) -> R
+    fn use_keys<F,R>(&mut self, to_do: F) -> R
     where F: FnOnce(&mut Vec<KeyDBEntry>) -> R
     {
         use core::ptr::null_mut;
@@ -515,27 +505,11 @@ impl SecurityManager {
         )
     }
 
-    pub fn new_master_security_manager_builder<HCI,C>(&self, hci: &HostInterface<HCI>, channel: &C)
-    -> initiator::MasterSecurityManagerBuilder<'_, HCI, C>
-    where HCI: HostControllerInterface,
-            C: ConnectionChannel
+    pub fn new_master_security_manager_builder<C>(&self, _channel: &C)
+    -> initiator::MasterSecurityManagerBuilder<'_, C>
+    where C: ConnectionChannel
     {
         unimplemented!()
-    }
-}
-
-struct CommandProcessFuture<'a> {
-    to_do: alloc::boxed::Box<dyn core::ops::FnMut() -> core::task::Poll<Result<(), Error>> + 'a>
-}
-
-impl<'a> core::future::Future for CommandProcessFuture<'a>
-{
-    type Output = Result<(), Error>;
-
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context)
-    -> core::task::Poll<Self::Output>
-    {
-        (self.get_mut().to_do)()
     }
 }
 

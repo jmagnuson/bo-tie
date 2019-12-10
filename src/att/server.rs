@@ -2,13 +2,7 @@ use alloc::{
     vec::Vec,
     boxed::Box,
 };
-use core::{
-    future::Future,
-    pin::Pin,
-    task::{Poll, Context},
-};
 use super::{
-    client,
     pdu,
     TransferFormat,
     TransferFormatError
@@ -438,7 +432,7 @@ where C: l2cap::ConnectionChannel
     pub fn parse_acl_packet<'a>(&self, acl_packet: &'a crate::l2cap::AclData)
     -> Result<(super::client::ClientPduName, &'a [u8]), super::Error>
     {
-        use crate::l2cap::{AclData, ChannelIdentifier, LeUserChannelIdentifier};
+        use crate::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
         use core::convert::TryFrom;
 
         match acl_packet.get_channel_id() {

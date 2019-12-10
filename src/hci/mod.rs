@@ -693,7 +693,6 @@ where I: HciAclDataInterface
     }
 
     fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {
-        use alloc::vec::Vec;
         use crate::l2cap::AclDataFragment;
 
         self.hi.interface

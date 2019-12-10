@@ -93,6 +93,7 @@ pub mod long_term_key_request_reply {
     }
 
     #[repr(packed)]
+    #[allow(dead_code)]
     struct CmdParameter {
         handle: u16,
         ltk: u128,
@@ -174,6 +175,7 @@ pub mod long_term_key_request_negative_reply {
     }
 
     #[repr(packed)]
+    #[allow(dead_code)]
     struct CmdParameter {
         handle: u16,
         ltk: u128,
@@ -238,7 +240,6 @@ pub mod long_term_key_request_negative_reply {
 
 pub mod rand {
     use crate::hci::*;
-    use crate::hci::common::ConnectionHandle;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::Rand);
 
@@ -258,6 +259,10 @@ pub mod rand {
 
     pub struct Return {
         pub random_number: u64,
+    }
+
+    impl From<Return> for u64 {
+        fn from(ret: Return) -> Self { ret.random_number }
     }
 
     impl Return {
@@ -282,12 +287,9 @@ pub mod rand {
 
     impl_command_data_future!(Return, error::Error);
 
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        connection_handle: ConnectionHandle,
-        long_term_key: u128,
-    ) -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
+    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(
             Parameter,
@@ -329,6 +331,7 @@ pub mod start_encryption {
 
     #[repr(packed)]
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub struct CmdParameter {
         handle: u16,
         rand: u64,
@@ -349,11 +352,65 @@ pub mod start_encryption {
         }
     }
 
-    impl_status_return!(COMMAND);
+    struct ReturnAlias;
+
+    enum ReturnErr {
+        Hci(error::Error),
+        Ch(&'static str),
+    }
+
+    impl core::fmt::Debug for ReturnErr {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            match self {
+                ReturnErr::Hci(e) => core::fmt::Debug::fmt(e,f),
+                ReturnErr::Ch(e) => core::fmt::Debug::fmt(e,f),
+            }
+        }
+    }
+
+    impl core::fmt::Display for ReturnErr {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            match self {
+                ReturnErr::Hci(e) => core::fmt::Display::fmt(e,f),
+                ReturnErr::Ch(e) => core::fmt::Display::fmt(e,f),
+            }
+        }
+    }
+
+    impl From<error::Error> for ReturnErr {
+        fn from(e: error::Error) -> Self {
+            Self::Hci(e)
+        }
+    }
+
+    impl From<&'static str> for ReturnErr {
+        fn from(e: &'static str) -> Self {
+            Self::Ch(e)
+        }
+    }
+
+    impl ReturnAlias {
+        fn try_from(cd: CommandReturn) -> Result<ConnectionHandle, ReturnErr> {
+            match error::Error::from(cd.status) {
+                error::Error::NoError => Ok(ConnectionHandle::try_from(cd.handle)?),
+                e @ _ => Err(e.into())
+            }
+        }
+    }
+
+    impl_get_data_for_command!(
+            COMMAND,
+            CommandReturn,
+            ReturnAlias,
+            ConnectionHandle,
+            ReturnErr
+        );
+
+    impl_command_data_future!(ReturnAlias, ConnectionHandle, ReturnErr);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter)
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<ConnectionHandle, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(
             parameter,

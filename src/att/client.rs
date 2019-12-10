@@ -6,7 +6,6 @@ use super::{
 };
 use alloc::{
     boxed::Box,
-    vec::Vec,
     format,
 };
 use crate::l2cap;
@@ -110,7 +109,11 @@ where F: FnOnce(&[u8]) -> Result<R, super::Error>;
 impl<F,R> ResponseProcessor<F,R>
 where F: FnOnce(&[u8]) -> Result<R, super::Error>
 {
-    pub fn process(self, acl_data: l2cap::AclData) -> Result<R, super::Error> {
+    /// Process the response
+    ///
+    /// The input `acl_data` should be the response from the server to the request that generated
+    /// this `ResponseProcessor`.
+    pub fn process_response(self, acl_data: &l2cap::AclData) -> Result<R, super::Error> {
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
@@ -143,8 +146,6 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {C::DEFAULT_ATT_MTU};
 
         ResponseProcessor( move | bytes | {
-            use super::server::ServerPduName;
-
             // Check for a ExchangeMTUResponse PDU
             if ServerPduName::ExchangeMTUResponse.is_convertible_from(bytes)
             {
@@ -218,7 +219,6 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     where P: TransferFormat
     {
         use core::convert::TryFrom;
-        use super::server::ServerPduName;
         
         if expected_response.is_convertible_from(bytes) {
             match TransferFormat::from(&bytes) {
@@ -285,6 +285,11 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         }
     }
 
+    /// Find information request
+    ///
+    /// # Panic
+    /// A range cannot be the reserved handle 0x0000 and the ending handle must be larger than or
+    /// equal to the starting handle
     pub fn find_information_request<R>(&self, handle_range: R)
     -> Result<
         ResponseProcessor<
@@ -293,8 +298,12 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         >,
         super::Error
     >
-    where R: Into<pdu::HandleRange>
+    where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>
     {
+        if !pdu::is_valid_handle_range(&handle_range) {
+            panic!("Invalid handle range")
+        }
+        
         self.send(&pdu::find_information_request(handle_range))?;
 
         Ok( ResponseProcessor( |data| Self::process_raw_data(ServerPduName::FindInformationResponse, data)) )
@@ -305,15 +314,23 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// The attribute type, labeled as the input `uuid`, is a 16 bit assigned number type. If the
     /// type cannot be converted into a 16 bit UUID, then this function will return an error
     /// containing the incorrect type.
+    /// 
+    /// # Panic
+    /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
+    /// ending handle
     pub fn find_by_type_value_request<R, D>(&self, handle_range: R, uuid: crate::UUID, value: D)
     -> Result< ResponseProcessor<
             impl FnOnce(&[u8]) -> Result<pdu::TypeValueRequest<D>, super::Error>,
             pdu::TypeValueRequest<D>
         >,
         super::Error>
-    where R: Into<pdu::HandleRange>,
+    where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
           D: TransferFormat ,
     {
+        if !pdu::is_valid_handle_range(&handle_range) {
+            panic!("Invalid handle range")
+        }
+        
         let pdu_rslt = pdu::find_by_type_value_request(handle_range, uuid, value);
 
         match pdu_rslt {
@@ -326,6 +343,11 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         }
     }
 
+    /// Read request
+    /// 
+    /// # Panic
+    /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger 
+    /// then the ending handle
     pub fn read_by_type_request<R>(&self, handle_range: R, attr_type: crate::UUID)
     -> Result< ResponseProcessor<
             impl FnOnce(&[u8]) -> Result<pdu::TypeRequest, super::Error>,
@@ -333,26 +355,42 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         >,
         super::Error
     >
-    where R: Into<pdu::HandleRange>
+    where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>
     {
+        if !pdu::is_valid_handle_range(&handle_range) {
+            panic!("Invalid handle range") 
+        }
+        
         self.send(&pdu::read_by_type_request(handle_range, attr_type))?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByTypeResponse, d)))
     }
 
+    /// Read request
+    /// 
+    /// # Panic
+    /// A handle cannot be the reserved handle 0x0000
     pub fn read_request<D>(&self, handle: u16 )
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
     where D: TransferFormat 
     {
+        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        
         self.send(&pdu::read_request(handle))?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadResponse, d)))
     }
 
+    /// Read blob request
+    /// 
+    /// # Panic
+    /// A handle cannot be the reserved handle 0x0000
     pub fn read_blob_request<D>(&self, handle: u16, offset: u16)
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
     where D: TransferFormat 
     {
+        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        
         self.send( &pdu::read_blob_request(handle, offset) )?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadBlobResponse, d)))
@@ -361,7 +399,10 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// Read multiple handles
     ///
     /// If handles has length of 0 an error is returned
-    pub fn read_multiple_request(&self, handles: Box<[u16]> )
+    /// 
+    /// # Panic
+    /// A handle cannot be the reserved handle 0x0000
+    pub fn read_multiple_request(&self, handles: alloc::vec::Vec<u16> )
     -> Result<
         ResponseProcessor<
             impl FnOnce(&[u8]) -> Result<Box<[Box<dyn TransferFormat>]>, super::Error>,
@@ -370,11 +411,19 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         super::Error
     >
     {
+        handles.iter().for_each(|h| if !pdu::is_valid_handle(*h) {
+            panic!("Handle 0 is reserved for future use by the spec.") 
+        });
+        
         self.send( &pdu::read_multiple_request( handles )? )?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)))
     }
 
+    /// Read by group type
+    /// 
+    /// # Panic
+    /// The handle cannot be the reserved handle 0x0000
     pub fn read_by_group_type_request<R,D>(&self, handle_range: R, group_type: crate::UUID)
     -> Result< ResponseProcessor<
             impl FnOnce(&[u8]) -> Result<pdu::ReadByGroupTypeResponse<D>, super::Error>,
@@ -382,29 +431,55 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         >,
         super::Error
     >
-    where R: Into<pdu::HandleRange>,
+    where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
           D: TransferFormat + TransferFormatSize
     {
+        if !pdu::is_valid_handle_range(&handle_range) {
+            panic!("Invalid handle range")
+        }
+        
         self.send( &pdu::read_by_group_type_request(handle_range, group_type) )?;
 
         Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)) )
     }
 
+    /// Request to write data to a handle on the server
+    ///
+    /// The clint will send a response to the write request if the write was made on the server,
+    /// otherwise the client will send an error PDU if the write couldn't be made.
+    ///
+    /// # Panic
+    /// The handle cannot be the reserved handle 0x0000
     pub fn write_request<D>(&self, handle: u16, data: D)
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error>, ()>, super::Error>
     where D: TransferFormat
     {
+        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        
         self.send( &pdu::write_request(handle, data) )?;
 
         Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::WriteResponse, d)) )
     }
 
+    /// Command the server to write data to a handle
+    ///
+    /// No response or error is sent by the server for this command. This client will not know if
+    /// write was successful on the server.
+    ///
+    /// # Panic
+    /// The handle cannot be the reserved handle 0x0000
     pub fn write_command<D>(&self, handle: u16, data: D) -> Result<(), super::Error>
     where D: TransferFormat
     {
+        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        
         self.send( &pdu::write_command(handle, data) )
     }
 
+    /// Prepare Write Request
+    /// 
+    /// # Panic
+    /// The handle cannot be the reserved handle 0x0000
     pub fn prepare_write_request<D>(&self, handle: u16, offset: u16, data: D)
     -> Result< ResponseProcessor<impl FnOnce(&[u8]) -> Result<
             pdu::PrepareWriteRequest<D>, super::Error>,
@@ -414,6 +489,8 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     >
     where D: TransferFormat
     {
+        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        
         self.send(&pdu::prepare_write_request(handle, offset, data))?;
 
         Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)) )
