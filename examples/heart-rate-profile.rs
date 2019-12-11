@@ -166,11 +166,11 @@ mod heart_rate_service
     /// unit (`mtu`, the maximum size of the data to be transferred) is required to create an
     /// attribute server. The connection channel is created when a centeral is connected to a
     /// peripheral; this example is the peripheral because it's a heart rate monitor.
-    pub fn build_server<C>(
+    pub fn build_server<'a, C>(
         measurement: characteristics::HeartRateMeasurement,
-        connection_chanel: C,
+        connection_chanel: &'a C,
         mtu: Option<u16>
-    ) -> gatt::Server<C>
+    ) -> gatt::Server<'a, C>
     where C: l2cap::ConnectionChannel
     {
         let mut server_builder = gatt::ServerBuilder::new();
@@ -337,7 +337,7 @@ fn main() {
 
                 let connection_channel = interface.new_le_acl_connection_channel(&connection_complete_event);
 
-                let server = heart_rate_service::build_server(hrm, connection_channel, None);
+                let server = heart_rate_service::build_server(hrm, &connection_channel, None);
 
                 thread::spawn( move || {
                     use rand::random;

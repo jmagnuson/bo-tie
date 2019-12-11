@@ -144,11 +144,13 @@ where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
 
     loop {
         futures::executor::block_on(connection_channel.future_receiver())
-            .iter()
-            .for_each(|l2cap_pdu| match server.process_acl_data(l2cap_pdu) {
-                Ok(_) => (),
-                Err(e) => println!("Cannot process acl data, '{}'", e),
-            });
+            .map(|l2cap_pdus| l2cap_pdus.iter().for_each( |l2cap_pdu|{
+                match server.process_acl_data(l2cap_pdu) {
+                    Ok(_) => (),
+                    Err(e) => println!("Cannot process acl data, '{}'", e),
+                }
+            }))
+            .expect("l2cap pdu")
     }
 }
 
