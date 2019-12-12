@@ -248,20 +248,45 @@ impl AclDataFragment {
     pub fn fragment_data(&self) -> &[u8] { &self.data }
 }
 
-/// The minimum number of data bytes in an attribute protocol based packet for bluetooth le
-pub const MIN_ATT_MTU_LE: u16 = 23;
+pub struct L2capPdu {
+    data: alloc::vec::Vec<u8>,
+    mtu: Option<usize>,
+}
 
-/// The minimum number of data bytes in an attribute protocol based packet for bluetooth BR/EDR
-pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
+impl L2capPdu {
+    pub(crate) fn into_data(self) -> alloc::vec::Vec<u8> { self.data }
+
+    pub(crate) fn get_mtu(&self) -> Option<usize> { self.mtu }
+}
+
+/// Create a `L2capPdu` from an `AclData` when the packet is known to not be fragmented
+impl From<AclData> for L2capPdu {
+    fn from(acl_data: AclData) -> Self {
+        L2capPdu {
+            data: acl_data.into_raw_data(),
+            mtu: None
+        }
+    }
+}
+
+/// Create a `L2capPdu` from an `AclData` where the size may be larger then the MTU.
+impl<Mtu> From<(AclData, Mtu)> for L2capPdu where Mtu: Into<Option<usize>>
+{
+    fn from((acl_data, mtu): (AclData, Mtu)) -> Self {
+        Self {
+            data: acl_data.into_raw_data(),
+            mtu: mtu.into()
+        }
+    }
+}
 
 /// A Connection channel
 ///
 /// A connection channel is used for sending and receiving Asynchronous Connection-oriented (ACL)
 /// data packets between the Host and Bluetooth Controller.
 pub trait ConnectionChannel {
-    const DEFAULT_ATT_MTU: u16;
+    fn send<Pdu>(&self, data: Pdu) where Pdu: Into<L2capPdu>;
 
-    fn send(&self, data: AclData);
     fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclDataFragment>>;
 
     fn future_receiver(&self) -> ConChanFutureRx<'_, Self> {

@@ -678,18 +678,42 @@ impl<'a, I> LeAclHciChannel<'a, I> where I: HciAclDataInterface {
 impl<'a,I> crate::l2cap::ConnectionChannel for LeAclHciChannel<'a, I>
 where I: HciAclDataInterface
 {
-    const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
+    fn send<Pdu>(&self, data: Pdu ) where Pdu: Into<crate::l2cap::L2capPdu> {
 
-    fn send(&self, data: crate::l2cap::AclData ) {
+        let l2cap_pdu = data.into();
 
-        let hci_acl_data = HciAclData::new(
-            self.handle,
-            AclPacketBoundary::FirstNonFlushable,
-            AclBroadcastFlag::NoBroadcast,
-            data.into_raw_data().into()
-        );
+        if let Some(mtu) = l2cap_pdu.get_mtu() {
+            let payload = l2cap_pdu.into_data();
 
-        self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
+            payload.chunks(mtu).enumerate().for_each(|(i, chunk)| {
+                let hci_acl_data = if i == 0 {
+                    HciAclData::new(
+                        self.handle,
+                        AclPacketBoundary::FirstNonFlushable,
+                        AclBroadcastFlag::NoBroadcast,
+                        chunk.to_vec()
+                    )
+                } else {
+                    HciAclData::new(
+                        self.handle,
+                        AclPacketBoundary::ContinuingFragment,
+                        AclBroadcastFlag::NoBroadcast,
+                        chunk.to_vec()
+                    )
+                };
+
+                self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
+            })
+        } else {
+            let hci_acl_data = HciAclData::new(
+                self.handle,
+                AclPacketBoundary::FirstNonFlushable,
+                AclBroadcastFlag::NoBroadcast,
+                l2cap_pdu.into_data()
+            );
+
+            self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
+        }
     }
 
     fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {

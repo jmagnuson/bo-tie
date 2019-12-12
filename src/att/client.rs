@@ -143,7 +143,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     -> ResponseProcessor<impl FnOnce(&[u8]) -> Result<Client<'c, C>, super::Error> + 'c, Self>
     where Mtu: Into<Option<u16>>
     {
-        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {C::DEFAULT_ATT_MTU};
+        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {super::MIN_ATT_MTU_LE};
 
         ResponseProcessor( move | bytes | {
             // Check for a ExchangeMTUResponse PDU
@@ -177,10 +177,10 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
                         // client with the default MTU
 
                         log::info!("Server doesn't support 'MTU exchange'; default MTU of {} \
-                            bytes is used", C::DEFAULT_ATT_MTU);
+                            bytes is used", super::MIN_ATT_MTU_LE);
 
                         let client = Client {
-                            mtu: C::DEFAULT_ATT_MTU as usize,
+                            mtu: super::MIN_ATT_MTU_LE as usize,
                             channel,
                         };
 
@@ -270,7 +270,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     pub fn exchange_mtu_request(&'c mut self, mtu: u16 )
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error> + 'c, ()>, super::Error>
     {
-        if C::DEFAULT_ATT_MTU > mtu {
+        if super::MIN_ATT_MTU_LE > mtu {
             Err(super::Error::TooSmallMtu)
         } else {
             self.send(&pdu::exchange_mtu_request(mtu))?;

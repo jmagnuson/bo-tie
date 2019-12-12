@@ -205,13 +205,13 @@ where C: l2cap::ConnectionChannel
           A: Into<Option<ServerAttributes>>
     {
         let actual_max_mtu = if let Some(val) = max_mtu.into() {
-            if val >= C::DEFAULT_ATT_MTU {
+            if val >= super::MIN_ATT_MTU_LE {
                 val
             } else {
-                C::DEFAULT_ATT_MTU
+                super::MIN_ATT_MTU_LE
             }
         } else {
-            C::DEFAULT_ATT_MTU
+            super::MIN_ATT_MTU_LE
         };
 
         let attributes: Vec<Box<dyn super::AnyAttribute + Unpin>> = match server_attributes.into()
@@ -233,7 +233,7 @@ where C: l2cap::ConnectionChannel
     ///
     /// The is the current mtu as agreed upon by the client and server
     pub fn get_mtu(&self) -> u16 {
-        match self.set_mtu { Some(mtu) => mtu, None => C::DEFAULT_ATT_MTU }
+        match self.set_mtu { Some(mtu) => mtu, None => super::MIN_ATT_MTU_LE }
     }
 
     /// Push an attribute onto the handle stack
@@ -549,7 +549,7 @@ where C: l2cap::ConnectionChannel
 
     fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
 
-        if (C::DEFAULT_ATT_MTU..=self.max_mtu).contains(&client_mtu)  {
+        if (super::MIN_ATT_MTU_LE..=self.max_mtu).contains(&client_mtu)  {
             self.set_mtu = Some(client_mtu.into());
         }
 
