@@ -206,7 +206,7 @@ impl HciAclData {
     /// # Panics (TODO to remove)
     /// For now this panics if the length of data is greater then 2^16 because this library only
     /// supports LE.
-    pub fn into_packet(&self) -> alloc::vec::Vec<u8> {
+    pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
         let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
@@ -592,7 +592,7 @@ where I: HostControllerInterface
         CommandFutureReturn {
             interface: &self.interface,
             command_data: Some(cmd_data),
-            event: event,
+            event,
             matcher: Arc::pin(cmd_matcher),
             timeout: timeout.into(),
         }
@@ -619,7 +619,7 @@ where I: HostControllerInterface
 
         EventReturnFuture {
             interface: &self.interface,
-            event: event,
+            event,
             matcher: Arc::pin(default_matcher),
             timeout: timeout.into(),
         }

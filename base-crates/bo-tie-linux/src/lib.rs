@@ -425,7 +425,7 @@ impl From<i32> for HCIAdapter {
             adapter_fd: arc_adapter_fd.clone(),
             exit_fd: arc_exit_fd.clone(),
             epoll_fd: arc_epoll_fd.clone(),
-            event_processor: event_processor,
+            event_processor,
             timeout_manager: to_manager.clone(),
             hci_data_recv: data_receiver.clone(),
         }
@@ -435,7 +435,7 @@ impl From<i32> for HCIAdapter {
             adapter_fd: arc_adapter_fd,
             exit_fd: arc_exit_fd,
             epoll_fd: arc_epoll_fd,
-            event_expecter: event_expecter,
+            event_expecter,
             timeout_manager: to_manager,
             hci_data_recv: data_receiver,
         }
@@ -554,7 +554,7 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
     }
 
     fn start_receiver(&self, handle: ConnectionHandle) {
-        self.hci_data_recv.add_connection_handle(handle);
+        self.hci_data_recv.add_connection_handle(handle, StayAround::Unlimited);
     }
 
     fn stop_receiver(&self, handle: &ConnectionHandle) {
@@ -568,37 +568,118 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
     }
 }
 
+/// Stay around flag for received data
+///
+/// This is used to determine the state of the received ACL data. There are 3 states
+/// - `Unlimited`: Their is an 'unlimited' number of *saved* packets
+/// - `Limited`: A limited number of received packets are saved, after the limit is reached, a
+///              new packet causes the oldest packet to be dropped. This is a ring buffer, but
+///              `Limited` only stores a few number of packets at a time.
+///
+///              `Limited` can be upgraded to `Unlimited` without packet loss.
+///
+///              The associated value with `Limited` is the index of the start of the circle buffer
+enum StayAround {
+    Unlimited,
+    Limited,
+}
+
+enum PacketBuffer {
+    /// A circle buffer for limited storage of packets
+    ///
+    /// The associated `usize` is the index of the start of the ring.
+    Limited(Vec<HciAclData>, usize),
+    /// Unlimited storage
+    Unlimited(Vec<HciAclData>),
+}
+
+impl PacketBuffer {
+
+    fn into_unlimited(self) -> Self {
+        match self {
+            Self::Limited(r_buff, start) => {
+
+                if start == 0 {
+                    Self::Unlimited(r_buff)
+                } else {
+                    let mut v = r_buff[start..].to_vec();
+
+                    v.extend_from_slice(r_buff[..start]);
+
+                    Self::Unlimited(v)
+                }
+            }
+            Self::None => Self::Unlimited(Vec::new()),
+            u => u,
+        }
+    }
+
+    fn add(&mut self, data: HciAclData) {
+        match self {
+            Self::Unlimited(mut v) => v.push(data),
+            Self::Limited(mut v, mut size) => {
+                if v.capacity() == v.len() {
+                    v[size] = data;
+                    size = (size + 1) % v.len()
+                } else {
+                    v.push(data);
+                }
+            }
+            _ => (),
+        }
+    }
+
+    /// Get the data
+    fn get(&mut self) -> Vec<HciAclData> {
+        use std::mem::replace;
+
+        match self {
+            Self::Unlimited(v) => replace(v, Vec::new()),
+            Self::Limited(v, size) => {
+                size = 0;
+                replace(v, Vec::with_capacity(v.capacity()))
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ConnectionRecvInfo {
-    received_packets: Vec<HciAclData>,
+    received_packets: PacketBuffer,
     waker: Option<task::Waker>,
-    stay_around: bool,
 }
 
 impl ConnectionRecvInfo {
+
+    const LIMITED_CAPACITY:usize = 100;
 
     /// Create a new ConnectionRecvInfo
     ///
     /// The `stay` input is used to indicate if this should continue to exist after data is taken
     /// from it. The `stay` flag is used by
     /// [`RcvHciAclData`](RcvHciAclData).
-    fn new(stay: bool) -> Self {
+    fn new(stay_around: StayAround) -> Self {
         ConnectionRecvInfo {
-            received_packets: Vec::new(),
+            received_packets: match stay_around {
+                StayAround::Unlimited => PacketBuffer::Unlimited(Vec::new()),
+                StayAround::Limited => PacketBuffer::Limited(Vec::with_capacity(LIMITED_CAPACITY), 0),
+            },
             waker: None,
-            stay_around: stay,
         }
     }
 
     /// Set the waker
+    ///
+    /// This will set the waker and upgrade the packet buffer to `Unlimited`
     fn set_waker(&mut self, waker: &task::Waker) {
         self.waker = Some(waker.clone())
     }
 
     /// Get the next packet or set the waker
     ///
-    /// If there is any packets in `received_packets` then this will return the first in the list
-    /// This will return None if the waker is set
+    /// This either returns all received packets or sets the waker and returns None.
+    ///
+    /// Regardless of the operation, the packet buffer is upgraded to `Unlimited`
     fn get_data_or_set_waker(&mut self, waker: &task::Waker ) -> Option<Vec<HciAclData>> {
 
         let recv_packs = core::mem::replace( &mut self.received_packets, Vec::new() );
@@ -612,13 +693,10 @@ impl ConnectionRecvInfo {
     /// Add data
     fn add(&mut self, data: HciAclData ) {
 
-        self.received_packets.push(data);
+        self.received_packets.add(data);
 
         if let Some(w) = self.waker.take() { w.wake(); }
     }
-
-    /// get flag inicating if this should stick around after retreiving all data
-    fn stay_around(&self) -> bool { self.stay_around }
 }
 
 type AclDataChannels = HashMap<ConnectionHandle, ConnectionRecvInfo>;
@@ -640,12 +718,19 @@ impl RcvHciAclData {
     /// This will create a buffer that will stay around to collect ACL data packets even when there
     /// is no waker to wake a pending task to receive the received data.
     ///
-    /// Only one buffer is set per handle, calling this multiple of times will just delete the
-    /// previous buffer (and any data in it) and replace it with a new buffer. If there was a waker
-    /// associated with the previous buffer (due to a call to `get_received`) it is also deleted.
-    fn add_connection_handle(&self, handle: ConnectionHandle) {
+    /// Only one buffer is set per handle. Calling this multiple of times doesn't drop the buffer,
+    /// however it may upgrade the buffer from `Limited` to `Unlimited` (but not the reverse).
+    ///
+    /// Any previously set waker is dropped.
+    fn add_connection_handle(&self, handle: ConnectionHandle, flag: StayAround) {
         self.receive_channels.lock().as_mut()
-            .and_then( |rc| Ok( rc.insert(handle, ConnectionRecvInfo::new(true)) ) )
+            .map( |rc| if let Some(mut rcv_info) = rc.get_mut(&handle) {
+                    if flag == StayAround::Unlimited {
+                        rcv_info.received_packets = rcv_info.received_packets.into_unlimited()
+                    }
+                } else {
+                    rc.insert(handle, ConnectionRecvInfo::new(flag))
+                })
             .or_else( |e| -> Result<_,()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
             .ok();
     }
@@ -693,8 +778,8 @@ impl RcvHciAclData {
                         Some(ret)
                     })
             )
-        } else { // The buffer doesn't exist, so create a temporary buffer
-            let mut cri = ConnectionRecvInfo::new(false);
+        } else { // The buffer doesn't exist, so create an Unlimited buffer
+            let mut cri = ConnectionRecvInfo::new(StayAround::Unlimited);
             cri.set_waker(waker);
             rc_gaurd.insert( *handle, cri);
             None
@@ -713,13 +798,14 @@ impl RcvHciAclData {
     /// to add ACL Data packets that were received from the controller.
     fn add_received( &self, packet: HciAclData ) {
         match self.receive_channels.lock().as_mut()
-            .and_then( |rc| Ok(rc.get_mut(&packet.get_handle())) )
         {
-            Ok( Some(recv_info) ) =>
-                recv_info.add( packet ),
-            Ok( None ) =>
-                log::debug!("Received acl data for unbound connection handle: {}",
-                    &packet.get_handle() ),
+            Ok( rc ) => {
+                if let Some(recv_info) = rc.get_mut(&packet.get_handle()) {
+                    recv_info.add( packet )
+                } else {
+                    rc.add_connection_handle(&packet.get_handle(), StayAround::Limited);
+                }
+            }
             Err(lock_e) =>
                 log_error_and_panic!("Failed to acquire lock: {}", lock_e),
         }
