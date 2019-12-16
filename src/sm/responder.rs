@@ -355,6 +355,15 @@ where C: ConnectionChannel,
                 Ok(key) => {
                     pairing_data.secret_key = Some(key);
 
+                    let this_pk = &pairing_data.public_key;
+                    let peer_pk = &pairing_data.peer_public_key.as_ref().unwrap();
+                    let nonce = &pairing_data.nonce;
+
+                    let confirm_value = toolbox::f4(this_pk.x(), peer_pk.x(), *nonce, 0);
+
+                    // Send the confirm value
+                    self.send(pairing::PairingConfirm::new(confirm_value));
+
                     self.pairing_data = Some(pairing_data);
 
                     Ok(false)
