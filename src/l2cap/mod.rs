@@ -259,7 +259,8 @@ impl L2capPdu {
     pub(crate) fn get_mtu(&self) -> Option<usize> { self.mtu }
 }
 
-/// Create a `L2capPdu` from an `AclData` when the packet is known to not be fragmented
+/// Create a `L2capPdu` from an `AclData` when the packet length is know to be less than or equal
+/// to the maximum transmission unit (MTU) .
 impl From<AclData> for L2capPdu {
     fn from(acl_data: AclData) -> Self {
         L2capPdu {
@@ -270,6 +271,11 @@ impl From<AclData> for L2capPdu {
 }
 
 /// Create a `L2capPdu` from an `AclData` where the size may be larger then the MTU.
+///
+/// # Note
+/// If mtu is smaller then 
+/// [`MINIMUM_LE_U_FRAGMENT_START_SIZE`](crate::hci::HciAclData::MINIMUM_LE_U_FRAGMENT_START_SIZE)
+/// then it is sent as that size to the controller over the Host Controller Interface for LE-U.
 impl<Mtu> From<(AclData, Mtu)> for L2capPdu where Mtu: Into<Option<usize>>
 {
     fn from((acl_data, mtu): (AclData, Mtu)) -> Self {

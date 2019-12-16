@@ -71,8 +71,8 @@ impl super::CommandData for PubKey {
         let mut pub_key = self.as_ref()[PUB_KEY_RANGE].to_vec();
 
         // Reverse the keys so that they are in little endian order
-        pub_key[PUB_KEY_X_RANGE].reverse();
-        pub_key[PUB_KEY_Y_RANGE].reverse();
+        pub_key[..32].reverse();
+        pub_key[32..].reverse();
 
         pub_key
     }

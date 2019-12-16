@@ -99,14 +99,14 @@ impl AclPacketBoundary {
             AclPacketBoundary::ContinuingFragment => 0x1,
             AclPacketBoundary::FirstAutoFlushable => 0x2,
             AclPacketBoundary::CompleteL2capPdu => 0x3,
-        } ) >> 12
+        } ) << 12
     }
 
     /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn from_shifted_val(val: u16) -> Self {
-        match (val << 12) & 3  {
+        match (val >> 12) & 3  {
             0x0 => AclPacketBoundary::FirstNonFlushable,
             0x1 => AclPacketBoundary::ContinuingFragment,
             0x2 => AclPacketBoundary::FirstAutoFlushable,
@@ -132,14 +132,14 @@ impl AclBroadcastFlag {
         ( match self {
             AclBroadcastFlag::NoBroadcast => 0x0,
             AclBroadcastFlag::ActiveSlaveBroadcast => 0x1,
-        } ) >> 14
+        } ) << 14
     }
 
     /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn try_from_shifted_val(val: u16) -> Result<Self, ()> {
-        match (val << 14) & 1  {
+        match (val >> 14) & 1  {
             0x0 => Ok(AclBroadcastFlag::NoBroadcast),
             0x1 => Ok(AclBroadcastFlag::ActiveSlaveBroadcast),
             0x2 | 0x3 => Err( () ),
@@ -179,6 +179,12 @@ pub struct HciAclData {
 
 impl HciAclData {
 
+    /// The minimum number of bytes that must be in the start fragment for LE-U logical link
+    ///
+    /// Per the specification, any L2CAP message cannot be fragmented if it is less then 27 bytes
+    /// (v5.0 | Vol 2, Part E, Section 4.1.1 [at the very end of the section] )
+    pub const MINIMUM_LE_U_FRAGMENT_START_SIZE: usize = 27;
+
     pub fn new(
         connection_handle: common::ConnectionHandle,
         packet_boundary_flag: AclPacketBoundary,
@@ -207,6 +213,9 @@ impl HciAclData {
     /// For now this panics if the length of data is greater then 2^16 because this library only
     /// supports LE.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
+
+        log::trace!("Sending packet {:?}", self);
+
         let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
@@ -217,7 +226,9 @@ impl HciAclData {
 
         v.extend_from_slice( &(self.payload.len() as u16).to_le_bytes() );
 
-        v.extend_from_slice(&self.payload);
+        v.extend_from_slice( &self.payload );
+
+        log::trace!("Packet raw data {:x?}", v);
 
         v
     }
@@ -683,10 +694,15 @@ where I: HciAclDataInterface
         let l2cap_pdu = data.into();
 
         if let Some(mtu) = l2cap_pdu.get_mtu() {
+            log::trace!("fragmenting l2cap data for transmission");
+
             let payload = l2cap_pdu.into_data();
 
-            payload.chunks(mtu).enumerate().for_each(|(i, chunk)| {
+            let fragment_size = core::cmp::min(mtu, HciAclData::MINIMUM_LE_U_FRAGMENT_START_SIZE);
+
+            payload.chunks(fragment_size).enumerate().for_each(|(i, chunk)| {
                 let hci_acl_data = if i == 0 {
+                    log::trace!("Start packet");
                     HciAclData::new(
                         self.handle,
                         AclPacketBoundary::FirstNonFlushable,

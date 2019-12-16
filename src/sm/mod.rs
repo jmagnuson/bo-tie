@@ -46,7 +46,7 @@ pub mod toolbox;
 pub mod pairing;
 pub mod encrypt_info;
 
-//const L2CAP_LEGACY_MTU: usize = 23;
+const L2CAP_LEGACY_MTU: usize = 23;
 const L2CAP_SECURE_CONNECTIONS_MTU: usize = 65;
 
 const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
