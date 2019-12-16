@@ -544,7 +544,8 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
         use nix::sys::socket;
 
         let packet_indicator = &[ CtrlMsgType::ACLData.into() ];
-        let packet_data = &data.into_packet();
+
+        let packet_data = &data.get_packet();
 
         let io_vec = &[uio::IoVec::from_slice(packet_indicator), uio::IoVec::from_slice(packet_data)];
 
@@ -579,11 +580,13 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
 ///              `Limited` can be upgraded to `Unlimited` without packet loss.
 ///
 ///              The associated value with `Limited` is the index of the start of the circle buffer
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum StayAround {
     Unlimited,
     Limited,
 }
 
+#[derive(Debug)]
 enum PacketBuffer {
     /// A circle buffer for limited storage of packets
     ///
@@ -595,37 +598,40 @@ enum PacketBuffer {
 
 impl PacketBuffer {
 
-    fn into_unlimited(self) -> Self {
+    fn make_unlimited(&mut self) {
         match self {
-            Self::Limited(r_buff, start) => {
+            Self::Limited(r_buff,start) => {
 
-                if start == 0 {
-                    Self::Unlimited(r_buff)
+                *self = if *start == 0 {
+                    Self::Unlimited(std::mem::replace(r_buff, Vec::new()))
                 } else {
-                    let mut v = r_buff[start..].to_vec();
+                    let mut v = r_buff.split_off(*start);
 
-                    v.extend_from_slice(r_buff[..start]);
+                    v.append(r_buff);
 
                     Self::Unlimited(v)
                 }
-            }
-            Self::None => Self::Unlimited(Vec::new()),
-            u => u,
+            },
+            _ => (),
         }
+    }
+
+    fn into_unlimited(mut self) -> Self {
+        self.make_unlimited();
+        self
     }
 
     fn add(&mut self, data: HciAclData) {
         match self {
-            Self::Unlimited(mut v) => v.push(data),
-            Self::Limited(mut v, mut size) => {
+            Self::Unlimited(ref mut v) => v.push(data),
+            Self::Limited(ref mut v, ref mut size) => {
                 if v.capacity() == v.len() {
-                    v[size] = data;
-                    size = (size + 1) % v.len()
+                    v[*size] = data;
+                   *size = (*size + 1) % v.len()
                 } else {
                     v.push(data);
                 }
             }
-            _ => (),
         }
     }
 
@@ -636,7 +642,7 @@ impl PacketBuffer {
         match self {
             Self::Unlimited(v) => replace(v, Vec::new()),
             Self::Limited(v, size) => {
-                size = 0;
+                *size = 0;
                 replace(v, Vec::with_capacity(v.capacity()))
             }
         }
@@ -662,7 +668,7 @@ impl ConnectionRecvInfo {
         ConnectionRecvInfo {
             received_packets: match stay_around {
                 StayAround::Unlimited => PacketBuffer::Unlimited(Vec::new()),
-                StayAround::Limited => PacketBuffer::Limited(Vec::with_capacity(LIMITED_CAPACITY), 0),
+                StayAround::Limited => PacketBuffer::Limited(Vec::with_capacity(Self::LIMITED_CAPACITY), 0),
             },
             waker: None,
         }
@@ -672,7 +678,8 @@ impl ConnectionRecvInfo {
     ///
     /// This will set the waker and upgrade the packet buffer to `Unlimited`
     fn set_waker(&mut self, waker: &task::Waker) {
-        self.waker = Some(waker.clone())
+        self.waker = Some(waker.clone());
+        self.received_packets.make_unlimited();
     }
 
     /// Get the next packet or set the waker
@@ -682,7 +689,14 @@ impl ConnectionRecvInfo {
     /// Regardless of the operation, the packet buffer is upgraded to `Unlimited`
     fn get_data_or_set_waker(&mut self, waker: &task::Waker ) -> Option<Vec<HciAclData>> {
 
-        let recv_packs = core::mem::replace( &mut self.received_packets, Vec::new() );
+        let recv_packs = match core::mem::replace( 
+            &mut self.received_packets, 
+            PacketBuffer::Unlimited(Vec::new()) ) 
+            .into_unlimited()
+        {
+            PacketBuffer::Unlimited(v) => v,
+            _ => panic!("Received unexpected Liimited"), 
+        };
 
         match recv_packs.len() {
             0 => { self.waker = Some(waker.clone()); None},
@@ -696,6 +710,10 @@ impl ConnectionRecvInfo {
         self.received_packets.add(data);
 
         if let Some(w) = self.waker.take() { w.wake(); }
+    }
+
+    fn using_limited_buffer(&self) -> bool {
+        match self.received_packets { PacketBuffer::Limited(_,_) => true, _ => false }
     }
 }
 
@@ -722,14 +740,18 @@ impl RcvHciAclData {
     /// however it may upgrade the buffer from `Limited` to `Unlimited` (but not the reverse).
     ///
     /// Any previously set waker is dropped.
+    ///
+    /// If an unlimited buffer already exists for the privided handle it cannot be downgraded
+    /// into a limited buffer. The buffer must be removed (with `remove_connection_handle`) 
+    /// and then a *new* limited buffer can be made with this funciton.
     fn add_connection_handle(&self, handle: ConnectionHandle, flag: StayAround) {
         self.receive_channels.lock().as_mut()
-            .map( |rc| if let Some(mut rcv_info) = rc.get_mut(&handle) {
+            .map( |rc| if let Some(rcv_info) = rc.get_mut(&handle) {
                     if flag == StayAround::Unlimited {
-                        rcv_info.received_packets = rcv_info.received_packets.into_unlimited()
+                        rcv_info.received_packets.make_unlimited()
                     }
                 } else {
-                    rc.insert(handle, ConnectionRecvInfo::new(flag))
+                    rc.insert(handle, ConnectionRecvInfo::new(flag));
                 })
             .or_else( |e| -> Result<_,()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
             .ok();
@@ -774,12 +796,12 @@ impl RcvHciAclData {
                         Some(Ok(d))
                     })
                     .and_then( |ret| {
-                        remove_cri = !ri.stay_around();
+                        remove_cri = ri.using_limited_buffer();
                         Some(ret)
                     })
             )
-        } else { // The buffer doesn't exist, so create an Unlimited buffer
-            let mut cri = ConnectionRecvInfo::new(StayAround::Unlimited);
+        } else { // The buffer doesn't exist, so create an Limited buffer
+            let mut cri = ConnectionRecvInfo::new(StayAround::Limited);
             cri.set_waker(waker);
             rc_gaurd.insert( *handle, cri);
             None
@@ -800,10 +822,17 @@ impl RcvHciAclData {
         match self.receive_channels.lock().as_mut()
         {
             Ok( rc ) => {
-                if let Some(recv_info) = rc.get_mut(&packet.get_handle()) {
+
+                let handle = *packet.get_handle();
+
+                if let Some(recv_info) = rc.get_mut(&handle) {
                     recv_info.add( packet )
                 } else {
-                    rc.add_connection_handle(&packet.get_handle(), StayAround::Limited);
+                    let mut recv_info = ConnectionRecvInfo::new(StayAround::Limited);
+
+                    recv_info.add( packet );
+
+                    rc.insert(handle, recv_info);
                 }
             }
             Err(lock_e) =>
