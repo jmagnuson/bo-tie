@@ -109,12 +109,10 @@ struct PairingData {
     /// This will change multiple times for passkey, but is static for just works or number
     /// comparison
     nonce: u128,
-    /// Calculated Diffie-Hellman shared secret Key
-    dh_key: Option<toolbox::DHSecret>,
     /// The public key received from the remote device
     peer_public_key: Option<toolbox::PeerKey>,
-    /// The secret key
-    secret_key: Option<[u8;32]>,
+    /// The Diffie-Hellman secret key generated via Elliptic Curve Crypto
+    secret_key: Option<toolbox::DHSecret>,
     /// The remote nonce
     ///
     /// This will change multiple times for passkey, but is static for just works or number
@@ -297,7 +295,6 @@ where C: ConnectionChannel,
                 private_key: Some(private_key),
                 remote_io_cap,
                 nonce: toolbox::nonce(),
-                dh_key: None,
                 peer_public_key: None,
                 secret_key: None,
                 remote_nonce: None,
@@ -498,7 +495,7 @@ where C: ConnectionChannel,
 
         match self.pairing_data {
             Some( PairingData {
-                dh_key: Some( dh_key ),
+                secret_key: Some( dh_key ),
                 nonce,
                 remote_nonce: Some( remote_nonce ),
                 remote_io_cap,
