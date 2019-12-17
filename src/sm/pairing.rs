@@ -411,7 +411,7 @@ impl PairingRandom {
 
 impl From<PairingRandom> for Command<PairingRandom> {
     fn from(pc: PairingRandom) -> Self {
-        Command::new(CommandType::PairingConfirm, pc)
+        Command::new(CommandType::PairingRandom, pc)
     }
 }
 

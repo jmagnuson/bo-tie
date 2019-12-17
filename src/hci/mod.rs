@@ -214,8 +214,6 @@ impl HciAclData {
     /// supports LE.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
 
-        log::trace!("Sending packet {:?}", self);
-
         let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
@@ -227,8 +225,6 @@ impl HciAclData {
         v.extend_from_slice( &(self.payload.len() as u16).to_le_bytes() );
 
         v.extend_from_slice( &self.payload );
-
-        log::trace!("Packet raw data {:x?}", v);
 
         v
     }
