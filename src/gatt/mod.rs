@@ -595,9 +595,7 @@ mod tests {
     struct DummyConnection;
 
     impl ConnectionChannel for DummyConnection {
-        const DEFAULT_ATT_MTU: u16 = core::u16::MAX;
-
-        fn send(&self, _: crate::l2cap::AclData) {}
+        fn send<Pdu>(&self, _: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{}
         fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
     }
 

@@ -22,7 +22,7 @@ features = ["i128"]
 
 [dev-dependencies]
 lazy_static = "1.1"
-futures-preview = { version = "0.3.0-alpha.16" }
+futures-preview = "0.3.0-alpha.19"
 simplelog = "0.6"
 rand = "0.7"
 async-timer = "0.6"

@@ -440,7 +440,7 @@ where C: l2cap::ConnectionChannel
 
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
 
-                if payload.len() > 1 {
+                if payload.len() > 0 {
                     let pdu_type = super::client::ClientPduName::try_from(att_type[0])
                         .or( Err(super::Error::UnknownOpcode(att_type[0])) )?;
 

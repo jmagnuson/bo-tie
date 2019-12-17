@@ -136,14 +136,23 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     ///
     /// This performs the initial setup between the client and the server required for establishing
     /// the attribute protocol. An optional input is used to determine the maximum size of each
-    /// attribute packet. If maximum_transfer_unit is `None` the the minimum MTU is used.
+    /// attribute packet. If maximum_transfer_unit is `None` or is less then the minimum MTU, the
+    /// minimum MTU is used.
     ///
     /// The bluetooth connection must already be established
     pub fn connect<Mtu>( channel: &'c C, maximum_transfer_unit: Mtu )
     -> ResponseProcessor<impl FnOnce(&[u8]) -> Result<Client<'c, C>, super::Error> + 'c, Self>
     where Mtu: Into<Option<u16>>
     {
-        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {mtu} else {super::MIN_ATT_MTU_LE};
+        let mtu = if let Some(mtu) = maximum_transfer_unit.into() {
+            if mtu > super::MIN_ATT_MTU_LE { mtu } else {super::MIN_ATT_MTU_LE}
+        } else {
+            super::MIN_ATT_MTU_LE
+        };
+
+        let mut client = Client { mtu: mtu as usize, channel };
+
+        client.send(&pdu::exchange_mtu_request(mtu)).unwrap();
 
         ResponseProcessor( move | bytes | {
             // Check for a ExchangeMTUResponse PDU
@@ -151,11 +160,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             {
                 match TransferFormat::from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
+                        let v: u16 = received_mtu;
 
-                        let client = Client {
-                            mtu: core::cmp::min( mtu,  received_mtu) as usize,
-                            channel,
-                        };
+                        client.mtu = v as usize;
 
                         Ok(client)
                     },
@@ -219,10 +226,16 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     where P: TransferFormat
     {
         use core::convert::TryFrom;
-        
-        if expected_response.is_convertible_from(bytes) {
-            match TransferFormat::from(&bytes) {
-                Ok(pdu) => Ok(pdu),
+
+        if bytes.len() == 0 {
+
+            Err(super::Error::Empty)
+
+        } else if expected_response.is_convertible_from(bytes) {
+            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormat::from(&bytes);
+
+            match pdu {
+                Ok(pdu) => Ok(pdu.into_parameters()),
                 Err(e) => Err(e.into()),
             }
         } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
@@ -273,7 +286,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         if super::MIN_ATT_MTU_LE > mtu {
             Err(super::Error::TooSmallMtu)
         } else {
-            self.send(&pdu::exchange_mtu_request(mtu))?;
+            self.send(&pdu::exchange_mtu_request(mtu)).unwrap();
 
             Ok( ResponseProcessor(move |data| {
                 let pdu: pdu::Pdu<u16> = Self::process_raw_data(super::server::ServerPduName::ExchangeMTUResponse, data)?;
@@ -314,7 +327,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// The attribute type, labeled as the input `uuid`, is a 16 bit assigned number type. If the
     /// type cannot be converted into a 16 bit UUID, then this function will return an error
     /// containing the incorrect type.
-    /// 
+    ///
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
     /// ending handle
@@ -330,7 +343,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         if !pdu::is_valid_handle_range(&handle_range) {
             panic!("Invalid handle range")
         }
-        
+
         let pdu_rslt = pdu::find_by_type_value_request(handle_range, uuid, value);
 
         match pdu_rslt {
@@ -344,9 +357,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     }
 
     /// Read request
-    /// 
+    ///
     /// # Panic
-    /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger 
+    /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger
     /// then the ending handle
     pub fn read_by_type_request<R>(&self, handle_range: R, attr_type: crate::UUID)
     -> Result< ResponseProcessor<
@@ -358,39 +371,39 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>
     {
         if !pdu::is_valid_handle_range(&handle_range) {
-            panic!("Invalid handle range") 
+            panic!("Invalid handle range")
         }
-        
+
         self.send(&pdu::read_by_type_request(handle_range, attr_type))?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByTypeResponse, d)))
     }
 
     /// Read request
-    /// 
+    ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
     pub fn read_request<D>(&self, handle: u16 )
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
-    where D: TransferFormat 
+    where D: TransferFormat
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
-        
+
         self.send(&pdu::read_request(handle))?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadResponse, d)))
     }
 
     /// Read blob request
-    /// 
+    ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
     pub fn read_blob_request<D>(&self, handle: u16, offset: u16)
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
-    where D: TransferFormat 
+    where D: TransferFormat
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
-        
+
         self.send( &pdu::read_blob_request(handle, offset) )?;
 
         Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadBlobResponse, d)))

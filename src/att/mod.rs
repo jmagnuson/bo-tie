@@ -591,12 +591,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel1 {
 
-        const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
-
-        fn send(&self, data: crate::l2cap::AclData) {
+        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b1 = Some(data.into_raw_data());
+            gaurd.b1 = Some(data.into().into_data());
 
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
@@ -619,12 +617,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel2 {
 
-        const DEFAULT_ATT_MTU: u16 = crate::l2cap::MIN_ATT_MTU_LE;
-
-        fn send(&self, data: crate::l2cap::AclData) {
+        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b2 = Some(data.into_raw_data());
+            gaurd.b2 = Some(data.into().into_data());
 
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
@@ -661,6 +657,13 @@ mod test {
         let kill_opcode = 0xFFu8;
 
         let (c1,c2) = TwoWayChannel::new();
+
+        fn block_on<F: std::future::Future + std::marker::Unpin>(f: F, timeout_err: &str) -> F::Output{
+
+            let tf = async_timer::Timed::platform_new(f, std::time::Duration::from_secs(1));
+
+            futures::executor::block_on(tf).map_err(|_| timeout_err).unwrap()
+        }
 
         let t = thread::spawn( move || {
             use AttributePermissions::*;
@@ -699,7 +702,8 @@ mod test {
                             Err(super::Error::UnknownOpcode(op)) if op == kill_opcode =>
                                 break 'server_loop Ok(()),
                             Err(e) =>
-                                break 'server_loop Err(format!("Pdu error: {:?}", e)),
+                                break 'server_loop Err(
+                                    format!("Pdu error: {:?}, att pdu op: {}", e, l2cap_pdu.get_payload()[0])),
                             _ => (),
                         }
                     },
@@ -711,18 +715,14 @@ mod test {
         });
 
         let client = client::Client::connect(&c1, 512)
-            .process_response(
-                futures::executor::block_on(c1.future_receiver())
+            .process_response(block_on(c1.future_receiver(), "Connect timed out")
                     .expect("connect receiver").first().unwrap()
             )
             .expect("connect response");
 
-        // writing to *reserved* handle 0
-        assert!( client.write_request(0, 0xFFFF).is_err() );
-
         // writing to handle 1
         client.write_request(1, test_val_1).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "write handle 1 timed out")
                 .expect("w1 receiver")
                 .first()
                 .unwrap() )
@@ -730,7 +730,7 @@ mod test {
 
         // writing to handle 2
         client.write_request(2, test_val_2).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "write handle 2 timed out")
                 .expect("w2 receiver")
                 .first()
                 .unwrap() )
@@ -738,7 +738,7 @@ mod test {
 
         // writing to handle 3
         client.write_request(3, test_val_3).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "write handle 3 timed out")
                 .expect("w3 receiver")
                 .first()
                 .unwrap() )
@@ -746,21 +746,21 @@ mod test {
 
         // reading handle 1
         let read_val_1 = client.read_request(1).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "read handle 1 timed out")
                 .expect("r1 receiver")
                 .first()
                 .unwrap() )
             .expect("r1 response");
 
         let read_val_2 = client.read_request(2).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "read handle 2 timed out")
                 .expect("r2 receiver")
                 .first()
                 .unwrap() )
             .expect("r2 response");
 
         let read_val_3 = client.read_request(3).unwrap()
-            .process_response( futures::executor::block_on(c1.future_receiver())
+            .process_response( block_on(c1.future_receiver(), "read handle 3 timed out")
                 .expect("r3 receiver")
                 .first()
                 .unwrap() )
@@ -774,6 +774,7 @@ mod test {
         assert_eq!(test_val_2, read_val_2);
         assert_eq!(test_val_3, read_val_3);
 
-        t.join().expect("Thread Failed to join")
+        t.join()
+            .map_err(|e| panic!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()) );
     }
 }
