@@ -511,7 +511,7 @@ where C: ConnectionChannel,
                 a_addr[..6].copy_from_slice(self.initiator_address);
                 b_addr[..6].copy_from_slice(self.responder_address);
 
-                // Reverse to put the two address informations in the correct byte order
+                // Reverse to put the two address information in the correct byte order
                 a_addr.reverse();
                 b_addr.reverse();
 
@@ -566,6 +566,9 @@ where C: ConnectionChannel,
                     Ok(true)
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
+
+                    log::trace!("received ea: {:x?}", received_ea);
+                    log::trace!("calculated ea: {:x?}", ea);
 
                     Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed))
                 }

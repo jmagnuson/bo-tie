@@ -15,6 +15,9 @@
 //! The security function *e* is built using the functions [`ah`], [`c1`], and [`s1`].
 //!
 //! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
+//!
+//! For the inputs to the functions defined in the specification, all data types are in native
+//! endian order except for slices which need to be in big-endian order.
 
 /// The OpenSSL identifier for NIST P-256
 ///
@@ -270,7 +273,7 @@ pub fn f4(u: [u8; 32], v: [u8; 32], x: u128, z: u8) -> u128 {
 /// To return a LTK (long term key) and a MacKey (message authentication code key), the inputs
 /// needs to be mapped as follows:
 ///
-/// * w:  The shared secred Diffie-Hellman key generated during LE Secure Connections pairing phase 2
+/// * w:  The shared secret Diffie-Hellman key generated during LE Secure Connections pairing phase 2
 /// * n1: A randomly generated number sent from the master device to the slave
 /// * n2: A randomly generated number sent from the slave device to the master
 /// * a1: The device address of the *master* (in little endian order) with the most significant byte
@@ -293,9 +296,9 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 
     let length = [0x01, 0x00];
 
-    let n1_bytes_le = n1.to_be_bytes();
+    let n1_bytes_be = n1.to_be_bytes();
 
-    let n2_bytes_le = n2.to_be_bytes();
+    let n2_bytes_be = n2.to_be_bytes();
 
     // The range is the 'Counter' values
     let mut keys = (0u8..=1).map(|counter| {
@@ -306,9 +309,9 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 
         m[1..5].copy_from_slice(&key_id);
 
-        m[5..21].copy_from_slice(&n1_bytes_le);
+        m[5..21].copy_from_slice(&n1_bytes_be);
 
-        m[21..37].copy_from_slice(&n2_bytes_le);
+        m[21..37].copy_from_slice(&n2_bytes_be);
 
         m[37..44].copy_from_slice(&a1);
 
@@ -323,7 +326,7 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 
     let ltk = keys.next().unwrap();
 
-    ( mac_key, ltk )
+    ( mac_key.to_bytes_ne(), ltk.to_bytes_ne() )
 }
 
 /// Phase 2 (LE Secure) check value generator function
