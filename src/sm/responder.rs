@@ -511,6 +511,10 @@ where C: ConnectionChannel,
                 a_addr[..6].copy_from_slice(self.initiator_address);
                 b_addr[..6].copy_from_slice(self.responder_address);
 
+                // Reverse to put the two address informations in the correct byte order
+                a_addr.reverse();
+                b_addr.reverse();
+
                 let (mac_key, ltk) = toolbox::f5(
                     dh_key,
                     remote_nonce,
