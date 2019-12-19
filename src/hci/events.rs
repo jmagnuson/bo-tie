@@ -642,7 +642,7 @@ impl<UnpackErrorType> core::fmt::Display for CommandDataErr<UnpackErrorType>
                 write!(f, "Command complete data error, expected opcode is 0x{:X}, actual opcode is 0x{:X}",exp,act)
             }
             CommandDataErr::UnpackError(ref e) => {
-                write!(f, "Command complete data error, unpacking the raw data failed: {:?}", e)
+                write!(f, "Command complete contained error code for '{:?}'", e)
             }
         }
     }

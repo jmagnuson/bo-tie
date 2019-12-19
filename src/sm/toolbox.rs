@@ -326,7 +326,7 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 
     let ltk = keys.next().unwrap();
 
-    ( mac_key.to_bytes_ne(), ltk.to_bytes_ne() )
+    ( mac_key, ltk )
 }
 
 /// Phase 2 (LE Secure) check value generator function

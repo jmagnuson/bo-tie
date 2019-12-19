@@ -515,6 +515,12 @@ where C: ConnectionChannel,
                 a_addr.reverse();
                 b_addr.reverse();
 
+                log::trace!("secret key: {:x?}", dh_key);
+                log::trace!("remote nonce: {:x?}", remote_nonce);
+                log::trace!("this nonce: {:x?}", nonce);
+                log::trace!("remote addr: {:x?}", a_addr);
+                log::trace!("this addr: {:x?}", b_addr);
+
                 let (mac_key, ltk) = toolbox::f5(
                     dh_key,
                     remote_nonce,
@@ -522,6 +528,10 @@ where C: ConnectionChannel,
                     a_addr.clone(),
                     b_addr.clone(),
                 );
+
+                log::trace!("mac_key: {:x?}", mac_key);
+                log::trace!("ltk: {:x?}", ltk);
+                log::trace!("master_io_cap: {:x?}", master_io_cap);
 
                 let ea = toolbox::f6(
                     mac_key,

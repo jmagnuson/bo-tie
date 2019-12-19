@@ -511,19 +511,21 @@ pub mod set_random_address {
     use crate::hci::*;
 
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetRandomAddress);
 
     impl_status_return!(COMMAND);
 
+    #[repr(packed)]
+    #[derive(Clone)]
     struct Parameter {
         rand_address: crate::BluetoothDeviceAddress
     }
 
     impl CommandParameter for Parameter {
-        type Parameter = crate::BluetoothDeviceAddress;
+        type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
-            self.rand_address
+            self.clone()
         }
     }
 

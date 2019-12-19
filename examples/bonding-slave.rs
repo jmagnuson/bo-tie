@@ -1,15 +1,16 @@
-#![feature(async_closure)]
-
 use bo_tie:: {
     att,
     gap::advertise,
     gatt,
     hci,
     hci::events,
-    hci::le::transmitter::{
-        set_advertising_data,
-        set_advertising_parameters,
-        set_advertising_enable,
+    hci::le::{
+        transmitter::{
+            set_advertising_data,
+            set_advertising_parameters,
+            set_advertising_enable,
+            set_random_address,
+        },
     },
     sm::responder::SlaveSecurityManager,
 };
@@ -23,6 +24,7 @@ const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 /// This sets up the advertising and waits for the connection complete event
 async fn advertise_setup<'a>(
     hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    this_address: bo_tie::BluetoothDeviceAddress,
     local_name: &'a str )
 {
     let adv_name = advertise::local_name::LocalName::new(local_name, false);
@@ -42,6 +44,8 @@ async fn advertise_setup<'a>(
     adv_data.try_push(adv_name).unwrap();
 
     set_advertising_enable::send(&hi, false).await.unwrap();
+
+    set_random_address::send(&hi, this_address.clone()).await.unwrap();
 
     set_advertising_data::send(&hi, adv_data).await.unwrap();
 
@@ -225,11 +229,11 @@ fn main() {
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
     
-    let this_address = executor::block_on(
-        bo_tie::hci::le::mandatory::read_bd_addr::send(&interface)
-    ).unwrap();
+    let this_address = [0x70, 0x92, 0x07, 0x23, 0xac, 0xc3];
+ 
+    println!("This public address: {:x?}", this_address);
 
-    executor::block_on(advertise_setup(&interface, local_name));
+    executor::block_on(advertise_setup(&interface, this_address.clone(), local_name));
 
     // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
     // on a different thread.
@@ -244,7 +248,6 @@ fn main() {
 
             let master_address_type = event_data.peer_address_type.clone();
 
-
             std::thread::spawn( move || {
 
                 let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
@@ -258,7 +261,7 @@ fn main() {
                     &master_address,
                     master_address_type == bo_tie::hci::events::LEConnectionAddressType::RandomDeviceAddress,
                     &this_address,
-                    false
+                    true // using a random address 
                 )
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
                 .create_security_manager();
