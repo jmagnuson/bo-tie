@@ -265,7 +265,7 @@ where C: ConnectionChannel,
                 false
             );
 
-            let master_io_cap = response.get_io_cap();
+            let master_io_cap = request.get_io_cap();
 
             self.send(response);
 

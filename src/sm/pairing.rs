@@ -127,6 +127,7 @@ impl CommandData for PairingRequest {
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+        log::trace!("received pairing request: {:x?}", icd);
         if icd.len() == 6 {
             Ok( Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
