@@ -527,19 +527,6 @@ impl GetXOfP256Key for [u8;64] {
     }
 }
 
-fn convert_io_cap(
-    auth_req: &[encrypt_info::AuthRequirements],
-    oob_flag: pairing::OOBDataFlag,
-    io_cap: pairing::IOCapability
-)
-    -> [u8;3]
-{
-    [
-        io_cap.into_val(),
-        oob_flag.into_val(),
-        encrypt_info::AuthRequirements::make_auth_req_val(auth_req),
-    ]
-}
 
 pub mod responder;
 pub mod initiator;

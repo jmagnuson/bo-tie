@@ -105,6 +105,8 @@ struct PairingData {
     /// Initiator IOcap information. This must match the exact bits sent over from the master, even
     /// if the bits are not valid for their field.
     master_io_cap: [u8;3],
+    /// This IOcap information
+    this_io_cap: [u8;3],
     /// Nonce value
     ///
     /// This will change multiple times for passkey, but is static for just works or number
@@ -266,6 +268,7 @@ where C: ConnectionChannel,
             );
 
             let master_io_cap = request.get_io_cap();
+            let this_io_cap   = response.get_io_cap();
 
             self.send(response);
 
@@ -277,6 +280,7 @@ where C: ConnectionChannel,
                 public_key,
                 private_key: Some(private_key),
                 master_io_cap,
+                this_io_cap,
                 nonce: toolbox::nonce(),
                 peer_public_key: None,
                 secret_key: None,
@@ -482,6 +486,7 @@ where C: ConnectionChannel,
                 nonce,
                 remote_nonce: Some( remote_nonce ),
                 master_io_cap,
+                this_io_cap,
                 ..
             }) => {
 
@@ -532,22 +537,16 @@ where C: ConnectionChannel,
 
                     self.pairing_data.as_mut().unwrap().ltk = Some(ltk);
 
+                    log::trace!("this_io_cap: {:x?}", this_io_cap);
+
                     let eb = toolbox::f6(
                         mac_key,
                         nonce,
                         remote_nonce,
                         0,
-                        convert_io_cap(
-                            &self.auth_req,
-                            if self.oob_data.is_some() {
-                                pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
-                            } else {
-                                pairing::OOBDataFlag::AuthenticationDataNotPresent
-                            },
-                            self.io_capability,
-                        ),
-                        b_addr.clone(),
-                        a_addr.clone(),
+                        this_io_cap,
+                        b_addr,
+                        a_addr,
                     );
 
                     self.send(pairing::PairingDHKeyCheck::new(eb));

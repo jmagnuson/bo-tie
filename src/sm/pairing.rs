@@ -3,6 +3,20 @@
 use super::*;
 use super::encrypt_info::AuthRequirements;
 
+fn convert_io_cap(
+    auth_req: &[encrypt_info::AuthRequirements],
+    oob_flag: pairing::OOBDataFlag,
+    io_cap: pairing::IOCapability
+)
+    -> [u8;3]
+{
+    [
+        encrypt_info::AuthRequirements::make_auth_req_val(auth_req),
+        oob_flag.into_val(),
+        io_cap.into_val(),
+    ]
+}
+
 /// The IO Capabilities of a device as it relates to the pairing method
 #[derive(Debug,Clone,Copy)]
 pub enum IOCapability {
@@ -275,7 +289,7 @@ impl PairingResponse {
         responder_key_distribution: Vec<KeyDistributions>
     ) -> Self {
         Self {
-            io_cap_f6: super::convert_io_cap(&auth_req, oob_data_flag, io_capability),
+            io_cap_f6: convert_io_cap(&auth_req, oob_data_flag, io_capability),
             io_capability,
             oob_data_flag,
             auth_req,

@@ -132,7 +132,6 @@ where C: bo_tie::l2cap::ConnectionChannel
     use bo_tie::hci::events::Events;
     use core::time::Duration;
 
-
     loop {
         futures::executor::block_on(
             async {
@@ -152,27 +151,40 @@ where C: bo_tie::l2cap::ConnectionChannel
                                 Ok(true) => {
                                     // when true is retuend, the keys have been verified and
                                     // encryption over the Link Layer can begin
-
+                                    
                                     let enabled_events = &[
                                         set_event_mask::EventMask::EncryptionChange,
                                         set_event_mask::EventMask::EncryptionKeyRefreshComplete,
+                                        set_event_mask::EventMask::Disconnect,
                                     ];
 
                                     set_event_mask::send(hi, enabled_events).await.unwrap();
+                                    
+                                    // Since Secure Connections is used, random_number and
+                                    // encrypted_diversifier are 0.
+                                    let parameter = start_encryption::Parameter::{
+                                        handle: ,
+                                        random_number: 0,
+                                        encrypted_diversifier: 0,
+                                        long_term_key:
+                                        
+                                    start_encryption::send(hi<
 
                                     let e_change_fut = hi.wait_for_event(
                                         Events::EncryptionChange,
-                                        Duration::from_secs(1)
+                                        Duration::from_secs(1),
                                     );
 
                                     let e_key_refresh_fut = hi.wait_for_event(
                                         Events::EncryptionKeyRefreshComplete,
-                                        Duration::from_secs(1)
+                                        Duration::from_secs(1),
                                     );
 
                                     match futures::future::select(e_change_fut, e_key_refresh_fut).await {
-                                        futures::future::Either::Left((r,_)) => r.unwrap(),
-                                        futures::future::Either::Right((r,_)) => r.unwrap(),
+                                        futures::future::Either::Left((r,_)) => r.err()
+                                            .map(|e| println!("Failed encryption: {:?}", e)),
+                                        futures::future::Either::Right((r,_)) => r.err()
+                                            .map(|e| println!("Failed encryption: {:?}", e)),
                                     };
 
                                     // keys can now be exchanged
