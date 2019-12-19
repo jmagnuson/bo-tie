@@ -16,8 +16,9 @@
 //!
 //! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
 //!
-//! For the inputs to the functions defined in the specification, all data types are in native
-//! endian order except for slices which need to be in big-endian order.
+//! # Note
+//! For the the functions defined in the specification, all array inputs need to be in big-endian
+//! order.
 
 /// The OpenSSL identifier for NIST P-256
 ///
@@ -794,7 +795,8 @@ mod tests {
 
         let rslt = f5(dh_key, n1, n2, a1, a2);
 
-        assert_eq!( rslt , (mac_key, ltk), "\n left in hex: `{:x?}`\nright in hex : `{:x?}`", rslt, (mac_key, ltk) );
+        assert_eq!( rslt , (mac_key, ltk),
+                    "\n left in hex: `{:x?}`\nright in hex : `{:x?}`", rslt, (mac_key, ltk) );
     }
 
     #[test]

@@ -110,6 +110,7 @@ pub struct PairingRequest {
     max_encryption_size: usize,
     initiator_key_distribution: Vec<KeyDistributions>,
     responder_key_distribution: Vec<KeyDistributions>,
+    io_cap_f6: [u8;3],
 }
 
 impl CommandData for PairingRequest {
@@ -121,7 +122,7 @@ impl CommandData for PairingRequest {
                 AuthRequirements::make_auth_req_val( &self.auth_req ),
                 self.max_encryption_size as u8,
                 KeyDistributions::make_key_dist_val( &self.initiator_key_distribution ),
-                KeyDistributions::make_key_dist_val( &self.responder_key_distribution )
+                KeyDistributions::make_key_dist_val( &self.responder_key_distribution ),
             ]
     }
 
@@ -138,6 +139,7 @@ impl CommandData for PairingRequest {
                 },
                 initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
+                io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
             log::error!("(SM) Failed to generate 'pairing request' from raw data");
@@ -199,6 +201,14 @@ impl PairingRequest {
     pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions> ) {
         self.responder_key_distribution = dist_gen_types
     }
+
+    /// Get the IOcap (not the IO capabilities)
+    ///
+    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'](crate::sm::toolbox::f6)
+    /// toolbox function.
+    pub(super) fn get_io_cap(&self) -> [u8;3] {
+        self.io_cap_f6.clone()
+    }
 }
 
 impl From<PairingRequest> for Command<PairingRequest> {
@@ -214,6 +224,7 @@ pub struct PairingResponse {
     max_encryption_size: usize,
     initiator_key_distribution: Vec<KeyDistributions>,
     responder_key_distribution: Vec<KeyDistributions>,
+    io_cap_f6: [u8;3],
 }
 
 impl CommandData for PairingResponse {
@@ -225,7 +236,7 @@ impl CommandData for PairingResponse {
                 AuthRequirements::make_auth_req_val( &self.auth_req ),
                 self.max_encryption_size as u8,
                 KeyDistributions::make_key_dist_val( &self.initiator_key_distribution ),
-                KeyDistributions::make_key_dist_val( &self.responder_key_distribution )
+                KeyDistributions::make_key_dist_val( &self.responder_key_distribution ),
             ]
     }
 
@@ -242,6 +253,7 @@ impl CommandData for PairingResponse {
                 },
                 initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
+                io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
             log::error!("(SM) Failed to generate 'pairing response' from raw data");
@@ -262,6 +274,7 @@ impl PairingResponse {
         responder_key_distribution: Vec<KeyDistributions>
     ) -> Self {
         Self {
+            io_cap_f6: super::convert_io_cap(&auth_req, oob_data_flag, io_capability),
             io_capability,
             oob_data_flag,
             auth_req,
@@ -320,6 +333,14 @@ impl PairingResponse {
     /// the responder to distribute.
     pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions> ) {
         self.responder_key_distribution = dist_gen_types
+    }
+
+    /// Get the IOcap (not the IO capabilities)
+    ///
+    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'](crate::sm::toolbox::f6)
+    /// toolbox function.
+    pub(super) fn get_io_cap(&self) -> [u8;3] {
+        self.io_cap_f6.clone()
     }
 }
 
