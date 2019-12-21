@@ -45,6 +45,8 @@ use crate::l2cap::ConnectionChannel;
 pub mod toolbox;
 pub mod pairing;
 pub mod encrypt_info;
+pub mod responder;
+pub mod initiator;
 
 const L2CAP_LEGACY_MTU: usize = 23;
 const L2CAP_SECURE_CONNECTIONS_MTU: usize = 65;
@@ -55,7 +57,7 @@ const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 const SECURITY_MANAGER_L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
     crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
 
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug)]
 pub enum Error {
     Size,
     Format,
@@ -63,6 +65,7 @@ pub enum Error {
     IncorrectCommand(CommandType),
     UnsupportedFeature,
     PairingFailed(pairing::PairingFailedReason),
+    EncryptionFailed(alloc::boxed::Box<dyn core::fmt::Debug>),
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -527,6 +530,280 @@ impl GetXOfP256Key for [u8;64] {
     }
 }
 
+/// Lazy Encryption
+///
+/// This can be used to encrypt a connection between a master and slave.
+struct LazyEncrypt {
+    ltk: u128
+}
 
-pub mod responder;
-pub mod initiator;
+impl LazyEncrypt {
+
+    /// Use the Host Controller Interface to start encrypting the Bluetooth LE connection
+    ///
+    /// This returns a future that will setup encryption of the connection channel associated with
+    /// the provided `connection_handle` once it is polled to completion.
+    ///
+    /// Only the AES cypher is considered "encrypted" by this procedure. An error will be returned
+    /// if the controller decides to use the E0 cypher for encryption. A timeout can also be
+    /// provided for waiting on the encryption events to be sent from the controller to the host.
+    ///
+    /// # Note
+    /// This will set the event mask for the Host Controller Interface to the events
+    /// ['DisconnectionComplete'](crate::hci::events::Events::DisconnectionComplete),
+    /// ['EncryptionChange'](crate::hci::events::Events::EncryptionChange),
+    /// and
+    /// ['EncryptionKeyRefreshComplete'](crate::hci::events::Events::EncryptionKeyRefreshComplete),
+    /// These events are needed by the returned future, and can only be masked away once it is
+    /// polled to completion.
+    pub fn le_start_encryption_with_hci<'a, HCI, D>(
+        self,
+        hci: &'a crate::hci::HostInterface<HCI>,
+        connection_handle: crate::hci::common::ConnectionHandle,
+        encryption_timeout: D,
+    ) -> impl core::future::Future<Output=Result<(), Error>> + 'a
+    where HCI: crate::hci::HostControllerInterface + 'static,
+            D: Into<Option<core::time::Duration>> + 'a
+    {
+        use crate::hci::cb::set_event_mask::EventMask;
+
+        let event_mask = [
+            EventMask::DisconnectionComplete,
+            EventMask::EncryptionChange,
+            EventMask::EncryptionKeyRefreshComplete,
+        ];
+
+        lazy_encrypt::new_lazy_encrypt_future(event_mask, self.ltk, hci, connection_handle, encryption_timeout)
+    }
+}
+
+mod lazy_encrypt {
+    use alloc::boxed::Box;
+    use super::Error;
+    use core::fmt::{Display,Debug};
+    use core::future::Future;
+    use core::marker::Unpin;
+    use core::pin::Pin;
+    use core::task::{Context,Poll};
+    use core::time::Duration;
+    use crate::hci::{
+        cb::set_event_mask::EventMask,
+        common::ConnectionHandle,
+        events::{Events, EventsData},
+        HostInterface,
+        HostControllerInterface,
+        le::encryption::start_encryption::Parameter as EncryptionParameter,
+    };
+
+    type EventMasks = [EventMask; 3];
+
+    pub fn new_lazy_encrypt_future<'a, HCI, D>(
+        event_mask: EventMasks,
+        ltk: u128,
+        hci: &'a HostInterface<HCI>,
+        connection_handle: ConnectionHandle,
+        encryption_timeout: D,
+    ) -> impl Future<Output = Result<(), Error>> + 'a
+    where HCI: HostControllerInterface + 'static,
+            D: Into<Option<Duration>>
+    {
+        LazyEncryptFuture::new(
+            event_mask,
+            ltk,
+            hci,
+            connection_handle,
+            crate::hci::cb::set_event_mask::send,
+            crate::hci::le::encryption::start_encryption::send,
+            crate::hci::HostInterface::wait_for_event_with_matcher,
+            encryption_timeout,
+        )
+    }
+
+    struct LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3> {
+        event_mask: EventMasks,
+        ltk: u128,
+        hci: &'a HostInterface<HCI>,
+        connection_handle: ConnectionHandle,
+        current: LazyEncryptCurrent<F1,F2,F3,F3>,
+        set_mask_fn: SMFn,
+        start_encryption_fn: SEFn,
+        wait_for_event_with_matcher_fn: WFEFn,
+        encrypt_timeout: Option<Duration>,
+    }
+
+    impl<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3>
+    LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3>
+    where HCI: HostControllerInterface
+    {
+        fn new<D: Into<Option<Duration>>>(
+            event_mask: EventMasks,
+            ltk: u128,
+            hci: &'a HostInterface<HCI>,
+            connection_handle: ConnectionHandle,
+            set_mask_fn: SMFn,
+            start_encryption_fn: SEFn,
+            wait_for_event_with_matcher_fn: WFEFn,
+            encrypt_timeout: D,
+        ) -> Self {
+
+            LazyEncryptFuture {
+                event_mask,
+                ltk,
+                hci,
+                connection_handle,
+                current: LazyEncryptCurrent::None,
+                set_mask_fn,
+                start_encryption_fn,
+                wait_for_event_with_matcher_fn,
+                encrypt_timeout: encrypt_timeout.into()
+            }
+        }
+    }
+
+    impl<'a, HCI, F1, FER1, SMFn, F2, FER2, SEFn, WFEFn, F3> core::future::Future
+    for LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3,>
+    where  HCI: HostControllerInterface,
+            F1: Future<Output = Result<(), FER1>> + Unpin + 'a,
+          FER1: Display + Debug + 'static,
+          SMFn: Fn(&'a HostInterface<HCI>, &[EventMask]) -> F1 + Unpin,
+            F2: Future<Output = Result<(), FER2>> + Unpin + 'a,
+          FER2: Display + Debug + 'static,
+          SEFn: Fn(&'a HostInterface<HCI>, EncryptionParameter) -> F2 + Unpin,
+            F3: Future<Output = Result<EventsData, <HCI as HostControllerInterface>::ReceiveEventError>> + Unpin + 'a,
+         WFEFn: Fn(&'a HostInterface<HCI>, Events, Option<Duration>, EncryptEventMatcher) -> F3 + Unpin,
+         <HCI as HostControllerInterface>::ReceiveEventError: 'static
+    {
+        type Output = Result<(), Error>;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output>
+        {
+            let this = self.get_mut();
+
+            loop {
+                match &mut this.current {
+                    LazyEncryptCurrent::None => {
+                        log::trace!("None");
+
+                        let future = (this.set_mask_fn)(this.hci, &this.event_mask);
+
+                        this.current = LazyEncryptCurrent::SetMask(future);
+                    },
+                    LazyEncryptCurrent::SetMask(future) => {
+                        log::trace!("SetMask");
+
+                        match Pin::new(future).poll(cx).map_err(err_map) {
+                            Poll::Pending => break Poll::Pending,
+                            err @ Poll::Ready(Err(_)) => break err,
+                            Poll::Ready(Ok(_)) => {
+
+                                let encrypt_pram = EncryptionParameter {
+                                    handle: this.connection_handle,
+                                    random_number: 0,
+                                    encrypted_diversifier: 0,
+                                    long_term_key: this.ltk
+                                };
+
+                                let start_encrypt_fut = (this.start_encryption_fn)(this.hci, encrypt_pram);
+
+                                let encrypt_change_fut = (this.wait_for_event_with_matcher_fn)(
+                                    this.hci,
+                                    Events::EncryptionChange,
+                                    this.encrypt_timeout,
+                                    EncryptEventMatcher(this.connection_handle),
+                                );
+
+                                let encrypt_key_refresh_fut = (this.wait_for_event_with_matcher_fn)(
+                                    this.hci,
+                                    Events::EncryptionKeyRefreshComplete,
+                                    this.encrypt_timeout,
+                                    EncryptEventMatcher(this.connection_handle),
+                                );
+
+                                this.current = LazyEncryptCurrent::StartEncryption(
+                                    start_encrypt_fut,
+                                    encrypt_change_fut,
+                                    encrypt_key_refresh_fut,
+                                );
+                            },
+                        }
+                    },
+                    LazyEncryptCurrent::StartEncryption(cmd_fut, _, _) => {
+                        log::trace!("StartEncryption");
+
+                        match Pin::new(cmd_fut).poll(cx).map_err(err_map) {
+                            Poll::Pending => break Poll::Pending,
+                            err @ Poll::Ready(Err(_)) => break err,
+                            Poll::Ready(Ok(_)) => {
+
+                                let start_encrypt = core::mem::replace(
+                                    &mut this.current,
+                                    LazyEncryptCurrent::None
+                                );
+
+                                match start_encrypt {
+                                    LazyEncryptCurrent::StartEncryption(_,f1, f2) =>
+                                        this.current = LazyEncryptCurrent::AwaitEncryptFinish(f1, f2),
+                                    _ => panic!("Expected StartEncryption")
+                                }
+
+                            },
+                        }
+                    },
+                    LazyEncryptCurrent::AwaitEncryptFinish(change_fut, refresh_fut) => {
+                        log::trace!("AwaitEncryptFinish");
+
+                        match Pin::new(change_fut).poll(cx).map_err(err_map) {
+                            Poll::Pending => match Pin::new(refresh_fut).poll(cx).map_err(err_map) {
+                                Poll::Pending => break Poll::Pending,
+                                Poll::Ready(Err(e)) => break Poll::Ready(Err(e)),
+                                Poll::Ready(Ok(refresh_data)) => break Poll::Ready(Ok(())),
+                            },
+                            Poll::Ready(Err(e)) => break Poll::Ready(Err(e)),
+                            Poll::Ready(Ok(change_data)) => {
+                                match change_data {
+                                    EventsData::EncryptionChange(e_data) => {
+
+                                        break match e_data.encryption_enabled.get_for_le() {
+                                            crate::hci::common::EncryptionLevel::AESCCM =>
+                                                Poll::Ready(Ok(())),
+                                            crate::hci::common::EncryptionLevel::E0 =>
+                                                Poll::Ready(Err(err_map("E0 cypher used"))),
+                                            crate::hci::common::EncryptionLevel::Off =>
+                                                Poll::Ready(Err(err_map("Encryption not enabled"))),
+                                        };
+                                    }
+                                    ed => panic!("Received unexpected event data: '{:?}'", ed),
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn err_map<E: 'static>(e: E) -> super::Error where E: Debug {
+        super::Error::EncryptionFailed(Box::new(e))
+    }
+
+    enum LazyEncryptCurrent<F1,F2,F3,F4>
+    {
+        None,
+        SetMask(F1),
+        StartEncryption(F2,F3,F4),
+        AwaitEncryptFinish(F3, F4)
+    }
+
+    struct EncryptEventMatcher(ConnectionHandle);
+
+    impl crate::hci::EventMatcher for EncryptEventMatcher {
+
+        fn match_event(&self, event_data: &EventsData) -> bool {
+            match event_data {
+                EventsData::EncryptionKeyRefreshComplete(data) => data.connection_handle == self.0,
+                EventsData::EncryptionChange(data) => data.connection_handle == self.0,
+                _ => false,
+            }
+        }
+    }
+}
