@@ -165,7 +165,7 @@ where C: ConnectionChannel,
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<bool, Error>
+    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<Option<super::LazyEncrypt>, Error>
     {
         if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
 
@@ -178,11 +178,11 @@ where C: ConnectionChannel,
                 Ok( CommandType::PairingRandom ) => self.p_pairing_random(payload),
                 Ok( CommandType::PairingFailed ) => self.p_pairing_failed(payload),
                 Ok( CommandType::PairingDHKeyCheck ) => self.p_pairing_dh_key_check(payload),
-//                Ok( CommandType::EncryptionInformation ) => Ok(false),
-//                Ok( CommandType::MasterIdentification ) => Ok(false),
-//                Ok( CommandType::IdentityInformation ) => Ok(false),
-//                Ok( CommandType::IdentityAddressInformation ) => Ok(false),
-//                Ok( CommandType::SigningInformation ) => Ok(false),
+//                Ok( CommandType::EncryptionInformation ) => ,
+//                Ok( CommandType::MasterIdentification ) => ,
+//                Ok( CommandType::IdentityInformation ) => ,
+//                Ok( CommandType::IdentityAddressInformation ) => ,
+//                Ok( CommandType::SigningInformation ) => ,
                 Ok( cmd ) => self.p_command_not_supported(cmd),
                 Err( cmd ) => self.p_unknown_command(cmd),
             }
@@ -209,25 +209,25 @@ where C: ConnectionChannel,
         self.send(pairing::PairingFailed::new(fail_reason));
     }
 
-    fn p_bad_data_len(&mut self) -> Result<bool, Error> {
+    fn p_bad_data_len(&mut self) -> Result<Option<LazyEncrypt>, Error> {
         self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
         Err( Error::Size )
     }
 
-    fn p_unknown_command(&mut self, err: Error) -> Result<bool, Error> {
+    fn p_unknown_command(&mut self, err: Error) -> Result<Option<LazyEncrypt>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(err)
     }
 
-    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<bool, Error> {
+    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<LazyEncrypt>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(Error::IncorrectCommand(cmd))
     }
 
-    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<bool, Error> {
+    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<Option<LazyEncrypt>, Error> {
 
         log::trace!("(SM) Processing pairing request");
 
@@ -289,11 +289,11 @@ where C: ConnectionChannel,
                 mac_key: None,
             });
 
-            Ok(false)
+            Ok(None)
         }
     }
 
-    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<bool, Error> {
+    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<LazyEncrypt>, Error> {
 
         log::trace!("(SM) Processing pairing public Key");
 
@@ -350,7 +350,7 @@ where C: ConnectionChannel,
 
                     self.pairing_data = Some(pairing_data);
 
-                    Ok(false)
+                    Ok(None)
                 },
                 Err(e) => {
                     // Generating the dh key failed
@@ -369,7 +369,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<bool, Error> {
+    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt>, Error> {
 
         log::trace!("(SM) Processing pairing confirm");
 
@@ -407,7 +407,7 @@ where C: ConnectionChannel,
                 } else {
                     self.send(pairing::PairingConfirm::new(confirm_value));
 
-                    Ok(false)
+                    Ok(None)
                 }
             },
             // The pairing methods OOB and Passkey are not supported yet
@@ -422,7 +422,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<bool, Error> {
+    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt>, Error> {
 
         log::trace!("(SM) Processing pairing random");
 
@@ -441,7 +441,7 @@ where C: ConnectionChannel,
 
             self.send( pairing::PairingRandom::new(self.pairing_data.as_ref().unwrap().nonce) );
 
-            Ok(false)
+            Ok(None)
 
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
@@ -450,7 +450,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<bool, Error> {
+    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt>, Error> {
         log::trace!("(SM) Processing pairing failed");
 
         let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
@@ -467,7 +467,7 @@ where C: ConnectionChannel,
         Err(Error::PairingFailed(initiator_fail.get_reason()))
     }
 
-    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<bool, Error> {
+    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt>, Error> {
 
         log::trace!("(SM) Processing pairing dh key check");
 
@@ -555,7 +555,12 @@ where C: ConnectionChannel,
                     let irk = toolbox::rand_u128();
                     let csrk = toolbox::rand_u128();
 
-                    Ok(true)
+                    Ok( Some( super::LazyEncrypt {
+                        ltk: ltk,
+                        _irk: irk,
+                        _csrk: csrk,
+                    }))
+                    
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
 

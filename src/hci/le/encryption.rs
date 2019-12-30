@@ -314,7 +314,7 @@ pub mod start_encryption {
     use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestNegativeReply);
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::StartEncryption);
 
     #[repr(packed)]
     struct CommandReturn {
@@ -353,7 +353,7 @@ pub mod start_encryption {
         }
     }
 
-    impl_status_return!(COMMAND);
+    impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter)
     -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
@@ -361,7 +361,7 @@ pub mod start_encryption {
     {
         ReturnedFuture( hci.send_command(
             parameter,
-            events::Events::CommandComplete,
+            events::Events::CommandStatus,
             Duration::from_secs(1)
         ))
     }

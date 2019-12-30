@@ -800,7 +800,7 @@ where TargErr: Display + Debug,
     /// Cannot convert the data from the HCI packed form into its useable form.
     CommandDataConversionError(CmdErr),
     /// The first item is the received event and the second item is the event expected
-    ReceivedIncorrectEvent(crate::hci::events::Events, crate::hci::events::Events),
+    ReceivedIncorrectEvent(crate::hci::events::Events),
     /// This is used when either the 'command complete' or 'command status' events contain no data
     /// and are used to indicate the maximum number of HCI command packets that can be queued by
     /// the controller.
@@ -821,9 +821,8 @@ where TargErr: Display + Debug,
             OutputErr::CommandDataConversionError(reason) => {
                 core::write!(f, "{}", reason)
             },
-            OutputErr::ReceivedIncorrectEvent(received_event, expected_event) => {
-                core::write!(f, "Received unexpected event '{:?}' from the bluetooth controller, \
-                    expected event {:?}", received_event, expected_event )
+            OutputErr::ReceivedIncorrectEvent(expected_event) => {
+                core::write!(f, "Received unexpected event '{:?}'", expected_event )
             },
             OutputErr::ResponseHasNoAssociatedCommand => {
                 core::write!(f,"Event Response contains no data and is not associated with \
@@ -837,6 +836,7 @@ where TargErr: Display + Debug,
     }
 }
 
+
 macro_rules! event_pattern_creator {
     ( $event_path:path, $( $data:pat ),+ ) => { $event_path ( $($data),+ ) };
     ( $event_path:path ) => { $event_path };
@@ -844,7 +844,7 @@ macro_rules! event_pattern_creator {
 
 macro_rules! impl_returned_future {
     // these inputs match the inputs from crate::hci::events::impl_get_data_for_command
-    ($return_type: ty, $event: path, $data:pat, $error:ty, $to_do: block) => {
+    ($return_type: ty, $event:path, $data:pat, $error:ty, $to_do: block) => {
 
         struct ReturnedFuture<'a, I, CD, P>( CommandFutureReturn<'a, I, CD, P> )
         where I: HostControllerInterface,
@@ -863,10 +863,7 @@ macro_rules! impl_returned_future {
                     match result {
                         Ok( event_pattern_creator!($event, $data) ) => $to_do,
                         Ok(event @ _) => {
-                            let expected_event = crate::hci::events::Events::CommandComplete;
-                            let received_event = event.get_enum_name();
-
-                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(expected_event, received_event));
+                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(event.get_enum_name()));
 
                             core::task::Poll::Ready(ret)
                         },

@@ -120,6 +120,7 @@ where C: bo_tie::l2cap::ConnectionChannel
 fn server_loop<C>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     connection_channel: &C,
+    ch: hci::common::ConnectionHandle,
     mut att_server: gatt::Server<C>,
     mut slave_security_manager: SlaveSecurityManager<'_,C>
 )
@@ -127,10 +128,6 @@ where C: bo_tie::l2cap::ConnectionChannel
 {
     use bo_tie::l2cap::ChannelIdentifier;
     use bo_tie::l2cap::LeUserChannelIdentifier;
-    use bo_tie::hci::le::encryption::start_encryption;
-    use bo_tie::hci::cb::set_event_mask;
-    use bo_tie::hci::events::Events;
-    use core::time::Duration;
 
     loop {
         futures::executor::block_on(
@@ -146,48 +143,19 @@ where C: bo_tie::l2cap::ConnectionChannel
                             }
                         ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
                             match slave_security_manager.process_command(acl_data.get_payload()) {
-                                Ok(false) => (),
+                                Ok(None) => (),
                                 Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
-                                Ok(true) => {
-                                    // when true is retuend, the keys have been verified and
-                                    // encryption over the Link Layer can begin
-                                    
-                                    let enabled_events = &[
-                                        set_event_mask::EventMask::EncryptionChange,
-                                        set_event_mask::EventMask::EncryptionKeyRefreshComplete,
-                                        set_event_mask::EventMask::Disconnect,
-                                    ];
+                                Ok(Some(lazy)) => {
+                                    let encrypt_rslt = lazy.le_start_encryption_with_hci(
+                                        hi, 
+                                        ch, 
+                                        Duration::from_secs(1)
+                                    ).await;
 
-                                    set_event_mask::send(hi, enabled_events).await.unwrap();
-                                    
-                                    // Since Secure Connections is used, random_number and
-                                    // encrypted_diversifier are 0.
-                                    let parameter = start_encryption::Parameter::{
-                                        handle: ,
-                                        random_number: 0,
-                                        encrypted_diversifier: 0,
-                                        long_term_key:
-                                        
-                                    start_encryption::send(hi<
-
-                                    let e_change_fut = hi.wait_for_event(
-                                        Events::EncryptionChange,
-                                        Duration::from_secs(1),
-                                    );
-
-                                    let e_key_refresh_fut = hi.wait_for_event(
-                                        Events::EncryptionKeyRefreshComplete,
-                                        Duration::from_secs(1),
-                                    );
-
-                                    match futures::future::select(e_change_fut, e_key_refresh_fut).await {
-                                        futures::future::Either::Left((r,_)) => r.err()
-                                            .map(|e| println!("Failed encryption: {:?}", e)),
-                                        futures::future::Either::Right((r,_)) => r.err()
-                                            .map(|e| println!("Failed encryption: {:?}", e)),
-                                    };
-
-                                    // keys can now be exchanged
+                                    match encrypt_rslt {
+                                        Err(e) => println!("Failed to start encryption: '{:?}", e),
+                                        _ => println!("Encryption Enabled!"),
+                                    }
                                 }
                             }
                         _ => (),
@@ -278,7 +246,7 @@ fn main() {
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
                 .create_security_manager();
 
-                server_loop(&interface_clone, &connection_channel, server, slave_sm);
+                server_loop(&interface_clone, &connection_channel, event_data.connection_handle, server, slave_sm);
             });
 
             executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();

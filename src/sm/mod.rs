@@ -533,8 +533,10 @@ impl GetXOfP256Key for [u8;64] {
 /// Lazy Encryption
 ///
 /// This can be used to encrypt a connection between a master and slave.
-struct LazyEncrypt {
-    ltk: u128
+pub struct LazyEncrypt {
+    ltk: u128,
+    _irk: u128,
+    _csrk: u128,
 }
 
 impl LazyEncrypt {
