@@ -239,3 +239,17 @@ macro_rules! make_interval {
         }
     };
 }
+
+pub struct ConnectionEventLength {
+    pub minimum: u16,
+    pub maximum: u16,
+}
+
+impl ::core::default::Default for ConnectionEventLength {
+    fn default() -> Self {
+        Self {
+            minimum: 0,
+            maximum: 0xFFFF,
+        }
+    }
+}

@@ -512,10 +512,10 @@ pub mod set_event_mask {
             }
         }
 
-        fn build_mask( events:alloc::vec::Vec<Self>) -> [u8;8] {
+        fn build_mask( events: &[Self]) -> [u8;8] {
             let mut mask = <[u8;8]>::default();
 
-            for event in events {
+            for event in events.iter() {
                 let bit = event.bit_offset();
                 let byte = bit/8;
 
@@ -551,9 +551,9 @@ pub mod set_event_mask {
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
     /// send(&host_interface, events);
     /// ```
-    pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events:alloc::vec::Vec<LEMeta>)
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events: &[LEMeta] )
+    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let command_pram = CmdParameter {

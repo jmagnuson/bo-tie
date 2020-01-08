@@ -37,7 +37,7 @@
 //! For now passkey pairing is not supported. Only Numeric Comparison and Out Of Band are supported
 
 use alloc::vec::Vec;
-use core::sync::atomic;
+use core::future::Future;
 use serde::{Serialize, Deserialize};
 
 use crate::l2cap::ConnectionChannel;
@@ -47,6 +47,7 @@ pub mod pairing;
 pub mod encrypt_info;
 pub mod responder;
 pub mod initiator;
+mod lazy_encrypt;
 
 const L2CAP_LEGACY_MTU: usize = 23;
 const L2CAP_SECURE_CONNECTIONS_MTU: usize = 65;
@@ -179,224 +180,6 @@ impl<D> CommandData for Command<D> where D: CommandData {
     }
 }
 
-/// The Encryption Key "Database"
-///
-/// This contains the keys that were previously generated. However calling this a true DataBase is a
-/// little overdone. In reality there are just two `HashMaps` for the three different types of
-/// keys stored.
-///
-/// Keys are 'queried' by either an 'ER' value or an 'IR' value. An 'ER' is used to get an Identity
-/// Resolving Key (IRK) and 'IR' is use to get a Long Term Key (LTK) or a Connection Signature
-/// Resolving Key (CSRK)
-///
-/// # Usage
-/// Please only use the functions labeled with the `pub` keyword. All other functions
-struct KeyDB {
-    keys: atomic::AtomicPtr<KeyDBEntry>,
-    keys_len: usize,
-    keys_cap: usize,
-}
-
-impl KeyDB {
-
-    /// Create a new `KeyDB` from a vector of *sorted* `KeyDBEntry`s
-    pub fn new(mut v: Vec<KeyDBEntry>) -> Self {
-
-        let len = v.len();
-        let cap = v.capacity();
-        let v_mut_ptr = v.as_mut_ptr();
-
-        core::mem::forget(v);
-
-        KeyDB {
-            keys: atomic::AtomicPtr::new(v_mut_ptr),
-            keys_len: len,
-            keys_cap: cap,
-        }
-    }
-
-    /// Insert, overwrite, or erase the LTK associated with the provided EDIV
-    pub fn set_ltk<K>(&mut self, ediv: u16, ltk: K)
-    where K: Into<Option<u128>>
-    {
-        match ltk.into() {
-            ltk @ Some(_) => self.change_or_insert_key_entry(
-                    ediv,
-                    |keys, idx| keys[idx].ltk = ltk,
-                    |keys, idx| keys.insert(idx, KeyDBEntry {
-                        ediv,
-                        ltk,
-                        csrk: None,
-                        irk: None,
-                    })
-                ),
-            None => self.change_or_insert_key_entry(
-                    ediv,
-                    |keys, idx| {
-                        if keys[idx].csrk == None && keys[idx].irk == None {
-                            keys.remove(idx);
-                        } else {
-                            keys[idx].ltk = None;
-                        }
-                    },
-                    |_, _| {}
-                ),
-        }
-    }
-
-    /// Insert, overwrite, or erase the CSRK associated with the provided EDIV
-    pub fn set_csrk<K>(&mut self, ediv: u16, csrk: K)
-        where K: Into<Option<u128>>
-    {
-        match csrk.into() {
-            csrk @ Some(_) => self.change_or_insert_key_entry(
-                ediv,
-                |keys, idx| keys[idx].csrk = csrk,
-                |keys, idx| keys.insert(idx, KeyDBEntry {
-                    ediv,
-                    ltk: None,
-                    csrk,
-                    irk: None,
-                })
-            ),
-            None => self.change_or_insert_key_entry(
-                ediv,
-                |keys, idx| {
-                    if keys[idx].ltk == None && keys[idx].irk == None {
-                        keys.remove(idx);
-                    } else {
-                        keys[idx].csrk = None;
-                    }
-                },
-                |_, _| {}
-            ),
-        }
-    }
-
-    /// Insert, overwrite, or erase the IRK associated with the provided EDIV
-    pub fn set_irk<K>(&mut self, ediv: u16, irk: K)
-        where K: Into<Option<u128>>
-    {
-        match irk.into() {
-            irk @ Some(_) => self.change_or_insert_key_entry(
-                ediv,
-                |keys, idx| keys[idx].irk = irk,
-                |keys, idx| keys.insert(idx, KeyDBEntry {
-                    ediv,
-                    ltk: None,
-                    csrk: None,
-                    irk,
-                })
-            ),
-            None => self.change_or_insert_key_entry(
-                ediv,
-                |keys, idx| {
-                    if keys[idx].ltk == None && keys[idx].csrk == None {
-                        keys.remove(idx);
-                    } else {
-                        keys[idx].irk = None;
-                    }
-                },
-                |_, _| {}
-            ),
-        }
-    }
-
-    /// Get the keys associated with the provided encryption diversifier (EDIV)
-    ///
-    /// The returned keys will be in the order of Long Term Key (LTK), Connection Signature
-    /// Resolving Key (CSRK), and Identity Resolving Key. A `None` is returned for any key that is
-    /// not associated with the provided `ediv`.
-    pub fn get_keys<K>(&mut self, ediv: u16) -> (Option<u128>, Option<u128>, Option<u128>) {
-        self.use_keys( |keys| {
-            keys.binary_search_by(|entry| entry.ediv.cmp(&ediv) )
-                .ok()
-                .and_then(|idx| keys.get(idx) )
-                .map_or( (None, None, None), |entry| (entry.ltk, entry.csrk, entry.irk))
-        })
-    }
-
-    /// Safely use member `keys`
-    ///
-    /// This function uses a spinlock to try to acquire the database of keys, so it should be used
-    /// relatively sparingly. Most usages for this should be for getting, creating, and deleting
-    /// keys. And since keys are for a connection, unless the keys are changed, getting keys from
-    /// the database should happen only when re-establishing a connection.
-    ///
-    /// This function takes
-    /// Performs a backoff using
-    /// [crossbeam](https://docs.rs/crossbeam-utils/0.7.0/crossbeam_utils/struct.Backoff.html)
-    /// if the vector cannot be acquired.
-    fn use_keys<F,R>(&mut self, to_do: F) -> R
-    where F: FnOnce(&mut Vec<KeyDBEntry>) -> R
-    {
-        use core::ptr::null_mut;
-
-        let backoff = crossbeam_utils::Backoff::new();
-
-        loop {
-            // Since keys is a vector, the pointer value must always be loaded and cannot be stored
-            // for multiple loops as possible reallocation of the vector would make the pointer
-            // invalid.
-            match match self.keys.load(atomic::Ordering::Acquire) {
-                x if x == null_mut() => { backoff.spin(); continue; },
-                mut_ptr => self.keys.compare_and_swap(mut_ptr, null_mut(), atomic::Ordering::Acquire)
-            } {
-                x if x == null_mut() => { backoff.spin(); continue; },
-                mut_ptr => {
-
-                    let mut v = unsafe {
-                        Vec::from_raw_parts(mut_ptr, self.keys_len, self.keys_cap)
-                    };
-
-                    let r = to_do( &mut v );
-
-                    self.keys_len = v.len();
-                    self.keys_cap = v.capacity();
-
-                    let mut_vec_ptr = v.as_mut_ptr();
-
-                    self.keys.store(mut_vec_ptr, atomic::Ordering::Release);
-
-                    core::mem::forget(v);
-
-                    break r;
-                }
-            }
-        }
-    }
-
-    /// Gets or inserts a key entry matching the provided Encryption Diversifier (EDIV).
-    fn change_or_insert_key_entry<Ch,Cr>(&mut self, ediv: u16, on_change: Ch, on_insert: Cr)
-    where Ch: FnOnce(&mut Vec<KeyDBEntry>, usize),
-          Cr: FnOnce(&mut Vec<KeyDBEntry>, usize),
-    {
-        self.use_keys(|keys|{
-            match keys.binary_search_by(|entry| entry.ediv.cmp(&ediv) ) {
-                Ok(idx) => on_change(keys, idx),
-                Err(idx) => on_insert(keys, idx)
-            }
-        });
-    }
-}
-
-#[derive(Clone,Copy,Serialize,Deserialize)]
-pub struct KeyDBEntry {
-    /// encryption diversifier
-    ///
-    /// The encryption diversifier is used for sorting the entries in the 'database' KeyDB
-    ediv: u16,
-
-    /// Associated LTK
-    ltk: Option<u128>,
-
-    /// Associated CSRK
-    csrk: Option<u128>,
-
-    /// Associated IRK
-    irk: Option<u128>,
-}
-
 enum KeyGenerationMethod {
     /// Out of Bound
     Oob,
@@ -424,7 +207,7 @@ impl KeyGenerationMethod {
         match (initiator_oob_data, responder_oob_data) {
 
             ( OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
-              OOBDataFlag::AuthenticationDataFromRemoteDevicePresent) =>
+                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent) =>
                 KeyGenerationMethod::Oob,
 
             (_,_) => match (initiator_io_capability, responder_io_capability) {
@@ -470,11 +253,172 @@ impl KeyGenerationMethod {
     }
 }
 
+/// The Encryption Key "database"
+///
+/// This contains the keys that were previously generated. `entries` is sorted by the `peer_irk`
+/// and `peer_addr` members of each `KeyDBEntry`. The sort is designed to have all the `KeyDBEntry`s
+/// with a peer IRK to be less then all the `KeyDBEntry`s without a peer IRK.
+///
+/// # Usage
+/// Please only use the functions labeled with the `pub` keyword.
+struct KeyDB {
+    entries: Vec<KeyDBEntry>,
+}
+
+impl KeyDB {
+
+    /// Create a new `KeyDB` from a vector of `KeyDBEntry`
+    ///
+    /// # Panic
+    /// All entries must have either a peer IRK or a peer Address set.
+    pub fn new(mut entries: Vec<KeyDBEntry>) -> Self {
+
+        entries.sort_by(|rhs, lhs| rhs.cmp_entry(lhs) );
+
+        Self { entries }
+    }
+
+    /// Get the keys associated with the provided `irk` and/or `address`.
+    ///
+    /// Return the keys associated with the specified `irk` and/or `address`. `None` is
+    /// returned if there is no entry associated with the given keys.
+    pub fn get<'s, 'a, I,A>(&'s mut self, irk: I, address: A) -> Option<&'s KeyDBEntry>
+    where I: Into<Option<&'a u128>> + 'a,
+          A: Into<Option<&'a BluAddr>> + 'a,
+    {
+        let i = irk.into();
+        let a = address.into();
+        let entries = &self.entries;
+
+        self.entries.binary_search_by(|entry| entry.cmp_entry_by_keys(i, a) )
+            .ok()
+            .map_or(None, |idx| entries.get(idx) )
+    }
+
+    /// Add the keys with the provided KeyDBEntry
+    ///
+    /// Inserts the KeyDBEntry into the database if there is no other entry with the same peer IRK
+    /// and peer Address. The entry is not inserted if both the peer IRK and peer Address are `None`
+    pub fn insert(&mut self, entry: KeyDBEntry) -> bool {
+        if entry.peer_addr == None && entry.peer_irk == None {
+            return false
+        } else {
+            self.entries.binary_search_by(|in_entry| in_entry.cmp_entry(&entry) )
+                .err()
+                .map_or( false, |idx| { self.entries.insert(idx, entry); true } )
+        }
+    }
+
+    pub fn iter(&self) -> impl core::iter::Iterator<Item = &KeyDBEntry> {
+        self.entries.iter()
+    }
+
+    pub fn remove<I,A>(&mut self, irk: I, address: A) -> bool
+    where I: for<'a> Into<Option<&'a u128>>,
+          A: for<'a> Into<Option<&'a BluAddr>>,
+    {
+        let i = irk.into();
+        let a = address.into();
+
+        self.entries.binary_search_by(|entry| entry.cmp_entry_by_keys(i, a) )
+            .ok()
+            .map_or(false, |idx| { self.entries.remove(idx); true } )
+    }
+}
+
+impl Default for KeyDB {
+
+    /// Create an empty KeyDB
+    fn default() -> Self {
+        KeyDB::new( Vec::new() )
+    }
+}
+
+/// An entry in the Keys Database
+///
+/// Entries in the database are ordered by a peer devices Identity Resolving Key (IRK) or the \
+/// Address given in the Identity Address Information Command. A `KeyDBEntry` is not required to
+/// have both an IRK and an Address, but it must have one of them.
+///
+/// Each KeyDBEntry stores the Long Term Key (LTK), a unique Connection Signature Resolving Key
+/// (CSRK), a unique Identity Resolving Key (IRK), the peer devices CSRK, the peer's IRK, the
+/// address, and the CSRK counters. All of these keys are optional with the exception that either
+/// the peer's IRK or the peer's address must exist.
+///
+/// This device may use a static IRK and CSRK to a given peer device. There can be only one static
+/// IRK and CSRK per `SecurityManager`, but any number of `KeyDBEntry`s can use them. If a static
+/// CSRK is used, the sign counter for this `KeyDBEntry` can only be used through the connection to
+/// the peer device.
+#[derive(Clone,Serialize,Deserialize)]
+pub struct KeyDBEntry {
+    /// The Long Term Key (private key)
+    ///
+    /// If this is `None` then the connection cannot be encrypted
+    ltk: Option<u128>,
+
+    /// This Connection Signature Resolving Key (CSRK) and sign counter
+    csrk: Option<(u128, u32)>,
+
+    /// This device's Identity Resolving Key
+    irk: Option<u128>,
+
+    /// The peer device's Connection Signature Resolving Key and sign counter
+    peer_csrk: Option<(u128, u32)>,
+
+    /// The peer's Identity Resolving Key (IRK)
+    peer_irk: Option<u128>,
+
+    /// The peer's public or static random address
+    peer_addr: Option<BluAddr>
+}
+
+impl KeyDBEntry {
+
+    /// Compare entries by the peer keys irk and addr
+    ///
+    /// # Panic
+    /// If both `peer_irk` and `peer_addr` are `None` or both `self.peer_irk` and `self.peer_addr`
+    /// are `None`.
+    fn cmp_entry_by_keys<'a,I,A>(&self, peer_irk: I, peer_addr: A) -> core::cmp::Ordering
+    where I: Into<Option<&'a u128>> + 'a,
+          A: Into<Option<&'a BluAddr>> + 'a,
+    {
+        use core::cmp::Ordering;
+
+        match (self.peer_irk.as_ref(), peer_irk.into(), self.peer_addr.as_ref(), peer_addr.into()) {
+            (Some(this),Some(other), _, _) =>
+                this.cmp(other),
+            (None, None, Some(this), Some(other)) =>
+                this.cmp(other),
+            (Some(_), None, _, Some(_)) =>
+                Ordering::Less,
+            (None, Some(_), Some(_), _) =>
+                Ordering::Greater,
+            (None, _, None, _) |
+            (_, None, _, None) =>
+                Ordering::Equal
+        }
+    }
+
+    fn cmp_entry(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_addr.as_ref())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+enum BluAddr {
+    Public(crate::BluetoothDeviceAddress),
+    StaticRandom(crate::BluetoothDeviceAddress)
+}
+
 /// The Security Manager
 ///
 /// The security manager is the top level container of keys
+#[derive(Default)]
 pub struct SecurityManager {
     key_db: KeyDB,
+    static_irk: Option<u128>,
+    static_csrk: Option<u128>,
 }
 
 impl SecurityManager {
@@ -484,7 +428,86 @@ impl SecurityManager {
     pub fn new(keys: Vec<KeyDBEntry>) -> Self {
         SecurityManager {
             key_db: KeyDB::new(keys),
+            static_irk: None,
+            static_csrk: None,
         }
+    }
+
+    /// Get all peer Identity Resolving Keys stored in the Key Database
+    pub fn get_peer_irks(&self) -> impl core::iter::Iterator<Item = u128> + '_{
+        self.key_db.iter().filter_map(|entry| entry.peer_irk )
+    }
+
+    /// Assign a static Identity Resolving Key (IRK)
+    ///
+    /// Assign's the value as the static IRK for this device and a returns it. A IRK is generated if
+    /// `None` is the input.
+    ///
+    /// The static IRK is used when a unique IRK is not generated by the bonding procedure. However
+    /// a this function must be called to set (or generate) a static IRK before it is used.
+    pub fn set_static_irk<I>( &mut self, irk: I ) -> u128 where I: Into<Option<u128>> {
+        match irk.into() {
+            None => {
+                let v = toolbox::rand_u128();
+                self.static_irk = Some(v);
+                v
+            }
+            Some(v) => {
+                self.static_irk = Some(v);
+                v
+            }
+        }
+    }
+
+    /// Assign a static Connection Signature Resolving Key (CSRK)
+    ///
+    /// Assign's the value as the static CSRK for this device and a returns it. A CSRK is generated
+    /// if `None` is the input.
+    ///
+    /// The static CSRK is used when a unique CSRK is not generated by the bonding procedure.
+    /// However a this function must be called to set (or generate) a static CSRK before it is used.
+    pub fn set_static_csrk<I>( &mut self, irk: I ) -> u128 where I: Into<Option<u128>> {
+        match irk.into() {
+            None => {
+                let v = toolbox::rand_u128();
+                self.static_csrk = Some(v);
+                v
+            }
+            Some(v) => {
+                self.static_csrk = Some(v);
+                v
+            }
+        }
+    }
+
+
+    /// Returns an iterator to resolve a resolvable private address from all peer devices'
+    /// Identity Resolving Key (IRK) in the keys database.
+    ///
+    /// The return is an iterator that will try to resolve `addr` with a peer IRK on each iteration.
+    /// If the address is resolved by a peer's IRK, the `KeyDBEntry` that contains the matching IRK
+    /// is returned. The easiest way to use this function is to just combine it with the
+    /// [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
+    /// iterator method.
+    ///
+    /// ```
+    /// # let security_manager = bo_tie::sm::SecurityManager::default();
+    /// # let resolvable_private_address = [0u8;6];
+    ///
+    /// let keys = security_manager.resolve_rpa_iter.find_map(|keys_opt| keys_opt);
+    /// ```
+    pub fn resolve_rpa_itr(&self, addr: crate::BluetoothDeviceAddress)
+    -> impl core::iter::Iterator<Item = Option<KeyDBEntry>> + '_
+    {
+        let hash = [addr[0], addr[1], addr[2] ];
+        let prand = [addr[3], addr[4], addr[5]];
+
+        self.key_db.entries.iter()
+            .take_while(|e| e.peer_irk.is_some() )
+            .map(move |e| e.peer_irk.and_then( |irk|
+                if toolbox::ah( irk, prand ) == hash { Some(e.clone()) } else { None }
+            )
+        )
     }
 
     pub fn new_slave_builder<'a, C>(
@@ -533,13 +556,100 @@ impl GetXOfP256Key for [u8;64] {
 /// Lazy Encryption
 ///
 /// This can be used to encrypt a connection between a master and slave.
-pub struct LazyEncrypt {
+pub struct LazyEncrypt<'a, R, C> {
     ltk: u128,
-    _irk: u128,
-    _csrk: u128,
+    irk: u128,
+    csrk: u128,
+    peer_irk: Option<u128>,
+    peer_csrk: Option<u128>,
+    connection_channel: &'a C,
+    role: R,
 }
 
-impl LazyEncrypt {
+impl<'a, R, C> LazyEncrypt<'a, R, C> where C: ConnectionChannel {
+
+    fn send<Cmd,P>(&self, command: Cmd)
+        where Cmd: Into<Command<P>>,
+              P: CommandData
+    {
+        use crate::l2cap::AclData;
+
+        let acl_data = AclData::new( command.into().into_icd(), SECURITY_MANAGER_L2CAP_CHANNEL_ID);
+
+        self.connection_channel.send((acl_data, L2CAP_LEGACY_MTU));
+    }
+
+    /// Get the Long Term Key
+    ///
+    /// This is the secret key shared between the Master and Slave device use by the cypher for
+    /// encrypting data. If this key is leaked to an unintended party, they will be able to access
+    /// the
+    pub fn get_ltk(&self) -> u128 {
+        self.ltk
+    }
+
+    /// Get the Identity Resolving Key
+    ///
+    /// The Identity Resolving Key is a way to re-connect to a device using a semi-anonymous random
+    /// address.
+    ///
+    /// # Note
+    /// If you wish to send this key to the other party without the help of `LazyEncrypt`, make sure
+    /// the connection is encrypted.
+    pub fn get_irk(&self) -> u128 {
+        self.irk
+    }
+
+    /// Create a new resolvable private address
+    ///
+    /// This will create a new resolvable private address from the generated irk value.
+    pub fn new_rpa(&self) -> crate::BluetoothDeviceAddress {
+
+        let mut addr = crate::BluetoothDeviceAddress::default();
+
+        let mut prand = toolbox::rand_u24();
+
+        // required nonrandom bits of prand see the specification (V. 5.0 | Vol 6, Part B, Section
+        // 1.3.2.2)
+        prand[2] = 0b_0100_0000;
+
+        let hash = toolbox::ah(self.irk, prand);
+
+        addr[..3].copy_from_slice(&hash);
+        addr[3..].copy_from_slice(&prand);
+
+        addr
+    }
+
+    /// Get the Identity Resolving Key of the Peer Device or `None` if the peer has not sent an IRK.
+    pub fn get_peer_irk(&self) -> Option<u128> {
+        self.peer_irk
+    }
+
+    /// Get the Connection Signature Resolving Key
+    ///
+    /// The Connection Signature Resolving Key is used for authentication of data
+    ///
+    /// # Note
+    /// If you wish to send this key to the other party without the help of `LazyEncrypt`, make sure
+    /// the connection is encrypted.
+    pub fn get_csrk(&self) -> u128 {
+        self.csrk
+    }
+
+    /// Get the Connection Signature Resolving Key of the Peer Device or `None` if the peer has not
+    /// sent an CSRK.
+    pub fn get_peer_csrk(&self) -> Option<u128> {
+        self.peer_csrk
+    }
+
+    /// Get the role of the device in the security manager
+    pub fn get_role(&self) -> R where R: Copy {
+        self.role
+    }
+}
+
+impl<'a, C> LazyEncrypt<'a, Master, C> {
 
     /// Use the Host Controller Interface to start encrypting the Bluetooth LE connection
     ///
@@ -558,14 +668,15 @@ impl LazyEncrypt {
     /// ['EncryptionKeyRefreshComplete'](crate::hci::events::Events::EncryptionKeyRefreshComplete),
     /// These events are needed by the returned future, and can only be masked away once it is
     /// polled to completion.
-    pub fn le_start_encryption_with_hci<'a, HCI, D>(
+    pub fn hci_le_start_encryption<'z, HCI, D>(
         self,
-        hci: &'a crate::hci::HostInterface<HCI>,
+        hci: &'z crate::hci::HostInterface<HCI>,
         connection_handle: crate::hci::common::ConnectionHandle,
         encryption_timeout: D,
-    ) -> impl core::future::Future<Output=Result<(), Error>> + 'a
+    ) -> impl Future<Output=Result<(), Error>> + 'z
     where HCI: crate::hci::HostControllerInterface + 'static,
-            D: Into<Option<core::time::Duration>> + 'a
+            D: Into<Option<core::time::Duration>> + 'z,
+         <HCI as crate::hci::HostControllerInterface>::ReceiveEventError:  Unpin,
     {
         use crate::hci::cb::set_event_mask::EventMask;
 
@@ -575,237 +686,85 @@ impl LazyEncrypt {
             EventMask::EncryptionKeyRefreshComplete,
         ];
 
-        lazy_encrypt::new_lazy_encrypt_future(event_mask, self.ltk, hci, connection_handle, encryption_timeout)
-    }
-}
-
-mod lazy_encrypt {
-    use alloc::boxed::Box;
-    use super::Error;
-    use core::fmt::{Display,Debug};
-    use core::future::Future;
-    use core::marker::Unpin;
-    use core::pin::Pin;
-    use core::task::{Context,Poll};
-    use core::time::Duration;
-    use crate::hci::{
-        cb::set_event_mask::EventMask,
-        common::ConnectionHandle,
-        events::{Events, EventsData},
-        HostInterface,
-        HostControllerInterface,
-        le::encryption::start_encryption::Parameter as EncryptionParameter,
-    };
-
-    type EventMasks = [EventMask; 3];
-
-    pub fn new_lazy_encrypt_future<'a, HCI, D>(
-        event_mask: EventMasks,
-        ltk: u128,
-        hci: &'a HostInterface<HCI>,
-        connection_handle: ConnectionHandle,
-        encryption_timeout: D,
-    ) -> impl Future<Output = Result<(), Error>> + 'a
-    where HCI: HostControllerInterface + 'static,
-            D: Into<Option<Duration>>
-    {
-        LazyEncryptFuture::new(
-            event_mask,
-            ltk,
-            hci,
-            connection_handle,
-            crate::hci::cb::set_event_mask::send,
-            crate::hci::le::encryption::start_encryption::send,
-            crate::hci::HostInterface::wait_for_event_with_matcher,
-            encryption_timeout,
-        )
+        lazy_encrypt::new_lazy_encrypt_master_future(event_mask, self.ltk, hci, connection_handle, encryption_timeout)
     }
 
-    struct LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3> {
-        event_mask: EventMasks,
-        ltk: u128,
-        hci: &'a HostInterface<HCI>,
-        connection_handle: ConnectionHandle,
-        current: LazyEncryptCurrent<F1,F2,F3,F3>,
-        set_mask_fn: SMFn,
-        start_encryption_fn: SEFn,
-        wait_for_event_with_matcher_fn: WFEFn,
-        encrypt_timeout: Option<Duration>,
-    }
-
-    impl<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3>
-    LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3>
-    where HCI: HostControllerInterface
-    {
-        fn new<D: Into<Option<Duration>>>(
-            event_mask: EventMasks,
-            ltk: u128,
-            hci: &'a HostInterface<HCI>,
-            connection_handle: ConnectionHandle,
-            set_mask_fn: SMFn,
-            start_encryption_fn: SEFn,
-            wait_for_event_with_matcher_fn: WFEFn,
-            encrypt_timeout: D,
-        ) -> Self {
-
-            LazyEncryptFuture {
-                event_mask,
-                ltk,
-                hci,
-                connection_handle,
-                current: LazyEncryptCurrent::None,
-                set_mask_fn,
-                start_encryption_fn,
-                wait_for_event_with_matcher_fn,
-                encrypt_timeout: encrypt_timeout.into()
-            }
-        }
-    }
-
-    impl<'a, HCI, F1, FER1, SMFn, F2, FER2, SEFn, WFEFn, F3> core::future::Future
-    for LazyEncryptFuture<'a, HCI, F1, SMFn, F2, SEFn, WFEFn, F3,>
-    where  HCI: HostControllerInterface,
-            F1: Future<Output = Result<(), FER1>> + Unpin + 'a,
-          FER1: Display + Debug + 'static,
-          SMFn: Fn(&'a HostInterface<HCI>, &[EventMask]) -> F1 + Unpin,
-            F2: Future<Output = Result<(), FER2>> + Unpin + 'a,
-          FER2: Display + Debug + 'static,
-          SEFn: Fn(&'a HostInterface<HCI>, EncryptionParameter) -> F2 + Unpin,
-            F3: Future<Output = Result<EventsData, <HCI as HostControllerInterface>::ReceiveEventError>> + Unpin + 'a,
-         WFEFn: Fn(&'a HostInterface<HCI>, Events, Option<Duration>, EncryptEventMatcher) -> F3 + Unpin,
-         <HCI as HostControllerInterface>::ReceiveEventError: 'static
-    {
-        type Output = Result<(), Error>;
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output>
-        {
-            let this = self.get_mut();
-
-            loop {
-                match &mut this.current {
-                    LazyEncryptCurrent::None => {
-                        log::trace!("None");
-
-                        let future = (this.set_mask_fn)(this.hci, &this.event_mask);
-
-                        this.current = LazyEncryptCurrent::SetMask(future);
-                    },
-                    LazyEncryptCurrent::SetMask(future) => {
-                        log::trace!("SetMask");
-
-                        match Pin::new(future).poll(cx).map_err(err_map) {
-                            Poll::Pending => break Poll::Pending,
-                            err @ Poll::Ready(Err(_)) => break err,
-                            Poll::Ready(Ok(_)) => {
-
-                                let encrypt_pram = EncryptionParameter {
-                                    handle: this.connection_handle,
-                                    random_number: 0,
-                                    encrypted_diversifier: 0,
-                                    long_term_key: this.ltk
-                                };
-
-                                let start_encrypt_fut = (this.start_encryption_fn)(this.hci, encrypt_pram);
-
-                                let encrypt_change_fut = (this.wait_for_event_with_matcher_fn)(
-                                    this.hci,
-                                    Events::EncryptionChange,
-                                    this.encrypt_timeout,
-                                    EncryptEventMatcher(this.connection_handle),
-                                );
-
-                                let encrypt_key_refresh_fut = (this.wait_for_event_with_matcher_fn)(
-                                    this.hci,
-                                    Events::EncryptionKeyRefreshComplete,
-                                    this.encrypt_timeout,
-                                    EncryptEventMatcher(this.connection_handle),
-                                );
-
-                                this.current = LazyEncryptCurrent::StartEncryption(
-                                    start_encrypt_fut,
-                                    encrypt_change_fut,
-                                    encrypt_key_refresh_fut,
-                                );
-                            },
-                        }
-                    },
-                    LazyEncryptCurrent::StartEncryption(cmd_fut, _, _) => {
-                        log::trace!("StartEncryption");
-
-                        match Pin::new(cmd_fut).poll(cx).map_err(err_map) {
-                            Poll::Pending => break Poll::Pending,
-                            err @ Poll::Ready(Err(_)) => break err,
-                            Poll::Ready(Ok(_)) => {
-
-                                let start_encrypt = core::mem::replace(
-                                    &mut this.current,
-                                    LazyEncryptCurrent::None
-                                );
-
-                                match start_encrypt {
-                                    LazyEncryptCurrent::StartEncryption(_,f1, f2) =>
-                                        this.current = LazyEncryptCurrent::AwaitEncryptFinish(f1, f2),
-                                    _ => panic!("Expected StartEncryption")
-                                }
-
-                            },
-                        }
-                    },
-                    LazyEncryptCurrent::AwaitEncryptFinish(change_fut, refresh_fut) => {
-                        log::trace!("AwaitEncryptFinish");
-
-                        match Pin::new(change_fut).poll(cx).map_err(err_map) {
-                            Poll::Pending => match Pin::new(refresh_fut).poll(cx).map_err(err_map) {
-                                Poll::Pending => break Poll::Pending,
-                                Poll::Ready(Err(e)) => break Poll::Ready(Err(e)),
-                                Poll::Ready(Ok(refresh_data)) => break Poll::Ready(Ok(())),
-                            },
-                            Poll::Ready(Err(e)) => break Poll::Ready(Err(e)),
-                            Poll::Ready(Ok(change_data)) => {
-                                match change_data {
-                                    EventsData::EncryptionChange(e_data) => {
-
-                                        break match e_data.encryption_enabled.get_for_le() {
-                                            crate::hci::common::EncryptionLevel::AESCCM =>
-                                                Poll::Ready(Ok(())),
-                                            crate::hci::common::EncryptionLevel::E0 =>
-                                                Poll::Ready(Err(err_map("E0 cypher used"))),
-                                            crate::hci::common::EncryptionLevel::Off =>
-                                                Poll::Ready(Err(err_map("Encryption not enabled"))),
-                                        };
-                                    }
-                                    ed => panic!("Received unexpected event data: '{:?}'", ed),
-                                }
-                            },
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn err_map<E: 'static>(e: E) -> super::Error where E: Debug {
-        super::Error::EncryptionFailed(Box::new(e))
-    }
-
-    enum LazyEncryptCurrent<F1,F2,F3,F4>
-    {
-        None,
-        SetMask(F1),
-        StartEncryption(F2,F3,F4),
-        AwaitEncryptFinish(F3, F4)
-    }
-
-    struct EncryptEventMatcher(ConnectionHandle);
-
-    impl crate::hci::EventMatcher for EncryptEventMatcher {
-
-        fn match_event(&self, event_data: &EventsData) -> bool {
-            match event_data {
-                EventsData::EncryptionKeyRefreshComplete(data) => data.connection_handle == self.0,
-                EventsData::EncryptionChange(data) => data.connection_handle == self.0,
-                _ => false,
-            }
+    /// Switch the roll form `Master` to `Slave`
+    ///
+    /// This switches the role flag in `LazyEncrypt`, no actual connection role is change by this
+    /// function. This function should be called when the device changes from the Master to the
+    /// Slave.
+    ///
+    /// # Note
+    /// This is not an inexpensive operation, equivalent (or worse) in performance to a clone
+    /// operation.
+    pub fn switch_role(self) -> LazyEncrypt<'a, Slave, C> {
+        LazyEncrypt {
+            ltk: self.ltk,
+            irk: self.irk,
+            csrk: self.csrk,
+            peer_irk: self.peer_irk,
+            peer_csrk: self.peer_csrk,
+            connection_channel: self.connection_channel,
+            role: Slave,
         }
     }
 }
+
+impl<'a, C> LazyEncrypt<'a, Slave, C> {
+
+    /// Switch the roll form `Slave` to `Master`
+    ///
+    /// This switches the role flag in `LazyEncrypt`, no actual connection role is change by this
+    /// function. This function should be called when the device changes from the Slave to the
+    /// Master.
+    ///
+    /// # Note
+    /// This is not an inexpensive operation, equivalent (or worse) in performance to a clone
+    /// operation.
+    pub fn switch_role(self) -> LazyEncrypt<'a, Master, C> {
+        LazyEncrypt {
+            ltk: self.ltk,
+            irk: self.irk,
+            csrk: self.csrk,
+            peer_irk: self.peer_irk,
+            peer_csrk: self.peer_csrk,
+            connection_channel: self.connection_channel,
+            role: Master,
+        }
+    }
+
+    /// Await encryption from the `Master` using the Host Controller Interface
+    ///
+    /// Encryption is started (and changed) by the Master device. The slave device must await for
+    /// the event ['LongTermKeyRequest'](crate::hci::events::LEMeta::LongTermKeyRequest) that is
+    /// sent from the controller to request the LE LTK.
+    pub fn hci_await_encrypt<'z, HCI, D>(
+        &self,
+        hci: &'z crate::hci::HostInterface<HCI>,
+        connection_handle: crate::hci::common::ConnectionHandle,
+        await_timeout: D,
+    ) -> impl Future<Output=Result<(), Error>> + 'z
+    where HCI: crate::hci::HostControllerInterface + 'static,
+            D: Into<Option<core::time::Duration>> + 'z,
+         <HCI as crate::hci::HostControllerInterface>::ReceiveEventError: 'static + Unpin
+    {
+        use crate::hci::cb::set_event_mask::EventMask;
+        use crate::hci::events::LEMeta;
+
+        let event_mask = [ EventMask::LEMeta ];
+        let le_event_mask = [LEMeta::LongTermKeyRequest];
+
+        let mask = (event_mask, le_event_mask);
+
+        lazy_encrypt::new_await_encrypt_slave_future(self.ltk, mask, hci, connection_handle, await_timeout)
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Master;
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Slave;

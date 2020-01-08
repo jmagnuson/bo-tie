@@ -232,6 +232,8 @@ pub enum LEController {
     ReceiverTest,
     TransmitterTest,
     TestEnd,
+    ReadConnectionParameterRequestReply,
+    ReadConnectionParameterRequestNegativeReply,
 }
 
 impl LEController {
@@ -274,6 +276,8 @@ impl LEController {
                 ReceiverTest => 0x1d,
                 TransmitterTest => 0x1e,
                 TestEnd => 0x1f,
+                ReadConnectionParameterRequestReply => 0x20,
+                ReadConnectionParameterRequestNegativeReply => 0x21,
             }
         }
     }

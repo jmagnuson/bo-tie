@@ -455,11 +455,11 @@ where C: l2cap::ConnectionChannel
 
     /// Process a parsed ACL Packet
     ///
-    /// This will take the data from the Ok result of [`parse_acl_packet`]. This is otherwise
-    /// equivalent to the function [`process_acl_data`] (really `process_acl_data` is just
-    /// `parse_acl_packet` followed by this function) and is useful for higher layer protocols that
-    /// need to parse an ACL packet before performing their own calculations on the data and *then*
-    /// have the Attribute server processing the data.
+    /// This will take the data from the Ok result of [`parse_acl_packet`](Server::parse_acl_packet).
+    /// This is otherwise equivalent to the function [`process_acl_data`](Server::parse_acl_packet)
+    /// (really `process_acl_data` is just `parse_acl_packet` followed by this function) and is
+    /// useful for higher layer protocols that need to parse an ACL packet before performing their
+    /// own calculations on the data and *then* have the Attribute server processing the data.
     pub fn process_parsed_acl_data(&mut self, pdu_type: super::client::ClientPduName, payload: &[u8])
     -> Result<(), super::Error>
     {

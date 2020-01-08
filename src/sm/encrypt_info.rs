@@ -129,13 +129,19 @@ impl From<MasterIdentification> for Command<MasterIdentification> {
 }
 
 pub struct IdentityInformation {
-    resolving_key: u128
+    irk: u128
+}
+
+impl IdentityInformation {
+    pub fn new(irk: u128) -> Self {
+        IdentityInformation { irk }
+    }
 }
 
 impl CommandData for IdentityInformation {
 
     fn into_icd(self) -> Vec<u8> {
-        self.resolving_key.to_le_bytes().to_vec()
+        self.irk.to_le_bytes().to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
@@ -145,7 +151,7 @@ impl CommandData for IdentityInformation {
             v.copy_from_slice(icd);
 
             Ok( IdentityInformation {
-                resolving_key: <u128>::from_le_bytes(v)
+                irk: <u128>::from_le_bytes(v)
             })
         } else {
             Err( Error::Size )

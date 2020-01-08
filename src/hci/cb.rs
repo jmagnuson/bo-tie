@@ -35,11 +35,9 @@ pub mod set_event_mask {
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
 
     pub enum EventMask {
-        /// Not an event mask, this is a marker for the default set of enabled events.
-        ///
-        /// The default list of enabled events is listed in the Bluetooth Specification v5.0 | Vol
-        /// 2, Part E, Section 7.3.1 after table 3.2.
-        Default,
+        #[doc(hidden)]
+        /// A marker for the default enabled (upon controller reset) list of events
+        _Default,
         InquiryComplete,
         InquiryResult,
         ConnectionComplete,
@@ -94,11 +92,35 @@ pub mod set_event_mask {
 
     impl EventMask {
 
-        fn to_val(masks: &[Self]) -> u64 {
+        const DEFAULT_MASK: &'static [Self] = &[Self::_Default];
+
+        const DEFAULT_MASK_LE: &'static [Self] = &[Self::_Default, Self::LEMeta];
+
+        /// Get the default enabled events
+        ///
+        /// # Note
+        /// The returned slice only contains a hidden member of `EventMask`. The hidden member is
+        /// used for quickly masking the bits of the command parameter corresponding to the default
+        /// events.
+        pub fn default() -> &'static [EventMask] { Self::DEFAULT_MASK }
+
+        /// Get the default enabled events with the `LEMeta` event also enabled.
+        ///
+        /// The LEMeta event is a mask for all LE events, it must be enabled for any LE event to be
+        /// propagate from the controller to the host.
+        ///
+        /// # Note
+        /// The returned slice only contains a hidden member of `EventMask` and the
+        /// [`LEMeta`](EventMask::LEMeta) event.
+        /// The hidden member is used for quickly masking the bits of the command parameter
+        /// corresponding to the default events.
+        pub fn default_le() -> &'static [EventMask] { Self::DEFAULT_MASK_LE }
+
+        pub(crate) fn to_val(masks: &[Self]) -> u64 {
 
             masks.iter().fold( 0u64, |val, mask| {
                 val | match mask {
-                    EventMask::Default => 0x1FFF_FFFF_FFFF,
+                    EventMask::_Default => 0x1FFF_FFFF_FFFF,
                     EventMask::InquiryComplete => 1 << 0,
                     EventMask::InquiryResult => 1 << 1,
                     EventMask::ConnectionComplete => 1 << 2,

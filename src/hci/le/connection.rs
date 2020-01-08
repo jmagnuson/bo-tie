@@ -1,25 +1,3 @@
-pub struct ConnectionEventLength {
-    minimum: u16,
-    maximum: u16,
-}
-
-impl ConnectionEventLength {
-    pub fn new(min: u16, max: u16) -> Self {
-        Self {
-            minimum: min,
-            maximum: max
-        }
-    }
-}
-
-impl ::core::default::Default for ConnectionEventLength {
-    fn default() -> Self {
-        Self {
-            minimum: 0,
-            maximum: 0xFFFF,
-        }
-    }
-}
 
 interval!( #[derive(Clone, Copy)] ConnectionInterval, 0x0006, 0x0C80, ApiDef, 0x0006, 1250);
 
@@ -157,7 +135,8 @@ pub mod connection_update {
         ConnectionHandle,
         SupervisionTimeout,
     };
-    use super::{ ConnectionEventLength, ConnectionIntervalBounds };
+    use crate::hci::le::common::ConnectionEventLength;
+    use super::ConnectionIntervalBounds;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ConnectionUpdate);
 
@@ -246,14 +225,14 @@ pub mod create_connection_cancel {
 
 pub mod create_connection {
 
-    use super::{ConnectionEventLength, ConnectionIntervalBounds};
+    use super::ConnectionIntervalBounds;
     use crate::hci::*;
     use crate::hci::common::{
         ConnectionLatency,
         LEAddressType,
         SupervisionTimeout,
     };
-    use crate::hci::le::common::OwnAddressType;
+    use crate::hci::le::common::{OwnAddressType, ConnectionEventLength};
     use core::time::Duration;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnection);

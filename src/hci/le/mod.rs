@@ -10,6 +10,7 @@ pub mod transmitter;
 pub mod receiver;
 pub mod connection;
 pub mod encryption;
+pub mod con_pram_req;
 
 // LE implementation that is currently TODO
 // pub mod br_edr {

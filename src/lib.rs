@@ -54,9 +54,9 @@ pub fn bluetooth_address_into_string( addr: BluetoothDeviceAddress ) -> alloc::s
     alloc::format!("{}:{}:{}:{}:{}:{}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
 }
 
-/// Universially Unique Identifier
+/// Universally Unique Identifier
 ///
-/// A UUID in bluetooth is used to idientify a Service and is part of many different protocols
+/// A UUID in bluetooth is used to identify a Service and is part of many different protocols
 /// with bluetooth.
 ///
 /// This structure always handles UUIDs in their 128 bit value form.

@@ -170,15 +170,12 @@ pub mod long_term_key_request_negative_reply {
 
     struct Parameter {
         handle: ConnectionHandle,
-        /// Long Term Key
-        ltk: u128,
     }
 
     #[repr(packed)]
     #[allow(dead_code)]
     struct CmdParameter {
         handle: u16,
-        ltk: u128,
     }
 
     impl CommandParameter for Parameter {
@@ -187,7 +184,6 @@ pub mod long_term_key_request_negative_reply {
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
                 handle: self.handle.get_raw_handle(),
-                ltk: self.ltk
             }
         }
     }
@@ -221,13 +217,11 @@ pub mod long_term_key_request_negative_reply {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
-        long_term_key: u128,
     ) -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
         where T: HostControllerInterface
     {
         let parameter = Parameter {
             handle: connection_handle,
-            ltk: long_term_key,
         };
 
         ReturnedFuture( hci.send_command(
@@ -315,12 +309,6 @@ pub mod start_encryption {
     use crate::hci::common::ConnectionHandle;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::StartEncryption);
-
-    #[repr(packed)]
-    struct CommandReturn {
-        status: u8,
-        handle: u16,
-    }
 
     #[derive(Debug,Clone,Copy)]
     pub struct Parameter {

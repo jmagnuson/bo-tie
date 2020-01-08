@@ -285,8 +285,8 @@ impl HciAclData {
 ///
 /// ## [send_command](#send_command)
 /// This is used for sending the command to the Bluetooth controller by the HostInterface object.
-/// It is provided with a input that implementes the
-/// `[CommandParameter](../index.html#CommandParameter)` which contains all the information required
+/// It is provided with a input that implements the
+/// [`CommandParameter`] which contains all the information required
 /// for sending the command packet to the Bluetooth controller. This information is not in the
 /// packet format and needs to be implemented as such.
 ///
@@ -296,24 +296,24 @@ impl HciAclData {
 /// receive_event is used for implementing a future around the controller's event process. When
 /// called it needs to check if the event is available to the Host or not. If the event is not not
 /// immediately available, the implementation of receive_event needs to call wake on the provided
-/// Waker input when the event is accepted by the Host.
+/// `waker` input when the event is accepted by the Host.
 ///
-/// It is suggested, but not nessicary, for the implementor to provide a means of timing out while
+/// It is suggested, but not necessary, for the implementor to provide a means of timing out while
 /// waiting for the event to be received by the host. The duration of the timeout shall be the
 /// input `timeout` if set to some value, otherwise there is no timeout when the value is None.
 /// When the timeout occurs, the wake function of the provided Waker input will be called. When
 /// receive_event is called the next time (with the same event), it will return an error to
 /// indicate a timeout.
 ///
-/// If the timeout functionality isn't imeplemented, then the only value accepted should be None
+/// If the timeout functionality isn't implemented, then the only value accepted should be None
 /// and any Duration value provided should cause the function to return an Error stating that
 /// timeouts are not available for this implementation.
 ///
-/// Events need to be correctly propigated to the right context that is currently waiting for the
-/// requested event. Some events can be differeniated from themselves through the data passed with
-/// the event, but most do not have any discernable way to tell which context should receive which
+/// Events need to be correctly propagated to the right context that is currently waiting for the
+/// requested event. Some events can be differentiated from themselves through the data passed with
+/// the event, but most do not have any discernible way to tell which context should receive which
 /// event. Its the responsibility of the implementor of `HostControllerInterface` to determine
-/// what event goes with what waker, along with matching events to a waker based on the provided
+/// what event goes with what `waker`, along with matching events to a `waker` based on the provided
 /// matcher.
 pub trait HostControllerInterface
 {
@@ -324,7 +324,7 @@ pub trait HostControllerInterface
     ///
     /// This will return true if the command was sent to the bluetooth controller, and false if
     /// the command couldn't be transferred to the controller yet. This doesn't mean that an error
-    /// occured (it generally means that the bluetooth controller buffer is full), but it does mean
+    /// occurred (it generally means that the bluetooth controller buffer is full), but it does mean
     /// that the command must be resent. If an error does occur then an Error will be returned.
     ///
     /// The `cmd_data` input contains all the HCI command information, where as the `waker` input
@@ -345,8 +345,8 @@ pub trait HostControllerInterface
     /// must be used to gaurentee that the event data is returned.
     ///
     /// The function requires a
-    /// `[Waker](https://doc.rust-lang.org/nightly/core/task/struct.Waker.html)` object because
-    /// it will call wake when the event has been received after the method is called or a timeout
+    /// [`Waker`](https://doc.rust-lang.org/core/task/struct.Waker.html) object because
+    /// it will call wake when the event has been received after the event is received or a timeout
     /// occurs (if available). At which point the function must be called again to receive the
     /// EventData.
     fn receive_event<P>(
@@ -908,7 +908,7 @@ macro_rules! impl_command_data_future {
     ($data: ty, $try_from_err_ty:ty) => { impl_command_data_future!($data, $data, $try_from_err_ty); };
 }
 
-macro_rules! impl_command_status_future {
+macro_rules!  impl_command_status_future {
     () => {
         impl_returned_future!{
             (),

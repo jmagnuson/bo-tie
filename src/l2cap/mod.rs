@@ -307,7 +307,8 @@ pub trait ConnectionChannel {
 
 /// A future for asynchronously waiting for received packets from the connected device
 ///
-/// This struct is created via the function [`future_receiver`] in the trait [`ConnectionChannel`].
+/// This struct is created via the function [`future_receiver`](ConnectionChannel::future_receiver)
+/// in the trait [`ConnectionChannel`].
 ///
 /// This implements [`Future`](https://doc.rust-lang.org/core/future/trait.Future.html) for polling
 /// the Bluetooth Controller to obtain complete [`AclData`] (L2CAP data packets). `ConChanFutureRx`
